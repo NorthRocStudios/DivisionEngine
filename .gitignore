@@ -363,3 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 /DivisionEngine.Player/Properties/launchSettings.json
 /DivisionKey.snk
+/DivisionEngine.Core/Rendering/ShaderUtilities/AtmosphereMath.cs
