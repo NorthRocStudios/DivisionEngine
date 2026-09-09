@@ -50,7 +50,10 @@ namespace DivisionEngine
 
             // Environment
             uint environmentEntity = newDefaultWorld.CreateEntity("Environment");
-            newDefaultWorld.AddComponent(environmentEntity, new Environment());
+            newDefaultWorld.AddComponent(environmentEntity, new Environment
+            {
+                skyType = Environment.SkyType.Gradient,
+            });
 
             // Sun
             uint sunEntity = newDefaultWorld.CreateEntity("Sun");
@@ -84,7 +87,10 @@ namespace DivisionEngine
                     });
                     newDefaultWorld.AddComponent(sphereEntity, new Shadows());
                     newDefaultWorld.AddComponent(sphereEntity, new Reflections());
-                    newDefaultWorld.AddComponent(sphereEntity, new Refractions());
+                    newDefaultWorld.AddComponent(sphereEntity, new Refractions
+                    {
+                        absorptionColor = new float4(0.4f, 0.7f, 0.8f, 0.06f),
+                    });
                 }
             }
 

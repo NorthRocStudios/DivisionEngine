@@ -45,8 +45,6 @@ namespace DivisionEngine
         const float MIN_THROUGHPUT = 0.01f;
         const float REFLECTION_BIAS = 2f; // Multiplier for normal offset
 
-        const int CAUSTIC_STEPS = 12;
-
         #region textures
 
         public float SampleTexture(int textureId, float2 uv, float fallback)

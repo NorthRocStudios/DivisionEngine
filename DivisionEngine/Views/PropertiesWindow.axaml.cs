@@ -583,9 +583,6 @@ public partial class PropertiesWindow : EditorWindow
         scrollViewer.ScrollToHome();
     }
 
-    private static string GetComponentKey(uint entityId, Type compType, string? cardTitle = null) =>
-        cardTitle ?? $"{entityId}_{compType.FullName}";
-
     #endregion
     #region worldEditor
 
@@ -1630,7 +1627,7 @@ public partial class PropertiesWindow : EditorWindow
         };
         DockPanel.SetDock(labelBlock, Dock.Left);
         bool canOpen = !string.IsNullOrEmpty(fullPath) && File.Exists(fullPath);
-        SelectableTextBlock linkBlock = new()
+        TextBlock linkBlock = new()
         {
             Text = relativePath,
             FontSize = 11,
@@ -1644,14 +1641,10 @@ public partial class PropertiesWindow : EditorWindow
         if (canOpen)
         {
             ToolTip.SetTip(linkBlock, "Click to reveal in File Explorer");
-            linkBlock.PointerPressed += (_, e) =>
+            linkBlock.Tapped += (_, e) =>
             {
-                // Don't fire on a text-selection drag, only a plain click
-                if (e.GetCurrentPoint(linkBlock).Properties.IsLeftButtonPressed)
-                {
-                    try { Process.Start("explorer.exe", $"/select,\"{fullPath}\""); }
-                    catch (Exception ex) { Debug.Error($"Failed to reveal file in explorer: {fullPath}", ex); }
-                }
+                try { Process.Start("explorer.exe", $"/select,\"{fullPath}\""); }
+                catch (Exception ex) { Debug.Error($"Failed to reveal file in explorer: {fullPath}", ex); }
             };
         }
 

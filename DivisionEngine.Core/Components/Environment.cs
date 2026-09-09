@@ -18,7 +18,7 @@ namespace DivisionEngine.Components
     {
         public enum SkyType
         {
-            Solid = 0, Gradient = 1, HDRI = 2
+            Solid = 0, Gradient = 1, HDRI = 2, Procedural = 3
         }
 
         /// <summary>
