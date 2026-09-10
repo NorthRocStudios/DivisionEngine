@@ -81,10 +81,7 @@ namespace DivisionEngine.Editor
             ProjectManager.ProjectClosing += OnProjectClosing;
         }
 
-        private void OnProjectLoaded()
-        {
-            Dispatcher.UIThread.Post(async () => await LoadEditorLayoutFromProjectAsync());
-        }
+        private void OnProjectLoaded() => Dispatcher.UIThread.Post(async () => await LoadEditorLayoutFromProjectAsync());
 
         private void OnProjectClosing()
         {
@@ -230,22 +227,19 @@ namespace DivisionEngine.Editor
         /// </summary>
         private void SetupPlayControls()
         {
-            if (PlayButton != null) PlayButton.Click += PlayButton_Click;
+            PlayButton?.Click += PlayButton_Click;
             if (PauseButton != null)
             {
                 PauseButton.Click += PauseButton_Click;
                 PauseButton.Click += (_, _) => UpdatePlayControlsUI();
             }
-            if (AdvanceFrameButton != null) AdvanceFrameButton.Click += AdvanceFrameButton_Click;
+            AdvanceFrameButton?.Click += AdvanceFrameButton_Click;
         }
 
         /// <summary>
         /// Subscribes to engine core events.
         /// </summary>
-        private void SubscribeToEngineEvents()
-        {
-            EngineCore.PlayModeChanged += OnPlayModeChanged;
-        }
+        private void SubscribeToEngineEvents() => EngineCore.PlayModeChanged += OnPlayModeChanged;
 
         /// <summary>
         /// Called when play mode changes.
@@ -567,8 +561,8 @@ namespace DivisionEngine.Editor
             {
                 UniversalProgressBar.IsVisible = false;
                 UniversalProgressBar.Value = 0;
-                if (progressText != null) progressText.Text = "0%";
-                if (taskCountText != null) taskCountText.Text = "";
+                progressText?.Text = "0%";
+                taskCountText?.Text = "";
             }
 
             if (tasksFlyout != null) UpdateTaskFoldoutContent(tasksFlyout);
