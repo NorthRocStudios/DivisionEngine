@@ -91,11 +91,6 @@ namespace DivisionEngine.Rendering
         public event Action<IInputContext>? InputContextCreated;
 
         /// <summary>
-        /// Called when the renderer window focus has changed.
-        /// </summary>
-        public static event Action<bool>? RenderWindowFocusd;
-
-        /// <summary>
         /// The current debug mode of the render pipeline.
         /// </summary>
         public DebugMode CurrentDebugMode { get; set; } = DebugMode.None;
@@ -568,7 +563,6 @@ namespace DivisionEngine.Rendering
                 RendererWindow.Load += OnLoad;
                 RendererWindow.Render += OnRender;
                 RendererWindow.Closing += OnClosing;
-                RendererWindow.FocusChanged += (f) => { if (RenderWindowFocusd != null) RenderWindowFocusd!(f); };
 
                 // Ensure texture buffer rebuild
                 rebuildTextureBuffer = true;
@@ -624,9 +618,6 @@ namespace DivisionEngine.Rendering
             {
                 if (RendererWindow == null) return;
                 gl = GL.GetApi(RendererWindow);
-
-                // Initial focus hard set to avoid cascading events
-                RenderWindowFocusd?.Invoke(true);
 
                 // Initialize OpenGL context
                 Debug.Info("Renderer: Initialize OpenGL Context");
