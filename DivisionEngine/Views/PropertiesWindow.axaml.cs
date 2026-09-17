@@ -28,6 +28,7 @@ using DivisionEngine.Projects.Scripting;
 using DivisionEngine.Systems;
 using Material.Icons;
 using Material.Icons.Avalonia;
+using SkiaSharp;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -385,7 +386,10 @@ public partial class PropertiesWindow : EditorWindow
     }
 
     /// <summary>
-    /// Displays properties for a selected asset.
+    /// Displays properties for a selected asset. The layout adapts to the asset
+    /// type: textures get a preview and dimensions read from the file header
+    /// (no full decode); scripts get compilation diagnostics and a source
+    /// preview; other types fall back to metadata-only display.
     /// </summary>
     private async void DisplayAssetProperties(string assetId)
     {
@@ -396,7 +400,6 @@ public partial class PropertiesWindow : EditorWindow
         propertiesPanel.Children.Clear();
         componentFieldPanels.Clear();
 
-        // Get asset metadata
         AssetMetadata? metadata = AssetDatabase.GetAssetMetadataByID(assetId);
         if (metadata == null)
         {
@@ -404,24 +407,183 @@ public partial class PropertiesWindow : EditorWindow
             return;
         }
 
-        // Get loaded asset if available
         Asset? loadedAsset = ProjectManager.AssetManager?.Get(metadata.ID);
         bool isLoaded = loadedAsset != null && loadedAsset.IsLoaded;
         string? fullPath = AssetDatabase.GetAssetFullPath(metadata.ID);
 
-        // Header
         string assetName = Path.GetFileNameWithoutExtension(metadata.FileName);
         headerText.Text = $"{assetName} (Asset)";
-        StackPanel assetPanel = new()
+
+        StackPanel assetPanel = new() { Margin = new Thickness(8, 4, 4, 8) };
+
+        // ---- Type-specific top section (preview, dimensions, etc.) -----------
+        if (metadata.Type == AssetType.Texture)
+            await BuildTextureSectionAsync(assetPanel, metadata, fullPath);
+
+        // ---- Common metadata rows -------------------------------------------
+        AddLoadStateRow(assetPanel, metadata, isLoaded);
+        AddPropertyRow(assetPanel, "Type", metadata.Type.ToString());
+        AddPropertyRow(assetPanel, "File Size", EditorUI.FormatFileSize(metadata.FileSize));
+        AddPropertyRow(assetPanel, "GUID", metadata.ID);
+        AddPathPropertyRow(assetPanel, fullPath, metadata.RelativePath);
+        AddPropertyRow(assetPanel, "Last Modified", metadata.LastModified.ToString("g"));
+
+        // ---- Type-specific settings panels ----------------------------------
+        if (metadata.Type == AssetType.Texture)
+            AddTextureSettingsPanel(assetPanel, metadata);
+        else if (metadata.Type == AssetType.Script)
+            AddScriptCompilationPanel(assetPanel, metadata, loadedAsset as ScriptAsset);
+
+        // ---- Action buttons (per type) --------------------------------------
+        AddAssetActionButtons(assetPanel, metadata, isLoaded, assetId);
+
+        // ---- Card -----------------------------------------------------------
+        StackPanel card = BuildCard(
+            assetName,
+            EditorUI.GetIconForAssetType(metadata.Type),
+            assetPanel,
+            onRemove: null);
+
+        propertiesPanel.Children.Add(card);
+        scrollViewer.ScrollToHome();
+    }
+
+    /// <summary>
+    /// Builds the top section of a texture's properties panel: dimensions (read
+    /// from the file header - no full decode) and a preview thumbnail.
+    /// </summary>
+    private async Task BuildTextureSectionAsync(StackPanel panel, AssetMetadata metadata, string? fullPath)
+    {
+        if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
         {
-            Margin = new Thickness(8, 4, 4, 8),
-        };
-        DockPanel loadStateRow = new()
+            AddPropertyRow(panel, "Source", "File missing");
+            return;
+        }
+
+        // Header-only read for dimensions. This is fast even for very large images
+        // because SKCodec parses the file header without decoding pixels.
+        (int width, int height)? dims = TryReadImageDimensions(fullPath);
+        if (dims.HasValue)
         {
+            AddPropertyRow(panel, "Dimensions", $"{dims.Value.width} × {dims.Value.height}");
+
+            // Informational mip level count. The render pipeline computes the
+            // actual count from these dimensions and the MaxMipmap setting, but
+            // showing what's expected here is useful.
+            int naturalMax = (int)math.floor(math.log2(math.max(dims.Value.width, dims.Value.height))) + 1;
+            int effective = metadata.CustomProperties != null
+                && metadata.CustomProperties.TryGetValue("MaxMipmap", out object? m)
+                && int.TryParse(m.ToString(), out int mip)
+                    ? math.clamp(mip, 1, naturalMax)
+                    : naturalMax;
+            AddPropertyRow(panel, "Mip Levels", $"{effective} of {naturalMax} possible");
+        }
+
+        // Preview with loading indicator
+        StackPanel loadingPanel = new()
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(0, 4, 0, 8),
-            HorizontalAlignment = HorizontalAlignment.Stretch,
         };
-        TextBlock loadStateLabel = new()
+        loadingPanel.Children.Add(new TextBlock
+        {
+            Text = "Loading preview...",
+            FontSize = 12,
+            Foreground = Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(loadingPanel);
+
+        try
+        {
+            Bitmap? preview = await LoadTexturePreviewAsync(fullPath);
+
+            // If the panel was rebuilt while we were decoding (user selected a
+            // different asset), our loading indicator is no longer a child of this
+            // panel. Silently bail in that case.
+            int idx = panel.Children.IndexOf(loadingPanel);
+            if (idx < 0) return;
+
+            if (preview != null)
+            {
+                panel.Children.RemoveAt(idx);
+                AddTexturePreview(panel, preview, metadata);
+            }
+            else
+            {
+                loadingPanel.Children.Clear();
+                loadingPanel.Children.Add(new TextBlock
+                {
+                    Text = "Failed to load preview",
+                    FontSize = 12,
+                    Foreground = EditorColor.FromRGB(200, 80, 80),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.Error($"Failed to load texture preview: {ex.Message}");
+            loadingPanel.Children.Clear();
+            loadingPanel.Children.Add(new TextBlock
+            {
+                Text = "Error loading preview",
+                FontSize = 12,
+                Foreground = EditorColor.FromRGB(200, 80, 80),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Reads the pixel dimensions of an image without decoding its pixels. Uses
+    /// SKCodec, which parses only the file header - orders of magnitude faster
+    /// than a full SKBitmap decode for large textures.
+    /// </summary>
+    private static (int Width, int Height)? TryReadImageDimensions(string path)
+    {
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            using SKCodec? codec = SKCodec.Create(stream);
+            if (codec == null) return null;
+            return (codec.Info.Width, codec.Info.Height);
+        }
+        catch (Exception ex)
+        {
+            Debug.Warning($"Failed to read image dimensions for {Path.GetFileName(path)}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Adds the load-state indicator. "Loaded" has a different meaning per type:
+    /// for scripts it means the source text is resident in memory (needed for
+    /// the compiler); for textures it means the asset is registered with the
+    /// asset manager and available to the pipeline's decode-on-demand path; for
+    /// other types it reflects whatever their LoadAsync populated.
+    /// </summary>
+    private static void AddLoadStateRow(StackPanel panel, AssetMetadata metadata, bool isLoaded)
+    {
+        string value;
+        IBrush valueColor;
+
+        if (!isLoaded)
+        {
+            value = "Unloaded";
+            valueColor = Brushes.Gray;
+        }
+        else
+        {
+            // Textures don't hold pixel data in memory, so "Loaded" is misleading -
+            // "Ready" conveys that the asset is prepared for use.
+            value = metadata.Type == AssetType.Texture ? "Ready" : "Loaded";
+            valueColor = new SolidColorBrush(Color.FromRgb(76, 175, 80));
+        }
+
+        DockPanel row = new() { Margin = new Thickness(0, 4, 0, 8) };
+        TextBlock label = new()
         {
             Text = "State:",
             FontSize = 11,
@@ -429,103 +591,33 @@ public partial class PropertiesWindow : EditorWindow
             MinWidth = 100,
             VerticalAlignment = VerticalAlignment.Center,
         };
-        DockPanel.SetDock(loadStateLabel, Dock.Left);
-        TextBlock loadStateValue = new()
+        DockPanel.SetDock(label, Dock.Left);
+
+        TextBlock val = new()
         {
-            Text = isLoaded ? "Loaded" : "Unloaded",
+            Text = value,
             FontSize = 11,
-            Foreground = isLoaded ? new SolidColorBrush(Color.FromRgb(76, 175, 80)) : Brushes.Gray,
+            Foreground = valueColor,
             VerticalAlignment = VerticalAlignment.Center,
         };
-        DockPanel.SetDock(loadStateValue, Dock.Left);
+        DockPanel.SetDock(val, Dock.Left);
 
-        loadStateRow.Children.Add(loadStateLabel);
-        loadStateRow.Children.Add(loadStateValue);
-        assetPanel.Children.Add(loadStateRow);
+        row.Children.Add(label);
+        row.Children.Add(val);
+        panel.Children.Add(row);
+    }
 
-        // Add texture preview if applicable
-        if (metadata.Type == AssetType.Texture && !string.IsNullOrEmpty(fullPath) && File.Exists(fullPath))
-        {
-            // Create a loading indicator
-            StackPanel loadingPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 4, 0, 8),
-            };
-            loadingPanel.Children.Add(new TextBlock
-            {
-                Text = "Loading preview...",
-                FontSize = 12,
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            assetPanel.Children.Add(loadingPanel);
+    /// <summary>
+    /// Adds type-appropriate action buttons. Textures get a single "Reload
+    /// Textures" button that triggers a full buffer rebuild - per-texture reimport
+    /// is no longer supported now that the pixel cache is gone. Other asset types
+    /// get the classic Load/Unload pair that manipulates AssetManager state.
+    /// </summary>
+    private void AddAssetActionButtons(StackPanel panel, AssetMetadata metadata, bool isLoaded, string assetId)
+    {
+        if (ProjectManager.AssetManager == null) return;
 
-            // Load texture preview
-            try
-            {
-                Bitmap? preview = await LoadTexturePreviewAsync(fullPath);
-                if (preview != null)
-                {
-                    // Remove loading indicator
-                    assetPanel.Children.Remove(loadingPanel);
-                    AddTexturePreview(assetPanel, preview, metadata);
-                }
-                else
-                {
-                    // Show error
-                    loadingPanel.Children.Clear();
-                    loadingPanel.Children.Add(new TextBlock
-                    {
-                        Text = "Failed to load preview",
-                        FontSize = 12,
-                        Foreground = EditorColor.FromRGB(200, 80, 80),
-                        VerticalAlignment = VerticalAlignment.Center,
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.Error($"Failed to load texture preview: {ex.Message}");
-                loadingPanel.Children.Clear();
-                loadingPanel.Children.Add(new TextBlock
-                {
-                    Text = "Error loading preview",
-                    FontSize = 12,
-                    Foreground = EditorColor.FromRGB(200, 80, 80),
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
-            }
-        }
-
-        // Basic properties
-        AddPropertyRow(assetPanel, "Type", metadata.Type.ToString());
-        AddPropertyRow(assetPanel, "File Size", EditorUI.FormatFileSize(metadata.FileSize));
-        AddPropertyRow(assetPanel, "GUID", metadata.ID);
-        AddPathPropertyRow(assetPanel, fullPath, metadata.RelativePath);
-        AddPropertyRow(assetPanel, "Last Modified", metadata.LastModified.ToString("g"));
-
-        // Asset-specific properties
-        if (loadedAsset != null && isLoaded)
-        {
-            switch (loadedAsset)
-            {
-                case TextureAsset texture:
-                    AddPropertyRow(assetPanel, "Dimensions", $"{texture.Width} x {texture.Height}");
-                    AddPropertyRow(assetPanel, "Pixel Count", $"{texture.PixelData?.Length:N0}");
-                    break;
-                    // Add more asset types as needed
-            }
-        }
-
-        if (metadata.Type == AssetType.Texture)
-            AddTextureSettingsPanel(assetPanel, metadata);
-        else if (metadata.Type == AssetType.Script)
-            AddScriptCompilationPanel(assetPanel, metadata, loadedAsset as ScriptAsset);
-
-        // Action buttons panel
-        StackPanel actionButtonsPanel = new()
+        StackPanel actions = new()
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
@@ -533,9 +625,31 @@ public partial class PropertiesWindow : EditorWindow
             Margin = new Thickness(0, 8, 0, 4),
         };
 
-        if (isLoaded && ProjectManager.AssetManager != null)
+        if (metadata.Type == AssetType.Texture)
         {
-            Button unloadButton = new Button // Unload button
+            Button reloadButton = new()
+            {
+                Content = "Reload Textures",
+                FontSize = 12,
+                Padding = new Thickness(12, 6),
+                Background = EditorColor.FromRGB(40, 40, 60),
+                Foreground = Brushes.White,
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(4),
+            };
+            ToolTip.SetTip(reloadButton,
+                "Rebuilds the texture buffer. Because textures are decoded on demand "
+              + "and not cached, this reimports all textures, not just this one.");
+            reloadButton.Click += (_, _) =>
+            {
+                TextureSystem.MarkDirty();
+                Debug.Info("Texture System: Reload requested from properties panel");
+            };
+            actions.Children.Add(reloadButton);
+        }
+        else if (isLoaded)
+        {
+            Button unloadButton = new()
             {
                 Content = "Unload Asset",
                 FontSize = 12,
@@ -545,21 +659,16 @@ public partial class PropertiesWindow : EditorWindow
                 BorderThickness = new Thickness(0),
                 CornerRadius = new CornerRadius(4),
             };
-            unloadButton.Click += (s, e) =>
+            unloadButton.Click += (_, _) =>
             {
-                unloadButton.Content = "Unloading...";
-                unloadButton.IsEnabled = false;
-                unloadButton.Background = EditorColor.FromRGB(40, 20, 20);
-
-                ProjectManager.AssetManager.UnloadAsset(assetId);
-                if (metadata.Type == AssetType.Texture) TextureSystem.RemoveTexture(assetId);
+                ProjectManager.AssetManager!.UnloadAsset(assetId);
                 DisplayAssetProperties(assetId);
             };
-            actionButtonsPanel.Children.Add(unloadButton);
+            actions.Children.Add(unloadButton);
         }
-        else if (!isLoaded && ProjectManager.AssetManager != null)
+        else
         {
-            Button loadButton = new Button // Load button
+            Button loadButton = new()
             {
                 Content = "Load Asset",
                 FontSize = 12,
@@ -569,22 +678,20 @@ public partial class PropertiesWindow : EditorWindow
                 BorderThickness = new Thickness(0),
                 CornerRadius = new CornerRadius(4),
             };
-            loadButton.Click += async (s, e) =>
+            loadButton.Click += async (_, _) =>
             {
                 loadButton.Content = "Loading...";
                 loadButton.IsEnabled = false;
-                loadButton.Background = EditorColor.FromRGB(40, 40, 80);
 
                 Asset? loaded = metadata.Type switch
                 {
-                    AssetType.Texture => await ProjectManager.AssetManager.LoadAssetAsync<TextureAsset>(assetId),
-                    _ => await ProjectManager.AssetManager.LoadAssetAsync<Asset>(assetId),
+                    AssetType.Script => await ProjectManager.AssetManager!.LoadAssetAsync<ScriptAsset>(assetId),
+                    AssetType.SDF => await ProjectManager.AssetManager!.LoadAssetAsync<SDFAsset>(assetId),
+                    AssetType.Material => await ProjectManager.AssetManager!.LoadAssetAsync<MaterialAsset>(assetId),
+                    _ => await ProjectManager.AssetManager!.LoadAssetAsync<Asset>(assetId),
                 };
-                if (loaded != null && loaded.IsLoaded)
-                {
-                    if (metadata.Type == AssetType.Texture) TextureSystem.MarkTextureDirty(assetId);
-                    DisplayAssetProperties(assetId);
-                }
+
+                if (loaded != null && loaded.IsLoaded) DisplayAssetProperties(assetId);
                 else
                 {
                     loadButton.Content = "Load Failed";
@@ -592,21 +699,10 @@ public partial class PropertiesWindow : EditorWindow
                     loadButton.IsEnabled = true;
                 }
             };
-            actionButtonsPanel.Children.Add(loadButton);
+            actions.Children.Add(loadButton);
         }
 
-        if (actionButtonsPanel.Children.Count > 0) assetPanel.Children.Add(actionButtonsPanel);
-
-        // Create the card
-        StackPanel card = BuildCard(
-            assetName,
-            EditorUI.GetIconForAssetType(metadata.Type),
-            assetPanel,
-            onRemove: null
-        );
-
-        propertiesPanel.Children.Add(card);
-        scrollViewer.ScrollToHome();
+        if (actions.Children.Count > 0) panel.Children.Add(actions);
     }
 
     #endregion
@@ -1774,7 +1870,7 @@ public partial class PropertiesWindow : EditorWindow
         {
             SaveAssetMetadata(metadata);
             ProjectManager.AssetManager?.InvalidateAsset(metadata.ID);
-            TextureSystem.MarkTextureDirty(metadata.ID);
+            TextureSystem.MarkDirty();
         }
 
         const string samplingKey = "Sampling";

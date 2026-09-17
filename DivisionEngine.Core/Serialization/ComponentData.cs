@@ -44,10 +44,7 @@ namespace DivisionEngine.Serialization
         public ComponentData(IComponent component)
         {
             Type t = component.GetType();
-            // Full name disambiguates when two types share a simple name across
-            // namespaces. Simple assembly name is what Type.GetType expects after
-            // the comma; the full display name includes version/culture/token that
-            // usually can't be resolved for a collectible script assembly
+            // Full name disambiguates when two types share a simple name across namespaces
             TypeName = t.FullName ?? t.Name;
             AssemblyName = t.Assembly.GetName().Name ?? t.Assembly.FullName!;
             Properties = Serialize.Component(component);

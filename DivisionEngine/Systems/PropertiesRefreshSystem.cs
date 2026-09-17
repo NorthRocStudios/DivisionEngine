@@ -29,7 +29,7 @@ namespace DivisionEngine.Editor.Systems
             if (!needsRefresh && componentsToRefresh.Count == 0) return;
 
             // During a project transition, the world may not exist. Skip this tick
-            // rather than letting the properties windows query a null world.
+            // rather than letting the properties windows query a null world
             if (WorldManager.CurrentWorld == null)
             {
                 componentsToRefresh.Clear();

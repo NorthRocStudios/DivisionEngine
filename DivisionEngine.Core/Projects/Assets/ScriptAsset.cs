@@ -45,7 +45,9 @@ namespace DivisionEngine.Projects.Assets
             ? ScriptCompileTarget.Editor
             : ScriptCompileTarget.Player;
 
-        /// <summary>Last write time observed at the moment the script was loaded.</summary>
+        /// <summary>
+        /// Last write time observed at the moment the script was loaded.
+        /// </summary>
         public DateTime LastLoadedTimeUtc => lastLoadedTime;
 
         public override async Task<bool> LoadAsync()

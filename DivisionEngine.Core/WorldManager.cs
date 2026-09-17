@@ -196,7 +196,7 @@ namespace DivisionEngine
 
         /// <summary>
         /// Clears the current world and drops the world dictionary. Called on project
-        /// close so old worlds stop holding references to old script assemblies —
+        /// close so old worlds stop holding references to old script assemblies -
         /// without this, ALC unload can never complete and stale system instances
         /// keep ticking.
         /// </summary>

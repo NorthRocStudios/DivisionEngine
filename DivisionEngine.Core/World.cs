@@ -195,7 +195,7 @@ namespace DivisionEngine
         /// <summary>
         /// Searches all assemblies in the Application Domain to find all classes that
         /// inherit from SystemBase and registers them automatically. Types are
-        /// deduplicated by fully-qualified name — if the same class exists in both an
+        /// deduplicated by fully-qualified name - if the same class exists in both an
         /// old (still-alive) and new script assembly, only the first-encountered
         /// instance is registered.
         /// </summary>
@@ -639,12 +639,12 @@ namespace DivisionEngine
         /// <summary>
         /// Resolves a component type from serialized data, in order of preference:
         /// <list type="number">
-        ///   <item>Direct Type.GetType — works for engine and framework types whose
+        ///   <item>Direct Type.GetType - works for engine and framework types whose
         ///         assembly the default context can resolve.</item>
-        ///   <item>Current script load context — where user-compiled components live.
+        ///   <item>Current script load context - where user-compiled components live.
         ///         Searched before the general AppDomain scan because the collectible
         ///         context is invisible to Type.GetType.</item>
-        ///   <item>Every non-dynamic assembly in the AppDomain — wrapped per-assembly
+        ///   <item>Every non-dynamic assembly in the AppDomain - wrapped per-assembly
         ///         so a single bad assembly can't abort the search.</item>
         /// </list>
         /// </summary>
@@ -681,14 +681,14 @@ namespace DivisionEngine
         /// Looks up a type in an assembly by full or simple name. Wrapped in
         /// try/catch because <see cref="Assembly.GetTypes"/> can throw
         /// <see cref="ReflectionTypeLoadException"/> for assemblies with
-        /// unresolvable dependencies — a common situation when an old script
+        /// unresolvable dependencies - a common situation when an old script
         /// assembly is still loaded and holding a stale reference.
         /// </summary>
         private static Type? TryGetType(Assembly asm, string name)
         {
             try
             {
-                // Cheap path — no need to enumerate all types.
+                // Cheap path - no need to enumerate all types.
                 Type? direct = asm.GetType(name, throwOnError: false);
                 if (direct != null) return direct;
 
@@ -697,7 +697,7 @@ namespace DivisionEngine
             }
             catch (ReflectionTypeLoadException ex)
             {
-                // Partial load — check whatever types resolved.
+                // Partial load - check whatever types resolved.
                 foreach (Type? t in ex.Types)
                     if (t != null && (t.Name == name || t.FullName == name)) return t;
             }

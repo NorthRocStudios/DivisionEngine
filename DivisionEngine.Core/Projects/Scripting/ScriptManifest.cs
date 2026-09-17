@@ -25,10 +25,14 @@ namespace DivisionEngine.Projects.Scripting
         public string ProjectName { get; } = projectName;
         public string ProjectDirectory { get; } = projectDirectory;
 
-        /// <summary>Loaded script assets targeting the player assembly.</summary>
+        /// <summary>
+        /// Loaded script assets targeting the player assembly.
+        /// </summary>
         public IReadOnlyList<ScriptAsset> PlayerScripts { get; } = playerScripts;
 
-        /// <summary>Loaded script assets targeting the editor assembly.</summary>
+        /// <summary>
+        /// Loaded script assets targeting the editor assembly.
+        /// </summary>
         public IReadOnlyList<ScriptAsset> EditorScripts { get; } = editorScripts;
 
         public string PlayerAssemblyName { get; } = $"{projectName}.Player";
@@ -55,7 +59,7 @@ namespace DivisionEngine.Projects.Scripting
 
             foreach (AssetMetadata meta in AssetDatabase.GetAssetsByType(AssetType.Script))
             {
-                // Skip tooling artifacts hidden in dot-folders.
+                // Skip tooling artifacts hidden in dot-folders
                 if (meta.RelativePath.Contains("\\.") || meta.RelativePath.Contains("/."))
                     continue;
 
@@ -66,7 +70,7 @@ namespace DivisionEngine.Projects.Scripting
                 // the script is already loaded, which means edits made after the first
                 // load never reach the compiler. ReloadIfChangedAsync compares file mtime
                 // against the last-load time and re-reads the source if needed. No-op
-                // when the file hasn't changed.
+                // when the file hasn't changed
                 await script.ReloadIfChangedAsync();
                 if (!script.IsLoaded) continue;
 
@@ -76,7 +80,7 @@ namespace DivisionEngine.Projects.Scripting
                     playerScripts.Add(script);
             }
 
-            // Deterministic ordering for easier diffing/debugging.
+            // Deterministic ordering for easier diffing/debugging
             playerScripts.Sort((a, b) => string.Compare(
                 a.RelativePath, b.RelativePath, StringComparison.OrdinalIgnoreCase));
             editorScripts.Sort((a, b) => string.Compare(

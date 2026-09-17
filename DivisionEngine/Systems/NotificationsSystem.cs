@@ -28,9 +28,9 @@ namespace DivisionEngine.Editor.Systems
 
         public override void AppStart()
         {
-            TextureSystem.StartedLoadingTextureData += () => 
+            TextureSystem.StartedLoadingTextureData += () =>
                 Dispatcher.UIThread.Post(TextureSystem_StartedLoadingTextureData, DispatcherPriority.Normal);
-            TextureSystem.UpdatedTextureData += () => 
+            TextureSystem.UpdatedTextureData += () =>
                 Dispatcher.UIThread.Post(TextureSystem_UpdatedTextureData, DispatcherPriority.Normal);
 
             ScriptCompilationPipeline.CompilationStarted += OnCompilationStarted;
@@ -65,25 +65,22 @@ namespace DivisionEngine.Editor.Systems
 
         #region scriptCompilation
 
-        private void OnCompilationStarted() =>
-            Dispatcher.UIThread.Post(() =>
-            {
-                // If a task is already showing (rapid re-trigger from the debounce timer), reuse it
-                if (compilationTask != null) return;
-                compilationTask = EditorTaskManager.Create(
-                    "Script Compilation",
-                    "Compiling project scripts",
-                    0f,
-                    MaterialIconKind.CodeBraces);
-            });
+        private void OnCompilationStarted()
+        {
+            if (compilationTask != null) return;
+            compilationTask = EditorTaskManager.Create(
+                "Script Compilation",
+                "Compiling project scripts",
+                0f,
+                MaterialIconKind.CodeBraces);
+        }
 
-        private void OnCompilationCompleted(ScriptCompileResult result) =>
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (compilationTask == null) return;
-                EditorTaskManager.Remove(compilationTask.Id);
-                compilationTask = null;
-            });
+        private void OnCompilationCompleted(ScriptCompileResult result)
+        {
+            if (compilationTask == null) return;
+            EditorTaskManager.Remove(compilationTask.Id);
+            compilationTask = null;
+        }
 
         #endregion
     }

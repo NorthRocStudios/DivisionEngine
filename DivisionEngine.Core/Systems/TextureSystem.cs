@@ -21,11 +21,13 @@ namespace DivisionEngine.Systems
 
         /// <summary>
         /// All texture data flattened into a single array (for GPU buffer).
+        /// Freed by <see cref="FreeCPUTextureData"/> after upload.
         /// </summary>
         public static uint[]? AllTextureData { get => _allTextureData; private set => _allTextureData = value; }
 
         /// <summary>
         /// Metadata for each texture (resolution, offset in buffer).
+        /// Freed alongside <see cref="AllTextureData"/>.
         /// </summary>
         public static TextureMetadata[]? AllTextureMetadata { get => _allTextureMetadata; private set => _allTextureMetadata = value; }
 
@@ -40,12 +42,12 @@ namespace DivisionEngine.Systems
         public static int LastLoadedTextureBufferSize { get; private set; } = 0;
 
         /// <summary>
-        /// Use this to determine when the texture data has fully loaded or been modified.
+        /// Raised when texture data has fully loaded or been modified.
         /// </summary>
         public static event Action? UpdatedTextureData;
 
         /// <summary>
-        /// Called when texture data is called to load.
+        /// Raised when a texture load begins.
         /// </summary>
         public static event Action? StartedLoadingTextureData;
 
@@ -55,39 +57,24 @@ namespace DivisionEngine.Systems
         public static float TextureLoadProgress { get; private set; } = 0f;
 
         private static readonly Dictionary<string, int> textureIdToIndex = [];
-
-        // Per-texture cache: decoded mip chain + metadata, independent of buffer position.
-        // This is what lets a single texture be reimported without touching the others.
-        private static readonly Dictionary<string, List<uint[]>> textureMipCache = [];
-        private static readonly Dictionary<string, TextureMetadata> textureMetaCache = []; // bufferOffset unused here, recomputed on flatten
-        private static List<string> textureOrder = []; // buffer order, stable across single-texture reimports
-        private static readonly Lock textureCacheLock = new();
-
-        // Queued single-texture reimports, drained on the next Render() tick
-        private static readonly HashSet<string> pendingSingleReimports = [];
-        private static readonly Lock pendingLock = new();
+        private static List<string> textureOrder = [];
+        private static readonly Lock textureLock = new();
 
         private static bool mustReloadTextures = false;
         private static volatile bool loadingTextures = false;
 
-        // Snapshot of texture asset IDs the system last knew about. Any addition or
-        // removal of a texture asset triggers a reload; unrelated asset changes (scripts, materials, folders) do not
+        // Snapshot of texture asset IDs the system last knew about. Additions or
+        // removals of textures trigger a reload; unrelated asset changes do not
         private static HashSet<string> knownTextureIds = [];
         private static readonly Lock knownTextureLock = new();
 
         public override void Render()
         {
-            // Only the current world's TextureSystem drives reloads. Orphaned
-            // instances from previous worlds may still be invoked by the render
-            // pipeline while it's bound to an old world during a project
-            // transition, and they would otherwise consume the shared static flag
-            // and fire their own load. Guard against that by checking identity.
-            if (!ReferenceEquals(WorldManager.CurrentWorld?.GetSystem<TextureSystem>(), this)) return;
+            // Only the current world's TextureSystem drives reloads
+            //if (!ReferenceEquals(WorldManager.CurrentWorld?.GetSystem<TextureSystem>(), this)) return;
 
             if (mustReloadTextures && !loadingTextures)
             {
-                // Snapshot the current texture set before starting the reload. Any
-                // texture added or removed during the reload will be picked up by the next OnAssetsUpdated
                 HashSet<string> snapshot = [];
                 foreach (AssetMetadata meta in AssetDatabase.GetAssetsByType(AssetType.Texture))
                     snapshot.Add(meta.ID);
@@ -96,27 +83,12 @@ namespace DivisionEngine.Systems
                 _ = LoadAllTexturesAsync();
                 mustReloadTextures = false;
             }
-            else if (!loadingTextures)
-            {
-                List<string> toProcess = [];
-                lock (pendingLock)
-                {
-                    if (pendingSingleReimports.Count > 0)
-                    {
-                        toProcess.AddRange(pendingSingleReimports);
-                        pendingSingleReimports.Clear();
-                    }
-                }
-                if (toProcess.Count > 0) _ = ReimportTexturesAsync(toProcess);
-            }
 
-            // Create default texture if none exist to prevent a crash
+            // Default texture so the pipeline never reads a zero-length buffer
             if (AllTextureMetadata == null || AllTextureData == null) return;
             if (AllTextureMetadata.Length < 1 || AllTextureData.Length < 1)
             {
-                AllTextureMetadata = [
-                    new TextureMetadata { bufferOffset = 0, resolution = 1, mipCount = 1 }
-                ];
+                AllTextureMetadata = [new TextureMetadata { bufferOffset = 0, resolution = 1, mipCount = 1 }];
                 AllTextureData = [0];
             }
         }
@@ -136,10 +108,6 @@ namespace DivisionEngine.Systems
             ProjectManager.ProjectClosed -= OnProjectClosed;
         }
 
-        // Awake intentionally does NOT set mustReloadTextures. ProjectLoaded already covers the project-load path,
-        // and clearing the flag here would race against an in-flight reload started from an earlier Render tick
-        public override void Awake() { }
-
         private static void OnAssetsUpdated()
         {
             HashSet<string> currentIds = [];
@@ -148,67 +116,36 @@ namespace DivisionEngine.Systems
 
             lock (knownTextureLock)
             {
-                if (!currentIds.SetEquals(knownTextureIds))
-                    mustReloadTextures = true;
+                if (!currentIds.SetEquals(knownTextureIds)) MarkDirty();
             }
         }
 
         private static void OnProjectLoaded()
         {
             lock (knownTextureLock) knownTextureIds.Clear();
-            mustReloadTextures = true;
+            MarkDirty();
         }
 
         private static void OnProjectClosed()
         {
             lock (knownTextureLock) knownTextureIds.Clear();
-            mustReloadTextures = true;
+            MarkDirty();
         }
 
         /// <summary>
-        /// Flags the entire texture buffer for a full rebuild (every texture re-decoded
-        /// from disk). Use for project load/close or when assets are added/removed -
-        /// which change the whole set of textures anyway (AssetDatabase.AssetsUpdated
-        /// already triggers this automatically). For editing a single texture's import
-        /// settings, use <see cref="MarkTextureDirty"/> instead - it's far cheaper since
-        /// it leaves every other texture's cached data untouched.
+        /// Flags the texture buffer for a full rebuild. Because this system does
+        /// not cache per-texture pixel data, any change - add, remove, edit
+        /// import settings - results in a full reload on the next render tick.
+        /// Decoding and mip generation are parallelized, so this is fast even
+        /// for projects with many textures.
         /// </summary>
         public static void MarkDirty() => mustReloadTextures = true;
 
         /// <summary>
-        /// Flags a single texture for reimport - reloads and re-mips just this one asset
-        /// from disk (respecting its current import settings), then recombines the GPU
-        /// buffer from cache. Every other texture's cached mip data is reused as-is, so
-        /// this stays cheap no matter how many textures are in the project. Call this
-        /// after invalidating the asset (e.g. via AssetManager.InvalidateAsset) whenever
-        /// you change one texture's sampling, dimension, cubemap layout, or max mip.
-        /// </summary>
-        public static void MarkTextureDirty(string assetId)
-        {
-            lock (pendingLock) pendingSingleReimports.Add(assetId);
-        }
-
-        /// <summary>
-        /// Removes a single texture from the GPU buffer without attempting to reload it -
-        /// use this after explicitly unloading an asset (e.g. the editor's "Unload Asset"
-        /// button), where the intent is for it to no longer occupy GPU memory at all.
-        /// </summary>
-        public static void RemoveTexture(string assetId)
-        {
-            lock (textureCacheLock)
-            {
-                textureMipCache.Remove(assetId);
-                textureMetaCache.Remove(assetId);
-                textureOrder.Remove(assetId);
-            }
-            RebuildFlatBuffer();
-            UpdatedTextureData?.Invoke();
-        }
-
-        /// <summary>
-        /// Loads all textures from the asset database (full rebuild - every texture is
-        /// re-decoded and re-mipped from disk). Use MarkTextureDirty for single-texture
-        /// updates instead of calling this directly wherever possible.
+        /// Loads every texture in the asset database and rebuilds the flat GPU
+        /// buffer. Decode and mip generation run in parallel across thread-pool
+        /// tasks; the resulting mip chains are consumed by the flat buffer build
+        /// and then discarded.
         /// </summary>
         public static async Task LoadAllTexturesAsync()
         {
@@ -217,197 +154,160 @@ namespace DivisionEngine.Systems
             TextureLoadProgress = 0f;
             loadingTextures = true;
 
-            if (!ProjectManager.IsCurrentLoaded)
-            {
-                Debug.Info("Texture System: Cannot load textures without a current project loaded!");
-                ClearAll();
-                UpdatedTextureData?.Invoke();
-                loadingTextures = false;
-                return;
-            }
-
-            List<AssetMetadata> textureMetadatas = [.. AssetDatabase.GetAssetsByType(AssetType.Texture)];
-            if (textureMetadatas.Count == 0)
-            {
-                Debug.Info("Texture System: No textures found in project");
-                ClearAll();
-                UpdatedTextureData?.Invoke();
-                loadingTextures = false;
-                return;
-            }
-
-            Debug.Info($"Texture System: Loading {textureMetadatas.Count} textures...");
-
-            List<string> newOrder = [];
-            int loadedCount = 0;
-            foreach (AssetMetadata meta in textureMetadatas)
-            {
-                bool ok = await LoadAndCacheTextureAsync(meta.ID, reportProgress: true, totalCount: textureMetadatas.Count);
-                if (ok)
-                {
-                    newOrder.Add(meta.ID);
-                    loadedCount++;
-                }
-                TextureLoadProgress = (float)loadedCount / textureMetadatas.Count;
-            }
-
-            lock (textureCacheLock) textureOrder = newOrder;
-
-            if (loadedCount == 0)
-            {
-                Debug.Warning("Texture System: No textures loaded successfully");
-                ClearAll();
-                loadingTextures = false;
-                TextureLoadProgress = 0f;
-                return;
-            }
-
-            RebuildFlatBuffer();
-            Debug.Info($"Texture System: Loaded {loadedCount} textures, {AllTextureData!.Length} total pixels");
-            UpdatedTextureData?.Invoke();
-            loadingTextures = false;
-            TextureLoadProgress = 1f;
-        }
-
-        /// <summary>
-        /// Reimports a specific set of textures (reload from disk, re-mip per current
-        /// import settings) and recombines the flat GPU buffer from cache afterward.
-        /// Every texture NOT in <paramref name="assetIds"/> is left completely untouched -
-        /// its cached mip chain is just re-copied into the new buffer as-is.
-        /// </summary>
-        private static async Task ReimportTexturesAsync(List<string> assetIds)
-        {
-            if (loadingTextures) return; // a full reload is already in flight and will supersede this
-            loadingTextures = true;
             try
             {
-                foreach (string id in assetIds)
+                if (!ProjectManager.IsCurrentLoaded)
                 {
-                    bool ok = await LoadAndCacheTextureAsync(id, reportProgress: false, totalCount: 1);
-                    lock (textureCacheLock)
+                    Debug.Info("Texture System: Cannot load textures without a current project loaded!");
+                    ClearAll();
+                    UpdatedTextureData?.Invoke();
+                    return;
+                }
+
+                List<AssetMetadata> textureMetadatas = [.. AssetDatabase.GetAssetsByType(AssetType.Texture)];
+                if (textureMetadatas.Count == 0)
+                {
+                    Debug.Info("Texture System: No textures found in project");
+                    ClearAll();
+                    UpdatedTextureData?.Invoke();
+                    return;
+                }
+
+                Debug.Info($"Texture System: Loading {textureMetadatas.Count} textures...");
+
+                // Prepare TextureAssets (metadata only - cheap, sequential is fine)
+                List<TextureAsset> textures = [];
+                foreach (AssetMetadata meta in textureMetadatas)
+                {
+                    TextureAsset? t = await ProjectManager.AssetManager!.LoadAssetAsync<TextureAsset>(meta.ID);
+                    if (t != null) textures.Add(t);
+                }
+
+                if (textures.Count == 0)
+                {
+                    Debug.Warning("Texture System: No textures could be prepared");
+                    ClearAll();
+                    UpdatedTextureData?.Invoke();
+                    return;
+                }
+
+                // Decode + build mip chains in parallel. Indexed results
+                // preserve the asset order regardless of completion order
+                var results = new (TextureAsset Asset, List<uint[]>? MipChain, int Width, int Height)[textures.Count];
+                int loadedCount = 0;
+                object progressLock = new();
+
+                Task[] tasks = new Task[textures.Count];
+                for (int i = 0; i < textures.Count; i++)
+                {
+                    int index = i;
+                    tasks[index] = Task.Run(() =>
                     {
-                        if (ok)
+                        TextureAsset asset = textures[index];
+                        try
                         {
-                            if (!textureOrder.Contains(id)) textureOrder.Add(id);
+                            var (pixels, w, h) = asset.GetPixelData();
+                            int naturalMax = (int)Math.Floor(Math.Log2(Math.Max(w, h))) + 1;
+                            int maxLevels = Math.Clamp(
+                                asset.MaxMipmap <= 0 ? naturalMax : asset.MaxMipmap,
+                                1, naturalMax);
+
+                            List<uint[]> mips = BuildMipChain(pixels, w, h, maxLevels);
+                            results[index] = (asset, mips, w, h);
+
+                            lock (progressLock)
+                            {
+                                loadedCount++;
+                                TextureLoadProgress = (float)loadedCount / textures.Count;
+                            }
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            // Asset failed to load (deleted, decode error, etc.)
-                            textureMipCache.Remove(id);
-                            textureMetaCache.Remove(id);
-                            textureOrder.Remove(id);
+                            Debug.Warning($"Texture System: Failed to load {asset.Metadata.FileName}: {ex.Message}");
                         }
+                    });
+                }
+
+                await Task.WhenAll(tasks);
+
+                // Build the flat buffer. Mip chains are consumed here and then
+                // become eligible for collection - nothing keeps them alive
+                int totalPixels = 0;
+                for (int i = 0; i < results.Length; i++)
+                {
+                    List<uint[]>? mips = results[i].MipChain;
+                    if (mips == null) continue;
+                    foreach (uint[] level in mips) totalPixels += level.Length;
+                }
+
+                if (totalPixels == 0)
+                {
+                    Debug.Warning("Texture System: No textures loaded successfully");
+                    ClearAll();
+                    UpdatedTextureData?.Invoke();
+                    return;
+                }
+
+                uint[] flat = new uint[totalPixels];
+                List<TextureMetadata> metas = new(results.Length);
+                List<string> order = new(results.Length);
+                int offset = 0;
+
+                for (int i = 0; i < results.Length; i++)
+                {
+                    var (asset, mips, w, h) = results[i];
+                    if (mips == null) continue;
+
+                    metas.Add(new TextureMetadata
+                    {
+                        bufferOffset = offset,
+                        resolution = new int2(w, h),
+                        mipCount = mips.Count,
+                        cubemapLayout = (int)asset.CubemapLayout,
+                    });
+                    order.Add(asset.ID);
+
+                    foreach (uint[] level in mips)
+                    {
+                        Array.Copy(level, 0, flat, offset, level.Length);
+                        offset += level.Length;
                     }
                 }
-                RebuildFlatBuffer();
-                Debug.Info($"Texture System: Reimported {assetIds.Count} texture(s)");
+
+                lock (textureLock)
+                {
+                    textureOrder = order;
+                }
+
+                AllTextureData = flat;
+                AllTextureMetadata = [.. metas];
+                LastLoadedTextureCount = metas.Count;
+                LastLoadedTextureBufferSize = flat.Length;
+
+                textureIdToIndex.Clear();
+                for (int i = 0; i < order.Count; i++) textureIdToIndex[order[i]] = i;
+
+                Debug.Info($"Texture System: Loaded {metas.Count} textures, {flat.Length} total pixels");
                 UpdatedTextureData?.Invoke();
             }
             finally
             {
                 loadingTextures = false;
+                TextureLoadProgress = 1f;
             }
         }
 
         /// <summary>
-        /// Loads (or reloads) a single texture asset from disk, builds its mip chain per
-        /// its current import settings, and stores the result in the per-texture cache.
-        /// Does not touch the flattened GPU buffer - callers must invoke RebuildFlatBuffer
-        /// afterward (LoadAllTexturesAsync and ReimportTexturesAsync both do this).
+        /// Builds a mip chain from the given base level. The base level is
+        /// included as the first element of the result. Purely CPU-bound and
+        /// synchronous - callers running it in parallel are responsible for the
+        /// threading (see <see cref="LoadAllTexturesAsync"/>).
         /// </summary>
-        private static async Task<bool> LoadAndCacheTextureAsync(string assetId, bool reportProgress, int totalCount)
+        private static List<uint[]> BuildMipChain(uint[] baseLevel, int width, int height, int maxLevels)
         {
-            TextureAsset? texture = await ProjectManager.AssetManager!.LoadAssetAsync<TextureAsset>(assetId);
-            if (texture?.PixelData == null)
-            {
-                Debug.Warning($"Texture System: Failed to load texture: {assetId}");
-                return false;
-            }
-
-            int naturalMaxLevels = (int)Math.Floor(Math.Log2(Math.Max(texture.Width, texture.Height))) + 1;
-            int maxLevels = Math.Clamp(texture.MaxMipmap <= 0 ? naturalMaxLevels : texture.MaxMipmap, 1, naturalMaxLevels);
-
-            List<uint[]> mipChain = await BuildMipChainAsync(texture.PixelData, texture.Width, texture.Height, maxLevels,
-                reportProgress ? (_ => TextureLoadProgress += 1f / maxLevels / totalCount) : (_ => { }));
-
-            lock (textureCacheLock)
-            {
-                textureMipCache[assetId] = mipChain;
-                textureMetaCache[assetId] = new TextureMetadata
-                {
-                    resolution = new int2(texture.Width, texture.Height),
-                    bufferOffset = 0, // recomputed in RebuildFlatBuffer
-                    mipCount = mipChain.Count,
-                    cubemapLayout = (int)texture.CubemapLayout,
-                };
-            }
-
-            GC.Collect(); // Collect GC after every texture (re)loaded, matches prior behavior
-            return true;
-        }
-
-        /// <summary>
-        /// Flattens the per-texture mip-chain cache into the single GPU buffer +
-        /// metadata array, in textureOrder. This is pure array concatenation and offset
-        /// bookkeeping - no image decoding or mip generation happens here, which is why
-        /// it's cheap enough to call after reimporting just one texture.
-        /// </summary>
-        private static void RebuildFlatBuffer()
-        {
-            List<uint> allData = [];
-            List<TextureMetadata> metadataList = [];
-            Dictionary<string, int> newIndex = [];
-
-            lock (textureCacheLock)
-            {
-                int currentOffset = 0;
-                foreach (string id in textureOrder)
-                {
-                    if (!textureMipCache.TryGetValue(id, out List<uint[]>? mipChain) ||
-                        !textureMetaCache.TryGetValue(id, out TextureMetadata meta)) continue;
-
-                    meta.bufferOffset = currentOffset;
-                    metadataList.Add(meta);
-                    newIndex[id] = metadataList.Count - 1;
-
-                    foreach (uint[] level in mipChain)
-                    {
-                        foreach (uint pixel in level) allData.Add(pixel);
-                        currentOffset += level.Length;
-                    }
-                }
-            }
-
-            AllTextureData = [.. allData];
-            AllTextureMetadata = [.. metadataList];
-            LastLoadedTextureCount = AllTextureMetadata.Length;
-            LastLoadedTextureBufferSize = AllTextureData.Length;
-
-            textureIdToIndex.Clear();
-            foreach (var kvp in newIndex) textureIdToIndex[kvp.Key] = kvp.Value;
-        }
-
-        private static void ClearAll()
-        {
-            AllTextureData = [];
-            AllTextureMetadata = [];
-            LastLoadedTextureCount = 0;
-            LastLoadedTextureBufferSize = 0;
-            lock (textureCacheLock)
-            {
-                textureMipCache.Clear();
-                textureMetaCache.Clear();
-                textureOrder.Clear();
-                textureIdToIndex.Clear();
-            }
-        }
-
-        private static async Task<List<uint[]>> BuildMipChainAsync(uint[] baseLevel, int width, int height, int maxLevels, Action<int> onProgress)
-        {
-            List<uint[]> levels = [baseLevel];
+            List<uint[]> levels = new(maxLevels) { baseLevel };
             int w = width, h = height;
             uint[] prev = baseLevel;
-            onProgress(1); // report base level
 
             while ((w > 1 || h > 1) && levels.Count < maxLevels)
             {
@@ -415,27 +315,31 @@ namespace DivisionEngine.Systems
                 int nh = Math.Max(1, h / 2);
                 uint[] next = new uint[nw * nh];
 
-                await Task.Run(() =>
+                // Capture for closure clarity - these don't change inside the loops
+                int srcW = w, srcH = h;
+                uint[] src = prev;
+
+                for (int y = 0; y < nh; y++)
                 {
-                    for (int y = 0; y < nh; y++)
+                    int y0 = Math.Min(y * 2, srcH - 1);
+                    int y1 = Math.Min(y * 2 + 1, srcH - 1);
+                    int rowOut = y * nw;
+                    int rowIn0 = y0 * srcW;
+                    int rowIn1 = y1 * srcW;
+
+                    for (int x = 0; x < nw; x++)
                     {
-                        for (int x = 0; x < nw; x++)
-                        {
-                            int x0 = Math.Min(x * 2, w - 1);
-                            int x1 = Math.Min(x * 2 + 1, w - 1);
-                            int y0 = Math.Min(y * 2, h - 1);
-                            int y1 = Math.Min(y * 2 + 1, h - 1);
-                            next[y * nw + x] = AveragePixels(
-                                prev[y0 * w + x0], prev[y0 * w + x1],
-                                prev[y1 * w + x0], prev[y1 * w + x1]);
-                        }
+                        int x0 = Math.Min(x * 2, srcW - 1);
+                        int x1 = Math.Min(x * 2 + 1, srcW - 1);
+                        next[rowOut + x] = AveragePixels(
+                            src[rowIn0 + x0], src[rowIn0 + x1],
+                            src[rowIn1 + x0], src[rowIn1 + x1]);
                     }
-                });
+                }
 
                 levels.Add(next);
                 prev = next;
                 w = nw; h = nh;
-                onProgress(1);
             }
             return levels;
         }
@@ -458,35 +362,34 @@ namespace DivisionEngine.Systems
         public static int GetTextureMetadataIndex(string assetId) =>
             textureIdToIndex.TryGetValue(assetId, out int index) ? index : -1;
 
-        public static TextureMetadata? GetTextureMetadata(string assetId) =>
-            textureIdToIndex.TryGetValue(assetId, out int index) ? AllTextureMetadata?[index] : null;
-
-        public static uint[]? GetTextureData(string assetId)
-        {
-            if (textureIdToIndex.TryGetValue(assetId, out int index))
-            {
-                if (AllTextureMetadata == null || AllTextureData == null) return null;
-                TextureMetadata meta = AllTextureMetadata[index];
-                int start = meta.bufferOffset;
-                int length = meta.resolution.X * meta.resolution.Y;
-                uint[] result = new uint[length];
-                Array.Copy(AllTextureData, start, result, 0, length);
-                return result;
-            }
-            return null;
-        }
-
         public static void UnloadAll()
         {
             ClearAll();
             Debug.Info("Texture System: Unloaded all textures");
         }
 
+        private static void ClearAll()
+        {
+            AllTextureData = [];
+            AllTextureMetadata = [];
+            LastLoadedTextureCount = 0;
+            LastLoadedTextureBufferSize = 0;
+            lock (textureLock)
+            {
+                textureOrder.Clear();
+                textureIdToIndex.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Frees the CPU-side flat buffer. Called by the render pipeline after
+        /// the GPU upload completes - once this runs, the textures live only on
+        /// the GPU, and CPU texture memory is effectively zero.
+        /// </summary>
         public static void FreeCPUTextureData()
         {
             _allTextureData = null;
             _allTextureMetadata = null;
-            GC.Collect();
             Debug.Info("Texture System: Freed CPU texture data");
         }
     }

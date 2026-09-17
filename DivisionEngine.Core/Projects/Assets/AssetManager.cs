@@ -8,197 +8,142 @@
 namespace DivisionEngine.Projects.Assets
 {
     /// <summary>
-    /// Describes the load state for an asset.
+    /// Load state for an asset. Purely informational - callers should not make
+    /// behavioral decisions based on this. Kept so the assets window can tint
+    /// tiles by state and the properties panel can show a status row.
     /// </summary>
     public enum AssetLoadState
     {
-        Unloaded = 0, Loading = 1, Loaded = 2
+        Unloaded = 0,
+        Loading = 1,
+        Loaded = 2
     }
 
     /// <summary>
-    /// Manages loading and unloading all assets in the current project.
+    /// Caches loaded assets for the current project. Loading is idempotent -
+    /// repeated calls return the same instance while it stays cached. Because
+    /// textures hold no pixel data (see <see cref="TextureAsset"/>), a
+    /// "texture load" is just a metadata read.
     /// </summary>
     public class AssetManager
     {
-        private readonly Dictionary<string, Asset> loadedAssets = [];
-        private readonly Dictionary<string, int> referenceCounts = [];
-        private readonly Dictionary<string, AssetLoadState> loadStates = [];
-        private readonly Dictionary<string, Task> inFlightLoads = [];
-        private readonly Lock stateLock = new();
+        private readonly Dictionary<string, Asset> cache = [];
+        private readonly Dictionary<string, AssetLoadState> states = [];
+        private readonly Lock gate = new();
 
         /// <summary>
-        /// Fired whenever an asset's load state changes (Unloaded/Loading/Loaded).
-        /// May be invoked from a background thread - subscribers must marshal to UI thread.
+        /// Raised whenever an asset's cache entry changes. Fires at most twice
+        /// per asset load (Loading, Loaded) and once on unload.
         /// </summary>
         public event Action<string, AssetLoadState>? AssetLoadStateChanged;
 
-        /// <summary>
-        /// Gets a loaded asset.
-        /// </summary>
-        /// <param name="id">Asset GUID</param>
-        /// <returns>Loaded asset, null if asset isn't loaded</returns>
-        public Asset? Get(string id) => loadedAssets.TryGetValue(id, out Asset? asset) ? asset : null;
-        public T? Get<T>(string id) where T : Asset => loadedAssets.TryGetValue(id, out Asset? asset) ? asset as T : null;
+        /// <summary>Returns the cached asset, or null if not currently loaded.</summary>
+        public Asset? Get(string id)
+        {
+            lock (gate) return cache.GetValueOrDefault(id);
+        }
+
+        /// <summary>Typed variant of <see cref="Get"/>.</summary>
+        public T? Get<T>(string id) where T : Asset
+        {
+            lock (gate) return cache.GetValueOrDefault(id) as T;
+        }
+
+        /// <summary>Current load state of an asset.</summary>
+        public AssetLoadState GetLoadState(string id)
+        {
+            lock (gate) return states.GetValueOrDefault(id, AssetLoadState.Unloaded);
+        }
 
         /// <summary>
-        /// Gets the load state for an asset GUID.
+        /// Loads an asset and caches it. Idempotent: if the asset is already
+        /// cached, the cached instance is returned immediately. Returns null
+        /// if the asset metadata is missing, has the wrong type, or fails to
+        /// load.
         /// </summary>
-        /// <param name="id">GUID to check load state of</param>
-        /// <returns>Load state of asset ID</returns>
-        public AssetLoadState GetLoadState(string id) =>
-            loadStates.TryGetValue(id, out AssetLoadState state) ? state : AssetLoadState.Unloaded;
-
-        /// <summary>
-        /// Loads an asset asynchronously.
-        /// </summary>
-        /// <typeparam name="T">Type of asset to load</typeparam>
-        /// <param name="id">Asset GUID to load</param>
-        /// <returns>Async task to load an object of type <typeparamref name="T"/></returns>
-        /// <remarks>Returns null if no asset with <paramref name="id"/> exists</remarks>
         public async Task<T?> LoadAssetAsync<T>(string id) where T : Asset
         {
-            lock (stateLock)
+            lock (gate)
             {
-                if (loadedAssets.TryGetValue(id, out Asset? existing))
-                {
-                    referenceCounts[id]++;
-                    return existing as T;
-                }
-            }
-
-            // A concurrent call (e.g. two components referencing the same asset,
-            // or a watcher-triggered reload racing a manual load) may already be
-            // loading this ID - piggyback on it instead of loading it twice.
-            Task? existingLoad;
-            lock (stateLock) inFlightLoads.TryGetValue(id, out existingLoad);
-            if (existingLoad != null)
-            {
-                await existingLoad;
-                lock (stateLock)
-                {
-                    if (loadedAssets.TryGetValue(id, out Asset? loaded))
-                    {
-                        referenceCounts[id]++;
-                        return loaded as T;
-                    }
-                }
-                return null;
+                if (cache.TryGetValue(id, out Asset? existing)) return existing as T;
             }
 
             AssetMetadata? metadata = AssetDatabase.GetAssetMetadataByID(id);
             if (metadata == null) return null;
-            if (metadata.Type != AssetDatabase.GetAssetType<T>())
-            {
-                Debug.Error($"Asset type mismatch: Expected {AssetDatabase.GetAssetType<T>()}, got {metadata.Type}");
-                return null;
-            }
+            if (metadata.Type != AssetDatabase.GetAssetType<T>()) return null;
 
             Asset? asset = CreateAssetFromMetadata(metadata);
             if (asset == null) return null;
 
-            TaskCompletionSource loadTcs = new();
-            lock (stateLock) inFlightLoads[id] = loadTcs.Task;
-            SetLoadState(id, AssetLoadState.Loading);
+            SetState(id, AssetLoadState.Loading);
 
-            try
+            bool ok;
+            try { ok = await asset.LoadAsync(); }
+            catch (Exception ex)
             {
-                bool success = await asset.LoadAsync();
-                if (!success)
-                {
-                    SetLoadState(id, AssetLoadState.Unloaded);
-                    return null;
-                }
+                Debug.Error($"Asset Manager: load threw for {metadata.FileName}", ex);
+                SetState(id, AssetLoadState.Unloaded);
+                return null;
+            }
 
-                Debug.Info($"Asset Manager: Loaded Asset:\n{metadata.FileName}");
-                lock (stateLock)
-                {
-                    loadedAssets[id] = asset;
-                    referenceCounts[id] = 1;
-                }
-                SetLoadState(id, AssetLoadState.Loaded);
-                return asset as T;
-            }
-            finally
+            if (!ok)
             {
-                lock (stateLock) inFlightLoads.Remove(id);
-                loadTcs.SetResult();
+                SetState(id, AssetLoadState.Unloaded);
+                return null;
             }
+
+            lock (gate) cache[id] = asset;
+            SetState(id, AssetLoadState.Loaded);
+            return asset as T;
         }
 
         /// <summary>
-        /// Unloads an asset.
+        /// Removes an asset from the cache and calls its <see cref="Asset.Unload"/>.
+        /// No-op if the asset isn't cached.
         /// </summary>
-        /// <param name="id">GUID of asset to unload</param>
         public void UnloadAsset(string id)
         {
-            bool shouldUnload = false;
-            Asset? assetToUnload = null;
-
-            lock (stateLock)
+            Asset? removed;
+            lock (gate)
             {
-                if (!referenceCounts.TryGetValue(id, out int value)) return;
-                referenceCounts[id] = --value;
-
-                if (value <= 0)
-                {
-                    loadedAssets.TryGetValue(id, out assetToUnload);
-                    loadedAssets.Remove(id);
-                    referenceCounts.Remove(id);
-                    shouldUnload = true;
-                }
+                if (!cache.Remove(id, out removed)) return;
             }
-
-            if (shouldUnload)
-            {
-                assetToUnload?.Unload();
-                Debug.Info($"Asset Manager: Unloaded Asset:\n{id}");
-                SetLoadState(id, AssetLoadState.Unloaded);
-            }
+            removed.Unload();
+            SetState(id, AssetLoadState.Unloaded);
         }
 
         /// <summary>
-        /// Unloads all assets.
-        /// </summary>
-        public void UnloadAll()
-        {
-            Debug.Info($"Asset Manager: Unloaded Assets");
-            List<string> ids;
-            lock (stateLock) ids = [.. loadedAssets.Keys];
-
-            foreach (string id in ids)
-            {
-                loadedAssets[id].Unload();
-                SetLoadState(id, AssetLoadState.Unloaded);
-            }
-
-            lock (stateLock)
-            {
-                loadedAssets.Clear();
-                referenceCounts.Clear();
-            }
-        }
-
-        /// <summary>
-        /// Forcibly discards a cached asset regardless of reference count, so the next
-        /// LoadAssetAsync call reloads it fresh from disk - re-reading any metadata
-        /// (e.g. import settings) that changed since it was originally cached.
+        /// Drops the cached instance without calling <c>Unload</c>. The next
+        /// <see cref="LoadAssetAsync{T}"/> call reloads it fresh - useful when
+        /// asset metadata (import settings) changed and the cached instance
+        /// holds stale configuration.
         /// </summary>
         public void InvalidateAsset(string id)
         {
-            Asset? assetToUnload;
-            lock (stateLock)
+            lock (gate)
             {
-                if (!loadedAssets.TryGetValue(id, out assetToUnload)) return;
-                loadedAssets.Remove(id);
-                referenceCounts.Remove(id);
+                if (!cache.Remove(id)) return;
             }
-            assetToUnload?.Unload();
-            SetLoadState(id, AssetLoadState.Unloaded);
+            SetState(id, AssetLoadState.Unloaded);
         }
 
-        private void SetLoadState(string id, AssetLoadState state)
+        /// <summary>Unloads every cached asset.</summary>
+        public void UnloadAll()
         {
-            lock (stateLock) loadStates[id] = state;
+            List<Asset> snapshot;
+            lock (gate)
+            {
+                snapshot = [.. cache.Values];
+                cache.Clear();
+                states.Clear();
+            }
+            foreach (Asset asset in snapshot) asset.Unload();
+            Debug.Info("Asset Manager: unloaded all assets");
+        }
+
+        private void SetState(string id, AssetLoadState state)
+        {
+            lock (gate) states[id] = state;
             AssetLoadStateChanged?.Invoke(id, state);
         }
 

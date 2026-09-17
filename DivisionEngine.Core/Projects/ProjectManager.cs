@@ -126,7 +126,7 @@ namespace DivisionEngine.Projects
 
 				InitializeAssetSystem();
 
-				// Reset reload tracking for this project.
+				// Reset reload tracking for this project
 				pendingWorldReload = null;
 				firstCompileHandled = false;
 
@@ -162,7 +162,7 @@ namespace DivisionEngine.Projects
 					Debug.Info("Project Manager: World data deserialized.");
 
 					// Stash the raw data so OnScriptsLoaded can replay it if the initial
-					// deserialize couldn't resolve custom component types.
+					// deserialize couldn't resolve custom component types
 					if (!firstCompileHandled) pendingWorldReload = tempWorldData;
 
 					LoadWorldDataIntoCurrent(tempWorldData);
@@ -188,7 +188,7 @@ namespace DivisionEngine.Projects
 
 		/// <summary>
 		/// Fires at the start of every compile pass. For the first compile after
-		/// project load, we skip the snapshot — LoadProject has already stashed the
+		/// project load, we skip the snapshot - LoadProject has already stashed the
 		/// on-disk WorldData, and that's what should be replayed. For every
 		/// subsequent compile, snapshot the live world so it can be re-materialized
 		/// against the fresh assembly once the compile succeeds.
@@ -202,7 +202,7 @@ namespace DivisionEngine.Projects
 		/// <summary>
 		/// Called when the script pipeline finishes a compile and a new assembly
 		/// context has been loaded. Registers new systems on the current world, and
-		/// — for the first successful compile after project load — replays the world
+		/// - for the first successful compile after project load - replays the world
 		/// data so any custom components that failed to deserialize before the
 		/// assembly was available are restored.
 		/// </summary>
@@ -219,8 +219,8 @@ namespace DivisionEngine.Projects
                 LoadWorldDataIntoCurrent(snapshot);
                 ResolveAssetReferencesInWorld(WorldManager.CurrentWorld);
 
-                // The world instance changed — the renderer must rebind or it will
-                // keep showing the previous, incomplete world.
+                // The world instance changed - the renderer must rebind or it will
+                // keep showing the previous, incomplete world
                 Rendering.RenderPipeline.Instance?.BindCurrentWorld();
             }
             else
@@ -240,7 +240,7 @@ namespace DivisionEngine.Projects
         {
             // Tear down the outgoing world's systems first. This releases their event
             // subscriptions, timers, and any other resources they own, so they can't
-            // fire into a world we're about to replace.
+            // fire into a world we're about to replace
             World? outgoing = WorldManager.CurrentWorld;
             if (outgoing != null)
             {
@@ -265,12 +265,7 @@ namespace DivisionEngine.Projects
             }
 
             newWorld.RegisterAllSystems();
-
-            // Symmetry with teardown: every system in this fresh world gets its
-            // lifecycle hooks. Without this, no system's AppStart ever runs and
-            // nothing subscribes to ProjectLoaded/ProjectClosed/AssetsUpdated.
             newWorld.CallAwake();
-            newWorld.CallAppStart();
 
             WorldManager.SetWorld(newWorld);
             WorldManager.SwitchWorld(newWorld.Name);
@@ -287,7 +282,7 @@ namespace DivisionEngine.Projects
 			if (string.IsNullOrWhiteSpace(projDir) || string.IsNullOrEmpty(projName))
 				return false;
 
-			// Ensure any existing project is fully torn down first.
+			// Ensure any existing project is fully torn down first
 			if (IsCurrentLoaded) CloseProject();
 
 			CurrentProjectName = projName;
@@ -299,7 +294,7 @@ namespace DivisionEngine.Projects
 
 			// SaveProject created the directory structure. Now bring up the asset
 			// system and script pipeline just like LoadProject does, so the new
-			// project is fully functional without a close/reopen cycle.
+			// project is fully functional without a close/reopen cycle
 			InitializeAssetSystem();
 
 			pendingWorldReload = null;
@@ -430,7 +425,7 @@ namespace DivisionEngine.Projects
             AssetDatabase.SaveAll();
             AssetManager?.UnloadAll();
 
-            // Now safe to forget the world.
+            // Now safe to forget the world
             WorldManager.ClearAllWorlds();
 
             pendingWorldReload = null;
