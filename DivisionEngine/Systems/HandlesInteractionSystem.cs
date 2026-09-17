@@ -230,7 +230,7 @@ namespace DivisionEngine.Editor.Systems
                         );
 
                         transform.position = currentPosition;
-                        PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).ToString());
+                        PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).FullName);
                         RenderPipeline.Instance?.ShowHandles(transform.position, EditorSettings.Instance!.EditorHandleScale);
 
                         // Update distance as we move
@@ -262,7 +262,7 @@ namespace DivisionEngine.Editor.Systems
                         }
 
                         transform.scaling = newScale;
-                        PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).ToString());
+                        PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).FullName);
                         currentScale = newScale; // Update current scale for next frame
 
                         if (scaleDelta != 0)
@@ -288,7 +288,7 @@ namespace DivisionEngine.Editor.Systems
                                 float4 deltaRot = Quaternion.CreateFromAxisAngle(rotationAxis, angleDelta);
                                 transform.rotation = Quaternion.Normalize(Quaternion.Multiply(deltaRot, transform.rotation));
 
-                                PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).ToString());
+                                PropertiesRefreshSystem.OnFieldChanged(draggedEntity, typeof(Transform).FullName);
                                 lastAngle = currentAngle;
                             }
                         }

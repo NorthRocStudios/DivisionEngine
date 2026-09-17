@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Projects.Assets;
+using DivisionEngine.Projects.Scripting;
 using DivisionEngine.Serialization;
 
 namespace DivisionEngine.Projects
@@ -118,8 +119,15 @@ namespace DivisionEngine.Projects
                 // Initialize Asset System
                 InitializeAssetSystem();
 
-                // Load project file
-                CurrentProjectData = null;
+				ScriptCompilationPipeline.Initialize();
+
+				// On each successful script load, register any new systems incrementally
+				ScriptCompilationPipeline.ScriptsLoaded += _ => WorldManager.CurrentWorld?.RegisterNewSystems();
+
+				_ = ScriptCompilationPipeline.RefreshAndCompileAsync();
+
+				// Load project file
+				CurrentProjectData = null;
                 foreach (string projPath in Directory.EnumerateFiles(projDir, "*.divp", SearchOption.TopDirectoryOnly))
                 {
                     string projJson = File.ReadAllText(projPath);
@@ -135,16 +143,13 @@ namespace DivisionEngine.Projects
                 foreach (string worldPath in Directory.EnumerateFiles(projDir, "*.wld", SearchOption.TopDirectoryOnly))
                 {
                     string worldJson = File.ReadAllText(worldPath);
-                    if (!string.IsNullOrEmpty(worldJson))
-                        tempWorldData = Deserialize.Default<WorldData>(worldJson);
+                    if (!string.IsNullOrEmpty(worldJson)) tempWorldData = Deserialize.Default<WorldData>(worldJson);
                     break; // Break after first world found for now
                 }
                 if (tempWorldData != null)
                 {
                     Debug.Info("Project Manager: World data deserialized.");
                     LoadWorldDataIntoCurrent(tempWorldData);
-
-                    // After world is loaded, resolve any asset references in components
                     ResolveAssetReferencesInWorld(WorldManager.CurrentWorld);
                 }
 
@@ -162,7 +167,6 @@ namespace DivisionEngine.Projects
             if (world == null || AssetManager == null) return;
 
             // This would iterate through all components and resolve AssetReference fields
-            // For now, just log
             Debug.Info("Project Manager: Asset references ready for loading");
         }
 
@@ -277,6 +281,11 @@ namespace DivisionEngine.Projects
                 // Validate assets directory
                 DirectoryInfo assetsDir = new DirectoryInfo($"{projectDir}\\Assets\\");
                 if (!assetsDir.Exists) assetsDir.Create();
+
+                // Generate / refresh the Visual Studio solution and player/editor
+                // .csproj files. Idempotent - content-only rewrites
+                ProjectScaffolder.EnsureScaffolding(projName, projectDir);
+
                 return true;
             }
             return false;
@@ -301,6 +310,7 @@ namespace DivisionEngine.Projects
             Debug.Info($"Project Manager: Closing {CurrentProjectName}");
 
             ProjectClosing?.Invoke(); // Start closing notify
+            ScriptCompilationPipeline.Shutdown(); // Stop script compilation
             AssetDatabase.StopFileWatcher(); // Stop watching before saving
             AssetDatabase.SaveAll(); // Save all asset metadata before closing
             AssetManager?.UnloadAll(); // Unload all assets

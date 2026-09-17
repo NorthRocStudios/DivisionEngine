@@ -77,7 +77,7 @@ namespace DivisionEngine.Systems
     {
         public static IconType GetIconForEntity(uint entityId, World world)
         {
-            if (world.HasComponent<Camera>(entityId)) return IconType.Camera;
+            if (entityId != EditorCamera.EditorCameraId && world.HasComponent<Camera>(entityId)) return IconType.Camera;
             if (world.HasComponent<Components.Lights.DirectionalLight>(entityId)) return IconType.DirectionalLight;
             if (world.HasComponent<Components.Lights.PointLight>(entityId)) return IconType.PointLight;
             if (world.HasComponent<Components.Environment>(entityId)) return IconType.Environment;

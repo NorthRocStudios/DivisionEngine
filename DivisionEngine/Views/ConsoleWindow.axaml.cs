@@ -8,15 +8,19 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
+using DivisionEngine.Projects.Scripting;
 using Material.Icons;
 using Material.Icons.Avalonia;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 
@@ -29,6 +33,23 @@ public partial class ConsoleWindow : EditorWindow
 {
     public const int MaxDisplayedLogEntries = 1000;
 
+    /// <summary>
+    /// Rendering style for the log list. Persisted statically across all
+    /// console windows so closing and reopening keeps the same mode.
+    /// </summary>
+    public enum ConsoleView
+    {
+        /// <summary>
+        /// Detailed cards with caller info, expandable multi-line messages.
+        /// </summary>
+        Verbose,
+        /// <summary>
+        /// Compact monospace lines, one per entry. Pairs with the command bar.
+        /// </summary>
+        Terminal,
+    }
+
+    // Display panels
     private readonly StackPanel logList;
     private readonly StackPanel controlsPanel;
     private readonly ScrollViewer scrollViewer;
@@ -36,15 +57,26 @@ public partial class ConsoleWindow : EditorWindow
     private readonly CheckBox collapseCheckbox;
     private readonly ComboBox filterLogTypeBox;
     private readonly Button clearButton;
+    private readonly Button viewToggleButton;
+    private readonly MaterialIcon viewToggleIcon;
     private readonly TextBox searchBox;
     private readonly MaterialIcon searchIcon;
+    private readonly Border commandBar;
+    private readonly TextBox commandInput;
+
+    // State
     private bool autoScroll;
     private bool collapseEnabled;
     private string searchFilter = string.Empty;
+
+    // Static so the view mode persists across console window instances
+    private static ConsoleView currentView = ConsoleView.Verbose;
+
     private readonly Lock threadLock;
 
-    // Grouped log entries for collapse feature
-    private readonly Dictionary<string, GroupedLogEntry> groupedLogs = [];
+    // Command history for up/down navigation
+    private readonly List<string> commandHistory = [];
+    private int historyIndex = -1;
 
     /// <summary>
     /// Represents a group of identical log entries.
@@ -56,14 +88,12 @@ public partial class ConsoleWindow : EditorWindow
         public Border? Control { get; set; }
     }
 
-    /// <summary>
-    /// Builds a new console window.
-    /// </summary>
+    private readonly Dictionary<string, GroupedLogEntry> groupedLogs = [];
+
     public ConsoleWindow()
     {
         InitializeComponent();
 
-        // Create header controls
         autoScroll = true;
         collapseEnabled = false;
         threadLock = new Lock();
@@ -81,6 +111,7 @@ public partial class ConsoleWindow : EditorWindow
             Margin = new Thickness(4, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
+        ToolTip.SetTip(clearButton, "Clear logs (script diagnostics are preserved)");
         clearButton.Click += ClearButton_Click;
 
         autoscrollCheckbox = new CheckBox
@@ -91,9 +122,8 @@ public partial class ConsoleWindow : EditorWindow
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
         };
-        autoscrollCheckbox.IsCheckedChanged += (s, e) => { autoScroll = autoscrollCheckbox.IsChecked.Value; };
+        autoscrollCheckbox.IsCheckedChanged += (_, _) => autoScroll = autoscrollCheckbox.IsChecked == true;
 
-        // Collapse checkbox (like Unity)
         collapseCheckbox = new CheckBox
         {
             Content = "Collapse",
@@ -102,9 +132,9 @@ public partial class ConsoleWindow : EditorWindow
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
         };
-        collapseCheckbox.IsCheckedChanged += (s, e) =>
+        collapseCheckbox.IsCheckedChanged += (_, _) =>
         {
-            collapseEnabled = collapseCheckbox.IsChecked.Value;
+            collapseEnabled = collapseCheckbox.IsChecked == true;
             ReloadLogs();
         };
 
@@ -119,7 +149,6 @@ public partial class ConsoleWindow : EditorWindow
         searchBox = new TextBox
         {
             InnerLeftContent = searchIcon,
-            Text = "",
             PlaceholderText = "Search Logs...",
             FontSize = 12,
             Foreground = EditorColor.FromRGB(220, 220, 220),
@@ -134,67 +163,34 @@ public partial class ConsoleWindow : EditorWindow
         searchBox.TextChanged += SearchBox_TextChanged;
 
         // Log type filter dropdown
-        StackPanel allLogTypes = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-        };
-        StackPanel debugLogType = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-        };
-        StackPanel infoLogType = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-        };
-        StackPanel warnLogType = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-        };
-        StackPanel errorLogType = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-        };
+        filterLogTypeBox = BuildFilterDropdown();
+        filterLogTypeBox.SelectionChanged += (_, _) => ReloadLogs();
 
-        allLogTypes.Children.Add(new MaterialIcon { Kind = MaterialIconKind.AllInclusive });
-        allLogTypes.Children.Add(new TextBlock { Text = "All" });
-        infoLogType.Children.Add(new MaterialIcon { Kind = MaterialIconKind.Info });
-        infoLogType.Children.Add(new TextBlock { Text = "Info" });
-        debugLogType.Children.Add(new MaterialIcon { Kind = MaterialIconKind.DebugStepOver });
-        debugLogType.Children.Add(new TextBlock { Text = "Debug" });
-        warnLogType.Children.Add(new MaterialIcon { Kind = MaterialIconKind.Warning, Foreground = EditorColor.FromRGB(200, 200, 0) });
-        warnLogType.Children.Add(new TextBlock { Text = "Warning" });
-        errorLogType.Children.Add(new MaterialIcon { Kind = MaterialIconKind.Error, Foreground = EditorColor.FromRGB(200, 0, 0) });
-        errorLogType.Children.Add(new TextBlock { Text = "Error" });
-
-        filterLogTypeBox = new ComboBox
+        // View mode toggle - initialized from the static field so the mode
+        // is consistent regardless of which window instance is opening.
+        viewToggleIcon = new MaterialIcon
         {
-            Items =
-            {
-                new ComboBoxItem { Content = allLogTypes, },
-                new ComboBoxItem { Content = infoLogType, },
-                new ComboBoxItem { Content = debugLogType, },
-                new ComboBoxItem { Content = warnLogType, },
-                new ComboBoxItem { Content = errorLogType, },
-            },
-            SelectedIndex = 0,
-            Foreground = Brushes.White,
+            Kind = currentView == ConsoleView.Verbose ? MaterialIconKind.Terminal : MaterialIconKind.ViewList,
+            Width = 16,
+            Height = 16,
+            Foreground = EditorColor.FromRGB(200, 200, 200),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        viewToggleButton = new Button
+        {
+            Content = viewToggleIcon,
             Background = EditorColor.FromRGB(17, 17, 17),
             BorderThickness = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(6, 2),
             Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        filterLogTypeBox.SelectionChanged += (s, e) => ReloadLogs();
+        ToolTip.SetTip(viewToggleButton, currentView == ConsoleView.Verbose
+            ? "Switch to terminal view"
+            : "Switch to verbose view");
+        viewToggleButton.Click += (_, _) => ToggleView();
 
-        // Create panels
-        logList = new StackPanel
-        {
-            Orientation = Orientation.Vertical,
-        };
+        logList = new StackPanel { Orientation = Orientation.Vertical };
         controlsPanel = new StackPanel
         {
             Background = EditorColor.FromRGB(28, 28, 28),
@@ -212,99 +208,464 @@ public partial class ConsoleWindow : EditorWindow
         controlsPanel.Children.Add(clearButton);
         controlsPanel.Children.Add(autoscrollCheckbox);
         controlsPanel.Children.Add(collapseCheckbox);
+        controlsPanel.Children.Add(viewToggleButton);
         controlsPanel.Children.Add(searchBox);
         controlsPanel.Children.Add(filterLogTypeBox);
 
+        commandBar = BuildCommandBar(out commandInput);
+        commandBar.IsVisible = currentView == ConsoleView.Terminal;
+
         DockPanel mainPanel = new DockPanel { Background = EditorColor.FromRGB(45, 45, 45) };
         DockPanel.SetDock(controlsPanel, Dock.Top);
+        DockPanel.SetDock(commandBar, Dock.Bottom);
         mainPanel.Children.Add(controlsPanel);
+        mainPanel.Children.Add(commandBar);
         mainPanel.Children.Add(scrollViewer);
 
-        // Attach background context menu
         AttachBackgroundContextMenu();
 
+        // ---- Subscriptions ----------------------------------------------
         Debug.OnLogUpdate += Debug_OnLogUpdate;
+
+        // We re-query the pipeline's LastResult on every render, so missing
+        // this event while unloaded is harmless - but subscribing keeps the
+        // view live while the window is open.
+        ScriptCompilationPipeline.CompilationCompleted += OnCompilationCompleted;
+
+        Unloaded += (_, _) =>
+        {
+            Debug.OnLogUpdate -= Debug_OnLogUpdate;
+            ScriptCompilationPipeline.CompilationCompleted -= OnCompilationCompleted;
+        };
 
         ReloadLogs();
         Border? border = this.FindControl<Border>("MainBorder");
-        if (border != null) border.Child = mainPanel;
+        border?.Child = mainPanel;
     }
 
-    /// <summary>
-    /// Attaches a context menu to the background of the console window.
-    /// </summary>
+    #region viewMode
+
+    private void ToggleView()
+    {
+        currentView = currentView == ConsoleView.Verbose
+            ? ConsoleView.Terminal
+            : ConsoleView.Verbose;
+
+        viewToggleIcon.Kind = currentView == ConsoleView.Verbose
+            ? MaterialIconKind.Terminal
+            : MaterialIconKind.ViewList;
+
+        ToolTip.SetTip(viewToggleButton, currentView == ConsoleView.Verbose
+            ? "Switch to terminal view"
+            : "Switch to verbose view");
+
+        commandBar.IsVisible = currentView == ConsoleView.Terminal;
+
+        ReloadLogs();
+
+        if (currentView == ConsoleView.Terminal)
+            Dispatcher.UIThread.Post(() => commandInput.Focus(), DispatcherPriority.Background);
+    }
+
+    #endregion
+    #region commandBar
+
+    private Border BuildCommandBar(out TextBox input)
+    {
+        TextBlock prompt = new()
+        {
+            Text = ">",
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+            FontSize = 13,
+            FontWeight = FontWeight.Bold,
+            Foreground = EditorColor.FromRGB(120, 200, 120),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 6, 0),
+        };
+
+        // Help icon with command list tooltip
+        MaterialIcon helpIcon = new()
+        {
+            Kind = MaterialIconKind.HelpCircleOutline,
+            Width = 14,
+            Height = 14,
+            Foreground = EditorColor.FromRGB(140, 140, 140),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0),
+        };
+        ToolTip.SetTip(helpIcon, BuildCommandsTooltip());
+        ToolTip.SetPlacement(helpIcon, PlacementMode.Top);
+        ToolTip.SetShowDelay(helpIcon, 200);
+
+        input = new TextBox
+        {
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+            FontSize = 12,
+            Foreground = EditorColor.FromRGB(220, 220, 220),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        input.KeyDown += CommandInput_KeyDown;
+
+        Border bar = new()
+        {
+            Background = EditorColor.FromRGB(14, 14, 14),
+            BorderBrush = EditorColor.FromRGB(30, 30, 30),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Height = 30,
+        };
+
+        DockPanel layout = new();
+        DockPanel.SetDock(prompt, Dock.Left);
+        DockPanel.SetDock(helpIcon, Dock.Right);
+        layout.Children.Add(prompt);
+        layout.Children.Add(helpIcon);
+        layout.Children.Add(input);
+        bar.Child = layout;
+        return bar;
+    }
+
+    private static Border BuildCommandsTooltip()
+    {
+        const string commands =
+            "help ---------------------- Show this list\n" +
+            "clear | cls --------------- Clear non-diagnostic logs\n" +
+            "recompile | build --------- Recompile project scripts\n" +
+            "filter <level> ------------ Set log filter (all|info|debug|warning|error)\n" +
+            "search <text> ------------- Set search filter\n" +
+            "count --------------------- Show log counts\n" +
+            "diagnostics | diag -------- Show build diagnostic summary\n" +
+            "view <mode> --------------- Switch view (verbose|terminal)\n" +
+            "collapse <on|off> --------- Toggle collapse\n" +
+            "autoscroll <on|off> ------- Toggle auto-scroll\n" +
+            "log <open|dir> ------------ Open log file or directory";
+
+        return new Border
+        {
+            Background = EditorColor.FromRGB(24, 24, 24),
+            BorderBrush = EditorColor.FromRGB(80, 80, 80),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8, 6),
+            Child = new TextBlock
+            {
+                Text = commands,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 11,
+                Foreground = EditorColor.FromRGB(220, 220, 220),
+            },
+        };
+    }
+
+    private void CommandInput_KeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                ExecuteCommand(commandInput.Text ?? string.Empty);
+                commandInput.Text = string.Empty;
+                historyIndex = -1;
+                e.Handled = true;
+                break;
+
+            case Key.Up:
+                if (commandHistory.Count == 0) break;
+                historyIndex = historyIndex < 0
+                    ? commandHistory.Count - 1
+                    : math.max(0, historyIndex - 1);
+                commandInput.Text = commandHistory[historyIndex];
+                commandInput.CaretIndex = commandInput.Text.Length;
+                e.Handled = true;
+                break;
+
+            case Key.Down:
+                if (historyIndex < 0) break;
+                historyIndex++;
+                if (historyIndex >= commandHistory.Count)
+                {
+                    historyIndex = -1;
+                    commandInput.Text = string.Empty;
+                }
+                else
+                {
+                    commandInput.Text = commandHistory[historyIndex];
+                }
+                commandInput.CaretIndex = commandInput.Text.Length;
+                e.Handled = true;
+                break;
+
+            case Key.Escape:
+                commandInput.Text = string.Empty;
+                historyIndex = -1;
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void ExecuteCommand(string rawInput)
+    {
+        string input = rawInput.Trim();
+        if (string.IsNullOrEmpty(input)) return;
+
+        commandHistory.Add(input);
+        if (commandHistory.Count > 100) commandHistory.RemoveAt(0);
+        historyIndex = -1;
+
+        Debug.Log($"> {input}", LogLevel.Info);
+
+        string[] parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string verb = parts[0].ToLowerInvariant();
+        string[] args = parts.Length > 1 ? parts[1..] : [];
+
+        try
+        {
+            switch (verb)
+            {
+                case "help": CommandHelp(); break;
+                case "clear": CommandClear(); break;
+                case "cls": CommandClear(); break;
+                case "recompile":
+                case "build": CommandRecompile(); break;
+                case "filter": CommandFilter(args); break;
+                case "search": CommandSearch(args); break;
+                case "count": CommandCount(); break;
+                case "diagnostics":
+                case "diag": CommandDiagnostics(); break;
+                case "view": CommandView(args); break;
+                case "collapse": CommandCollapse(args); break;
+                case "autoscroll": CommandAutoscroll(args); break;
+                case "log": CommandLog(args); break;
+                case "open":
+                case "open-log": Debug.OpenLogFile(); break;
+                case "dir":
+                case "open-dir": Debug.OpenLogDirectory(); break;
+                default:
+                    Debug.Warning($"Unknown command: '{verb}'. Type 'help' for a list.");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.Error($"Command failed: {ex.Message}");
+        }
+    }
+
+    private static void CommandHelp()
+    {
+        Debug.Info("Available commands:");
+        Debug.Info("  help                        Show this list");
+        Debug.Info("  clear | cls                 Clear non-diagnostic logs");
+        Debug.Info("  recompile | build           Recompile project scripts");
+        Debug.Info("  filter <all|info|debug|warning|error>   Set log filter");
+        Debug.Info("  search <text>               Set search filter (empty to clear)");
+        Debug.Info("  count                       Show total log count");
+        Debug.Info("  diagnostics | diag          Show current build diagnostics");
+        Debug.Info("  view <verbose|terminal>     Switch view mode");
+        Debug.Info("  collapse <on|off>           Toggle collapse");
+        Debug.Info("  autoscroll <on|off>         Toggle auto-scroll");
+        Debug.Info("  log <open|dir>              Open log file or directory");
+        Debug.Info("  exit | close                Close this console window");
+    }
+
+    private void CommandClear()
+    {
+        Debug.ClearLogs();
+        ReloadLogs();
+    }
+
+    private static async void CommandRecompile()
+    {
+        Debug.Info("Triggering script recompile...");
+        await ScriptCompilationPipeline.RefreshAndCompileAsync();
+    }
+
+    private void CommandFilter(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Debug.Warning("Usage: filter <all|info|debug|warning|error>");
+            return;
+        }
+        int index = args[0].ToLowerInvariant() switch
+        {
+            "all" => 0,
+            "info" => 1,
+            "debug" => 2,
+            "warning" or "warn" => 3,
+            "error" => 4,
+            _ => -1,
+        };
+        if (index < 0)
+        {
+            Debug.Warning($"Unknown filter level: '{args[0]}'");
+            return;
+        }
+        filterLogTypeBox.SelectedIndex = index;
+    }
+
+    private void CommandSearch(string[] args) => searchBox.Text = args.Length == 0 ? string.Empty : string.Join(' ', args);
+
+    private static void CommandCount()
+    {
+        int logCount = Debug.Logs.Count;
+        int diagCount = ScriptCompilationPipeline.LastResult?.Diagnostics.Count(d => d.Severity != ScriptDiagnosticSeverity.Info) ?? 0;
+        Debug.Info($"Logs: {logCount} | Diagnostics: {diagCount}");
+    }
+
+    private static void CommandDiagnostics()
+    {
+        ScriptCompileResult? last = ScriptCompilationPipeline.LastResult;
+        if (last == null)
+        {
+            Debug.Info("No compile has run yet.");
+            return;
+        }
+
+        int errors = last.Diagnostics.Count(d => d.Severity == ScriptDiagnosticSeverity.Error);
+        int warnings = last.Diagnostics.Count(d => d.Severity == ScriptDiagnosticSeverity.Warning);
+
+        if (errors == 0 && warnings == 0)
+        {
+            Debug.Info($"Last build: clean ({last.Duration.TotalMilliseconds:F0}ms)");
+            return;
+        }
+
+        Debug.Info($"Last build: {errors} error(s), {warnings} warning(s)");
+        foreach (ScriptDiagnostic diag in last.Diagnostics)
+        {
+            if (diag.Severity == ScriptDiagnosticSeverity.Info) continue;
+            string location = string.IsNullOrEmpty(diag.FilePath)
+                ? string.Empty
+                : $"{Path.GetFileName(diag.FilePath)}({diag.Line},{diag.Column}): ";
+            string level = diag.Severity.ToString().ToLowerInvariant();
+            Debug.Info($"  {location}{level}: {diag.Message}");
+        }
+    }
+
+    private void CommandView(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Debug.Warning("Usage: view <verbose|terminal>");
+            return;
+        }
+        ConsoleView target = args[0].ToLowerInvariant() switch
+        {
+            "verbose" => ConsoleView.Verbose,
+            "terminal" => ConsoleView.Terminal,
+            _ => (ConsoleView)(-1),
+        };
+        if ((int)target == -1)
+        {
+            Debug.Warning($"Unknown view: '{args[0]}'");
+            return;
+        }
+        if (target != currentView) ToggleView();
+    }
+
+    private void CommandCollapse(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Debug.Warning("Usage: collapse <on|off>");
+            return;
+        }
+        collapseCheckbox.IsChecked = args[0].Equals("on", StringComparison.InvariantCultureIgnoreCase);
+    }
+
+    private void CommandAutoscroll(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Debug.Warning("Usage: autoscroll <on|off>");
+            return;
+        }
+        autoscrollCheckbox.IsChecked = args[0].Equals("on", StringComparison.InvariantCultureIgnoreCase);
+    }
+
+    private static void CommandLog(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Debug.Warning("Usage: log <open|dir>");
+            return;
+        }
+        switch (args[0].ToLowerInvariant())
+        {
+            case "open": Debug.OpenLogFile(); break;
+            case "dir": Debug.OpenLogDirectory(); break;
+            default: Debug.Warning($"Unknown log subcommand: '{args[0]}'"); break;
+        }
+    }
+
+    #endregion
+    #region compilationDiagnostics
+
+    private void OnCompilationCompleted(ScriptCompileResult result) => Dispatcher.UIThread.Post(ReloadLogs);
+
+    #endregion
+    #region contextMenu
+
     private void AttachBackgroundContextMenu()
     {
-        ContextMenu backgroundContextMenu = new ContextMenu
+        ContextMenu menu = new()
         {
             Background = EditorColor.FromRGB(68, 68, 68),
             BorderBrush = EditorColor.FromRGB(128, 128, 128),
         };
-
-        // Clear logs
-        MenuItem clearItem = new MenuItem
-        {
-            Header = "Clear All",
-            Icon = new MaterialIcon { Kind = MaterialIconKind.Delete, Width = 16, Height = 16 },
-            Foreground = EditorColor.FromRGB(220, 68, 68),
-        };
-        clearItem.Click += (s, e) => ClearButton_Click(s, e);
-        backgroundContextMenu.Items.Add(clearItem);
-
-        // Separator
-        backgroundContextMenu.Items.Add(new Separator());
-
-        // Copy all
-        MenuItem copyAllItem = new MenuItem
-        {
-            Header = "Copy All",
-            Icon = new MaterialIcon { Kind = MaterialIconKind.ContentCopy, Width = 16, Height = 16 },
-            Foreground = Brushes.White,
-        };
-        copyAllItem.Click += (s, e) => CopyAllLogs();
-        backgroundContextMenu.Items.Add(copyAllItem);
-
-        // Open log file
-        MenuItem openLogFileItem = new MenuItem
-        {
-            Header = "Open Log File",
-            Icon = new MaterialIcon { Kind = MaterialIconKind.FileDocument, Width = 16, Height = 16 },
-            Foreground = Brushes.White,
-        };
-        openLogFileItem.Click += (s, e) => Debug.OpenLogFile();
-        backgroundContextMenu.Items.Add(openLogFileItem);
-
-        // Open log directory
-        MenuItem openLogDirItem = new MenuItem
-        {
-            Header = "Open Log Directory",
-            Icon = new MaterialIcon { Kind = MaterialIconKind.FolderOpen, Width = 16, Height = 16 },
-            Foreground = Brushes.White,
-        };
-        openLogDirItem.Click += (s, e) => Debug.OpenLogDirectory();
-        backgroundContextMenu.Items.Add(openLogDirItem);
-
-        scrollViewer.ContextMenu = backgroundContextMenu;
+        menu.Items.Add(MakeMenuItem("Clear All", MaterialIconKind.Delete,
+            () => ClearButton_Click(null, null!), Brushes.OrangeRed));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("Copy All", MaterialIconKind.ContentCopy, CopyAllLogs, Brushes.White));
+        menu.Items.Add(MakeMenuItem("Open Log File", MaterialIconKind.FileDocument, Debug.OpenLogFile, Brushes.White));
+        menu.Items.Add(MakeMenuItem("Open Log Directory", MaterialIconKind.FolderOpen, Debug.OpenLogDirectory, Brushes.White));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeMenuItem("Toggle Terminal View", MaterialIconKind.Terminal, ToggleView, Brushes.White));
+        scrollViewer.ContextMenu = menu;
     }
 
-    /// <summary>
-    /// Copies all logs to the clipboard.
-    /// </summary>
+    private static MenuItem MakeMenuItem(string header, MaterialIconKind icon, Action onClick, IBrush foreground)
+    {
+        MenuItem item = new()
+        {
+            Header = header,
+            Icon = new MaterialIcon { Kind = icon, Width = 16, Height = 16 },
+            Foreground = foreground,
+        };
+        item.Click += (_, _) => onClick();
+        return item;
+    }
+
     private async void CopyAllLogs()
     {
         try
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            IClipboard? clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
             if (clipboard == null) return;
 
-            var logs = Debug.Logs.Select(log => log.ToFileString());
-            string allLogs = string.Join(Environment.NewLine, logs);
+            // Logs first, then diagnostics, matching visual order
+            List<string> lines = [.. Debug.Logs.Select(l => l.ToFileString())];
 
-            var data = new Avalonia.Input.DataTransfer();
-            data.Add(Avalonia.Input.DataTransferItem.CreateText(allLogs));
+            ScriptCompileResult? last = ScriptCompilationPipeline.LastResult;
+            if (last != null)
+            {
+                foreach (ScriptDiagnostic diag in last.Diagnostics)
+                {
+                    if (diag.Severity == ScriptDiagnosticSeverity.Info) continue;
+                    string location = string.IsNullOrEmpty(diag.FilePath)
+                        ? string.Empty
+                        : $"{diag.FilePath}({diag.Line},{diag.Column}): ";
+                    lines.Add($"[{diag.Severity}] {location}{diag.Message}");
+                }
+            }
+
+            string all = string.Join(Environment.NewLine, lines);
+            DataTransfer data = new DataTransfer();
+            data.Add(DataTransferItem.CreateText(all));
             await clipboard.SetDataAsync(data);
-
-            Debug.Info($"Copied {Debug.Logs.Count} logs to clipboard");
+            Debug.Info($"Copied {lines.Count} entries to clipboard");
         }
         catch (Exception ex)
         {
@@ -312,18 +673,16 @@ public partial class ConsoleWindow : EditorWindow
         }
     }
 
-    /// <summary>
-    /// Gets the collapse key for a log entry (based on caller info and message).
-    /// </summary>
-    private static string GetCollapseKey(LogEntry log)
-    {
-        // Use the caller info + message as the key for collapsing
-        // This matches Unity's behavior of grouping by identical call stack + message
-        return $"{log.CallerInfo}|{log.Message}|{log.Level}";
-    }
+    #endregion
+    #region rendering
+
+    private static string GetCollapseKey(LogEntry log) =>
+        $"{log.CallerInfo}|{log.Message}|{log.Level}";
 
     /// <summary>
-    /// Reloads all logs with current filters and collapse settings.
+    /// Rebuilds the entire log list: regular Debug logs followed by the
+    /// current pipeline diagnostics. Called on every event that could change
+    /// the view - window load, compile completion, filter change, clear.
     /// </summary>
     private void ReloadLogs()
     {
@@ -332,168 +691,234 @@ public partial class ConsoleWindow : EditorWindow
 
         if (collapseEnabled)
         {
-            // First, group all logs by their collapse key
-            IReadOnlyList<LogEntry> logs = Debug.Logs;
-            foreach (LogEntry log in logs)
+            foreach (LogEntry log in Debug.Logs)
             {
                 string key = GetCollapseKey(log);
                 if (!groupedLogs.TryGetValue(key, out GroupedLogEntry? group))
-                {
-                    group = new GroupedLogEntry { FirstLog = log, Count = 1 };
-                    groupedLogs[key] = group;
-                }
-                else group.Count++;
+                    groupedLogs[key] = new GroupedLogEntry { FirstLog = log, Count = 1 };
+                else
+                    group.Count++;
             }
 
-            // Then display each group
             foreach (GroupedLogEntry group in groupedLogs.Values)
             {
-                if (ShouldShowLog(group.FirstLog))
-                {
-                    Border control = CreateLogControl(group.FirstLog, group.Count);
-                    group.Control = control;
-                    logList.Children.Add(control);
-                }
+                if (!ShouldShowLog(group.FirstLog)) continue;
+                Border control = CreateLogControl(group.FirstLog, group.Count);
+                group.Control = control;
+                logList.Children.Add(control);
             }
         }
         else
         {
-            // Normal display - one entry per log
             lock (threadLock)
             {
-                List<LogEntry> logs = [.. Debug.Logs];
-                foreach (LogEntry log in logs)
+                foreach (LogEntry log in Debug.Logs.ToArray())
                     if (ShouldShowLog(log))
                         logList.Children.Add(CreateLogControl(log, 1));
             }
         }
 
-        // Auto-scroll to end if enabled
+        RenderDiagnostics();
         if (autoScroll) Dispatcher.UIThread.Post(scrollViewer.ScrollToEnd, DispatcherPriority.Background);
     }
 
-    /// <summary>
-    /// Determines if a log should be shown based on filters.
-    /// </summary>
+    private void RenderDiagnostics()
+    {
+        ScriptCompileResult? last = ScriptCompilationPipeline.LastResult;
+        if (last == null) return;
+
+        foreach (ScriptDiagnostic diag in last.Diagnostics)
+        {
+            if (diag.Severity == ScriptDiagnosticSeverity.Info) continue;
+            if (!ShouldShowDiagnostic(diag)) continue;
+
+            logList.Children.Add(currentView == ConsoleView.Terminal
+                ? CreateTerminalDiagnosticLine(diag)
+                : CreateVerboseDiagnosticControl(diag));
+        }
+    }
+
     private bool ShouldShowLog(LogEntry log)
     {
-        // Level filter
-        bool matchesLevel = filterLogTypeBox.SelectedIndex == 0 ||
-                           log.Level == (LogLevel)(filterLogTypeBox.SelectedIndex - 1);
-
+        bool matchesLevel = filterLogTypeBox.SelectedIndex == 0 || log.Level == (LogLevel)(filterLogTypeBox.SelectedIndex - 1);
         if (!matchesLevel) return false;
 
-        // Search filter
         if (!string.IsNullOrWhiteSpace(searchFilter))
         {
-            return log.Message.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ||
-                   log.Timestamp.ToString().Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ||
-                   log.Level.ToString().Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ||
-                   log.CallerInfo.Contains(searchFilter, StringComparison.OrdinalIgnoreCase);
+            return log.Message.Contains(searchFilter, StringComparison.OrdinalIgnoreCase)
+                || log.Timestamp.ToString().Contains(searchFilter, StringComparison.OrdinalIgnoreCase)
+                || log.Level.ToString().Contains(searchFilter, StringComparison.OrdinalIgnoreCase)
+                || log.CallerInfo.Contains(searchFilter, StringComparison.OrdinalIgnoreCase);
         }
         return true;
     }
 
-    /// <summary>
-    /// Called when the clear button is clicked.
-    /// </summary>
-    private void ClearButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private bool ShouldShowDiagnostic(ScriptDiagnostic diag)
     {
-        logList.Children.Clear();
-        groupedLogs.Clear();
-        Debug.ClearLogs();
+        LogLevel level = diag.Severity switch
+        {
+            ScriptDiagnosticSeverity.Error => LogLevel.Error,
+            ScriptDiagnosticSeverity.Warning => LogLevel.Warning,
+            _ => LogLevel.Info,
+        };
+
+        bool matchesLevel = filterLogTypeBox.SelectedIndex == 0 || level == (LogLevel)(filterLogTypeBox.SelectedIndex - 1);
+        if (!matchesLevel) return false;
+        if (!string.IsNullOrWhiteSpace(searchFilter))
+        {
+            return diag.Message.Contains(searchFilter, StringComparison.OrdinalIgnoreCase)
+                || (diag.FilePath?.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ?? false)
+                || level.ToString().Contains(searchFilter, StringComparison.OrdinalIgnoreCase);
+        }
+        return true;
     }
 
-    /// <summary>
-    /// Called when debug log is updated.
-    /// </summary>
-    private void Debug_OnLogUpdate(LogEntry obj)
+    private void ClearButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Clears only Debug.Logs diagnostics come from the pipeline and are not affected
+        int diagCount = ScriptCompilationPipeline.LastResult?.Diagnostics
+            .Count(d => d.Severity != ScriptDiagnosticSeverity.Info) ?? 0;
+        Debug.ClearLogs();
+        ReloadLogs();
+    }
+
+    private void Debug_OnLogUpdate(LogEntry entry) =>
         Dispatcher.UIThread.Post(() =>
         {
             if (collapseEnabled)
             {
-                // Update the grouped log entry
-                string key = GetCollapseKey(obj);
+                string key = GetCollapseKey(entry);
                 if (groupedLogs.TryGetValue(key, out GroupedLogEntry? group))
                 {
-                    // Update count
                     group.Count++;
-
-                    // Refresh the control if it exists
-                    if (group.Control != null && ShouldShowLog(obj)) UpdateLogCount(group.Control, group.Count);
+                    if (group.Control != null && ShouldShowLog(entry)) UpdateLogCount(group.Control, group.Count);
                 }
-                else if (ShouldShowLog(obj))
+                else if (ShouldShowLog(entry))
                 {
-                    // New group - create control
-                    GroupedLogEntry newGroup = new GroupedLogEntry { FirstLog = obj, Count = 1 };
-                    Border control = CreateLogControl(obj, 1);
+                    GroupedLogEntry newGroup = new() { FirstLog = entry, Count = 1 };
+                    Border control = CreateLogControl(entry, 1);
                     newGroup.Control = control;
                     groupedLogs[key] = newGroup;
                     logList.Children.Add(control);
-
                     if (autoScroll) scrollViewer.ScrollToEnd();
                 }
             }
-            else
+            else if (ShouldShowLog(entry))
             {
-                // Normal mode - just add the log
-                if (ShouldShowLog(obj))
-                {
-                    Border control = CreateLogControl(obj, 1);
-                    logList.Children.Add(control);
-
-                    if (autoScroll) scrollViewer.ScrollToEnd();
-                }
+                logList.Children.Add(CreateLogControl(entry, 1));
+                if (autoScroll) scrollViewer.ScrollToEnd();
             }
         });
-    }
 
-    /// <summary>
-    /// Updates the count display on a grouped log entry.
-    /// </summary>
     private static void UpdateLogCount(Border control, int count)
     {
-        if (control.Child is StackPanel mainPanel && mainPanel.Children.Count > 0)
+        if (control.Child is not StackPanel mainPanel) return;
+        foreach (Control child in mainPanel.Children)
         {
-            // Find the count badge in the header
-            foreach (Control child in mainPanel.Children)
+            if (child is not Grid grid) continue;
+            foreach (Control gridChild in grid.Children)
             {
-                if (child is Grid headerGrid)
+                if (gridChild is Border badge && badge.Classes.Contains("count-badge"))
                 {
-                    foreach (Control gridChild in headerGrid.Children)
-                    {
-                        if (gridChild is Border badgeBorder && badgeBorder.Classes.Contains("count-badge"))
-                        {
-                            if (badgeBorder.Child is TextBlock badgeText) badgeText.Text = count.ToString();
-                            break;
-                        }
-                    }
-                    break;
+                    if (badge.Child is TextBlock text) text.Text = count.ToString();
+                    return;
                 }
             }
+            return;
         }
     }
 
-    /// <summary>
-    /// Called when the search field is edited.
-    /// </summary>
     private void SearchBox_TextChanged(object? sender, TextChangedEventArgs e)
     {
         searchFilter = searchBox.Text?.Trim() ?? string.Empty;
         ReloadLogs();
     }
 
-    /// <summary>
-    /// Creates a log entry control with optional count badge for collapsed logs.
-    /// </summary>
-    private Border CreateLogControl(LogEntry log, int count)
+    private Border CreateLogControl(LogEntry log, int count) => currentView switch
+    {
+        ConsoleView.Terminal => CreateTerminalLine(log, count),
+        _ => CreateVerboseLogControl(log, count),
+    };
+
+    private Border CreateTerminalLine(LogEntry log, int count)
+    {
+        IBrush lineColor = log.Level switch
+        {
+            LogLevel.Error => new SolidColorBrush(Color.FromRgb(240, 100, 100)),
+            LogLevel.Warning => new SolidColorBrush(Color.FromRgb(230, 200, 90)),
+            LogLevel.Info => new SolidColorBrush(Color.FromRgb(180, 200, 220)),
+            _ => new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+        };
+
+        string levelTag = log.Level switch
+        {
+            LogLevel.Error => "ERR",
+            LogLevel.Warning => "WRN",
+            LogLevel.Info => "INF",
+            LogLevel.Debug => "DBG",
+            _ => "LOG",
+        };
+
+        string countSuffix = count > 1 ? $" (×{count})" : "";
+
+        Border wrapper = new()
+        {
+            Padding = new Thickness(6, 0, 6, 0),
+            Background = Brushes.Transparent,
+            Tag = log,
+            Child = new SelectableTextBlock
+            {
+                Text = $"[{log.Timestamp:HH:mm:ss}] [{levelTag}] {log.Message}{countSuffix}",
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 11.5,
+                Foreground = lineColor,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            },
+        };
+
+        ContextMenu lineMenu = new()
+        {
+            Background = EditorColor.FromRGB(68, 68, 68),
+            BorderBrush = EditorColor.FromRGB(128, 128, 128),
+        };
+        MenuItem copyItem = new()
+        {
+            Header = "Copy Line",
+            Icon = new MaterialIcon { Kind = MaterialIconKind.ContentCopy, Width = 14, Height = 14 },
+            Foreground = Brushes.White,
+        };
+        copyItem.Click += async (_, _) =>
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null) return;
+            var data = new Avalonia.Input.DataTransfer();
+            data.Add(Avalonia.Input.DataTransferItem.CreateText(log.ToFileString()));
+            await clipboard.SetDataAsync(data);
+        };
+        lineMenu.Items.Add(copyItem);
+
+        lineMenu.Items.Add(new Separator());
+        MenuItem deleteItem = new()
+        {
+            Header = "Delete",
+            Icon = new MaterialIcon { Kind = MaterialIconKind.Delete, Width = 14, Height = 14 },
+            Foreground = Brushes.OrangeRed,
+        };
+        deleteItem.Click += (_, _) => ClickDeleteButton(log);
+        lineMenu.Items.Add(deleteItem);
+
+        wrapper.ContextMenu = lineMenu;
+        return wrapper;
+    }
+
+    private Border CreateVerboseLogControl(LogEntry log, int count)
     {
         bool isMultiLine = log.Message.Contains('\n') || log.Message.Length > 100;
         bool hasCallerInfo = !string.IsNullOrEmpty(log.CallerInfo);
         bool isGrouped = count > 1;
 
-        Border logBorder = new Border()
+        Border logBorder = new()
         {
             BorderBrush = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
             BorderThickness = new Thickness(0, 0, 2, 2),
@@ -504,14 +929,9 @@ public partial class ConsoleWindow : EditorWindow
             Tag = log,
         };
 
-        StackPanel mainPanel = new StackPanel
-        {
-            Orientation = Orientation.Vertical,
-            Spacing = 2,
-        };
+        StackPanel mainPanel = new() { Orientation = Orientation.Vertical, Spacing = 2 };
 
-        // Header row
-        Grid headerGrid = new Grid
+        Grid headerGrid = new()
         {
             ColumnDefinitions =
             {
@@ -524,19 +944,12 @@ public partial class ConsoleWindow : EditorWindow
             },
         };
 
-        // Expand/collapse button (only visible for multi-line logs)
         Button? expandButton = null;
         if (isMultiLine)
         {
             expandButton = new Button
             {
-                Content = new MaterialIcon
-                {
-                    Kind = MaterialIconKind.ChevronRight,
-                    Width = 12,
-                    Height = 12,
-                    Foreground = Brushes.Gray,
-                },
+                Content = new MaterialIcon { Kind = MaterialIconKind.ChevronRight, Width = 12, Height = 12, Foreground = Brushes.Gray },
                 Background = Brushes.Transparent,
                 Padding = new Thickness(2),
                 Margin = new Thickness(0, 0, 4, 0),
@@ -551,7 +964,6 @@ public partial class ConsoleWindow : EditorWindow
 
         int columnOffset = isMultiLine ? 1 : 0;
 
-        // Timestamp
         headerGrid.Children.Add(new TextBlock
         {
             Text = $"[{log.Timestamp.TimeOfDay:hh':'mm':'ss'.'fff}]",
@@ -562,7 +974,6 @@ public partial class ConsoleWindow : EditorWindow
         });
         Grid.SetColumn(headerGrid.Children[^1], columnOffset);
 
-        // Log level
         headerGrid.Children.Add(new TextBlock
         {
             Text = $"[{log.Level}]",
@@ -573,10 +984,9 @@ public partial class ConsoleWindow : EditorWindow
         });
         Grid.SetColumn(headerGrid.Children[^1], columnOffset + 1);
 
-        // Count badge for collapsed logs (like Unity)
         if (isGrouped)
         {
-            Border countBadge = new Border
+            Border countBadge = new()
             {
                 Classes = { "count-badge" },
                 Background = EditorColor.FromRGB(68, 68, 68),
@@ -584,19 +994,12 @@ public partial class ConsoleWindow : EditorWindow
                 Padding = new Thickness(6, 1),
                 Margin = new Thickness(0, 0, 4, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Child = new TextBlock
-                {
-                    Text = count.ToString(),
-                    FontSize = 10,
-                    Foreground = Brushes.White,
-                    FontWeight = FontWeight.Medium,
-                }
+                Child = new TextBlock { Text = count.ToString(), FontSize = 10, Foreground = Brushes.White, FontWeight = FontWeight.Medium },
             };
             headerGrid.Children.Add(countBadge);
             Grid.SetColumn(headerGrid.Children[^1], columnOffset + 2);
         }
 
-        // Truncated message
         string displayMessage = log.Message;
         if (isMultiLine)
         {
@@ -607,7 +1010,7 @@ public partial class ConsoleWindow : EditorWindow
                 displayMessage = string.Concat(log.Message.AsSpan(0, 100), "...");
         }
 
-        SelectableTextBlock messageText = new SelectableTextBlock
+        headerGrid.Children.Add(new SelectableTextBlock
         {
             Text = displayMessage,
             FontSize = 11,
@@ -615,20 +1018,12 @@ public partial class ConsoleWindow : EditorWindow
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
             TextWrapping = TextWrapping.NoWrap,
-        };
-        headerGrid.Children.Add(messageText);
+        });
         Grid.SetColumn(headerGrid.Children[^1], columnOffset + 3);
 
-        // Delete button
-        Button deleteButton = new Button
+        Button deleteButton = new()
         {
-            Content = new MaterialIcon
-            {
-                Kind = MaterialIconKind.Delete,
-                Width = 12,
-                Height = 12,
-                Foreground = EditorColor.FromRGB(200, 200, 200),
-            },
+            Content = new MaterialIcon { Kind = MaterialIconKind.Delete, Width = 12, Height = 12, Foreground = EditorColor.FromRGB(200, 200, 200) },
             Background = EditorColor.FromRGB(10, 10, 10),
             Padding = new Thickness(2),
             Margin = new Thickness(4, 0, 0, 0),
@@ -639,63 +1034,51 @@ public partial class ConsoleWindow : EditorWindow
             Width = 24,
             Height = 24,
         };
-        deleteButton.Click += (e, s) => ClickDeleteButton(log);
+        deleteButton.Click += (_, _) => ClickDeleteButton(log);
         headerGrid.Children.Add(deleteButton);
         Grid.SetColumn(headerGrid.Children[^1], columnOffset + 4);
 
         mainPanel.Children.Add(headerGrid);
 
-        // Caller info as small gray text underneath
         if (hasCallerInfo)
         {
-            TextBlock callerBlock = new TextBlock
+            mainPanel.Children.Add(new TextBlock
             {
                 Text = $"└─ {log.CallerInfo}",
                 FontSize = 10,
                 Foreground = EditorColor.FromRGB(80, 80, 80),
                 Margin = new Thickness(isMultiLine ? 24 : 0, 0, 0, 2),
                 FontFamily = FontFamily.Parse("Consolas, Courier New, monospace"),
-            };
-            mainPanel.Children.Add(callerBlock);
+            });
         }
 
-        // Expanded content area for multi-line messages
         if (isMultiLine)
         {
-            Border expandedContent = new Border
+            Border expandedContent = new()
             {
                 Background = EditorColor.FromRGB(6, 6, 6),
                 BorderBrush = EditorColor.FromRGB(28, 28, 28),
                 BorderThickness = new Thickness(1, 1, 0, 0),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(8, 6),
-                Margin = new Thickness(isMultiLine ? 24 : 0, 4, 0, 0),
+                Margin = new Thickness(24, 4, 0, 0),
                 IsVisible = false,
+                Child = new SelectableTextBlock
+                {
+                    Text = log.Message,
+                    FontSize = 11,
+                    Foreground = Brushes.White,
+                    TextWrapping = TextWrapping.Wrap,
+                    FontFamily = FontFamily.Parse("Consolas, Courier New, monospace"),
+                }
             };
-
-            StackPanel expandedPanel = new StackPanel { Spacing = 4 };
-
-            // Full message
-            SelectableTextBlock fullMessage = new SelectableTextBlock
-            {
-                Text = log.Message,
-                FontSize = 11,
-                Foreground = Brushes.White,
-                TextWrapping = TextWrapping.Wrap,
-                FontFamily = FontFamily.Parse("Consolas, Courier New, monospace"),
-            };
-            expandedPanel.Children.Add(fullMessage);
-
-            expandedContent.Child = expandedPanel;
             mainPanel.Children.Add(expandedContent);
 
-            // Expand/collapse functionality
             bool isExpanded = false;
             expandButton!.Click += (_, _) =>
             {
                 isExpanded = !isExpanded;
                 expandedContent.IsVisible = isExpanded;
-
                 if (expandButton.Content is MaterialIcon icon)
                     icon.Kind = isExpanded ? MaterialIconKind.ChevronDown : MaterialIconKind.ChevronRight;
             };
@@ -706,13 +1089,160 @@ public partial class ConsoleWindow : EditorWindow
     }
 
     /// <summary>
-    /// Called when a log delete button is clicked.
+    /// Compact terminal-style diagnostic line. No timestamp (diagnostics
+    /// don't have one), file(line,col) prefix, colored left bar.
+    /// </summary>
+    private Border CreateTerminalDiagnosticLine(ScriptDiagnostic diag)
+    {
+        Color accent = diag.Severity switch
+        {
+            ScriptDiagnosticSeverity.Error => Color.FromRgb(240, 100, 100),
+            ScriptDiagnosticSeverity.Warning => Color.FromRgb(230, 200, 90),
+            _ => Color.FromRgb(150, 150, 150),
+        };
+
+        string levelTag = diag.Severity switch
+        {
+            ScriptDiagnosticSeverity.Error => "ERR",
+            ScriptDiagnosticSeverity.Warning => "WRN",
+            _ => "INF",
+        };
+
+        string location = string.IsNullOrEmpty(diag.FilePath)
+            ? string.Empty
+            : $"{Path.GetFileName(diag.FilePath)}({diag.Line},{diag.Column}): ";
+
+        Border wrapper = new()
+        {
+            Padding = new Thickness(8, 1, 6, 1),
+            Background = new SolidColorBrush(Color.FromArgb(24, accent.R, accent.G, accent.B)),
+            BorderBrush = new SolidColorBrush(accent),
+            BorderThickness = new Thickness(3, 0, 0, 0),
+            Child = new SelectableTextBlock
+            {
+                Text = $"[{levelTag}] {location}{diag.Message}",
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(accent),
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            },
+        };
+
+        AttachDiagnosticContextMenu(wrapper, diag);
+        return wrapper;
+    }
+
+    /// <summary>
+    /// Card-style diagnostic entry. Distinct from regular log cards: colored
+    /// left edge, prominent file/line header, message body, no delete button.
+    /// </summary>
+    private Border CreateVerboseDiagnosticControl(ScriptDiagnostic diag)
+    {
+        Color accent = diag.Severity switch
+        {
+            ScriptDiagnosticSeverity.Error => Color.FromRgb(220, 80, 80),
+            ScriptDiagnosticSeverity.Warning => Color.FromRgb(220, 180, 60),
+            _ => Color.FromRgb(150, 150, 150),
+        };
+        string levelLabel = diag.Severity switch
+        {
+            ScriptDiagnosticSeverity.Error => "error",
+            ScriptDiagnosticSeverity.Warning => "warning",
+            _ => "info",
+        };
+        Border card = new()
+        {
+            Background = EditorColor.FromRGB(20, 20, 20),
+            BorderBrush = new SolidColorBrush(accent),
+            BorderThickness = new Thickness(3, 0, 1, 1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8, 6),
+            Margin = new Thickness(6, 2, 6, 2),
+        };
+
+        StackPanel content = new() { Orientation = Orientation.Vertical, Spacing = 3 };
+        StackPanel header = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
+        header.Children.Add(new TextBlock
+        {
+            Text = levelLabel,
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+            FontSize = 11,
+            FontWeight = FontWeight.Bold,
+            Foreground = new SolidColorBrush(accent),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        if (!string.IsNullOrEmpty(diag.FilePath))
+        {
+            header.Children.Add(new TextBlock
+            {
+                Text = $"{Path.GetFileName(diag.FilePath)}({diag.Line},{diag.Column})",
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 11,
+                Foreground = EditorColor.FromRGB(160, 160, 160),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+
+        content.Children.Add(header);
+        content.Children.Add(new SelectableTextBlock
+        {
+            Text = diag.Message,
+            FontSize = 12,
+            Foreground = Brushes.White,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        card.Child = content;
+        AttachDiagnosticContextMenu(card, diag);
+        return card;
+    }
+
+    private void AttachDiagnosticContextMenu(Control target, ScriptDiagnostic diag)
+    {
+        ContextMenu menu = new()
+        {
+            Background = EditorColor.FromRGB(68, 68, 68),
+            BorderBrush = EditorColor.FromRGB(128, 128, 128),
+        };
+
+        MenuItem copyItem = new()
+        {
+            Header = "Copy",
+            Icon = new MaterialIcon { Kind = MaterialIconKind.ContentCopy, Width = 14, Height = 14 },
+            Foreground = Brushes.White,
+        };
+        copyItem.Click += async (_, _) =>
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null) return;
+            string location = string.IsNullOrEmpty(diag.FilePath)
+                ? string.Empty
+                : $"{diag.FilePath}({diag.Line},{diag.Column}): ";
+            string text = $"{location}{diag.Severity.ToString().ToLowerInvariant()}: {diag.Message}";
+            var data = new DataTransfer();
+            data.Add(DataTransferItem.CreateText(text));
+            await clipboard.SetDataAsync(data);
+        };
+        menu.Items.Add(copyItem);
+
+        // No delete item - diagnostics can't be removed manually. They
+        // disappear only when the next compile resolves them.
+        target.ContextMenu = menu;
+    }
+
+    #endregion
+    #region deleteButton
+
+    /// <summary>
+    /// Called when a log delete button is clicked. Only regular log entries
+    /// reach this method - diagnostics don't have delete buttons.
     /// </summary>
     private void ClickDeleteButton(LogEntry logEntry)
     {
         if (collapseEnabled)
         {
-            // Find and remove the group
             string key = GetCollapseKey(logEntry);
             if (groupedLogs.TryGetValue(key, out GroupedLogEntry? group))
             {
@@ -720,19 +1250,15 @@ public partial class ConsoleWindow : EditorWindow
                 groupedLogs.Remove(key);
             }
 
-            // Remove all matching logs from the debug list
-            List<LogEntry> logsToRemove = [.. Debug.Logs.Where(l => GetCollapseKey(l) == key)];
-            foreach (LogEntry log in logsToRemove) Debug.ClearLog(log);
+            List<LogEntry> toRemove = [.. Debug.Logs.Where(l => GetCollapseKey(l) == key)];
+            foreach (LogEntry log in toRemove) Debug.ClearLog(log);
         }
         else
         {
-            // Normal mode - remove single log
             Debug.ClearLog(logEntry);
-
-            // Find and remove the corresponding UI element
-            foreach (Control? child in logList.Children)
+            foreach (Control child in logList.Children.ToArray())
             {
-                if (child is Border border && border.Tag == logEntry)
+                if (child is Border border && ReferenceEquals(border.Tag, logEntry))
                 {
                     logList.Children.Remove(border);
                     break;
@@ -741,15 +1267,46 @@ public partial class ConsoleWindow : EditorWindow
         }
     }
 
-    /// <summary>
-    /// Gets the correct log level color.
-    /// </summary>
+    #endregion
+    #region helpers
+
     private static IBrush GetLogColor(LogLevel level) => level switch
     {
         LogLevel.Debug => Brushes.White,
         LogLevel.Info => Brushes.White,
         LogLevel.Warning => Brushes.Yellow,
         LogLevel.Error => Brushes.Red,
-        _ => Brushes.Green
+        _ => Brushes.Green,
     };
+
+    private static ComboBox BuildFilterDropdown()
+    {
+        static StackPanel MakeItem(MaterialIconKind icon, string label, IBrush? iconColor = null)
+        {
+            StackPanel panel = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
+            panel.Children.Add(new MaterialIcon { Kind = icon, Foreground = iconColor ?? Brushes.White });
+            panel.Children.Add(new TextBlock { Text = label });
+            return panel;
+        }
+
+        return new ComboBox
+        {
+            Items =
+            {
+                new ComboBoxItem { Content = MakeItem(MaterialIconKind.AllInclusive, "All") },
+                new ComboBoxItem { Content = MakeItem(MaterialIconKind.Info, "Info") },
+                new ComboBoxItem { Content = MakeItem(MaterialIconKind.DebugStepOver, "Debug") },
+                new ComboBoxItem { Content = MakeItem(MaterialIconKind.Warning, "Warning", EditorColor.FromRGB(200, 200, 0)) },
+                new ComboBoxItem { Content = MakeItem(MaterialIconKind.Error, "Error", EditorColor.FromRGB(200, 0, 0)) },
+            },
+            SelectedIndex = 0,
+            Foreground = Brushes.White,
+            Background = EditorColor.FromRGB(17, 17, 17),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+    }
+
+    #endregion
 }

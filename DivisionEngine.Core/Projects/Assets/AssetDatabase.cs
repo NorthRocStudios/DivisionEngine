@@ -169,7 +169,7 @@ namespace DivisionEngine.Projects.Assets
 
             if (haveInMemory)
             {
-                // In-memory copy is the source of truth once a project is open — never
+                // In-memory copy is the source of truth once a project is open - never
                 // clobber it with a possibly-stale read from disk.
                 folderMeta = existing!;
             }

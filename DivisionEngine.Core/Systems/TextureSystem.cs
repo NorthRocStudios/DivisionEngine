@@ -68,12 +68,24 @@ namespace DivisionEngine.Systems
         private static readonly Lock pendingLock = new();
 
         private static bool mustReloadTextures = false;
-        private static bool loadingTextures = false;
+        private static volatile bool loadingTextures = false;
+
+        // Snapshot of texture asset IDs the system last knew about. Any addition or
+        // removal of a texture asset triggers a reload; unrelated asset changes (scripts, materials, folders) do not
+        private static HashSet<string> knownTextureIds = [];
+        private static readonly Lock knownTextureLock = new();
 
         public override void Render()
         {
             if (mustReloadTextures && !loadingTextures)
             {
+                // Snapshot the current texture set before starting the reload. Any
+                // texture added or removed during the reload will be picked up by the next OnAssetsUpdated
+                HashSet<string> snapshot = [];
+                foreach (AssetMetadata meta in AssetDatabase.GetAssetsByType(AssetType.Texture))
+                    snapshot.Add(meta.ID);
+                lock (knownTextureLock) knownTextureIds = snapshot;
+
                 _ = LoadAllTexturesAsync();
                 mustReloadTextures = false;
             }
@@ -105,26 +117,59 @@ namespace DivisionEngine.Systems
         public override void AppStart()
         {
             loadingTextures = false;
-            mustReloadTextures = false;
-            AssetDatabase.AssetsUpdated += () => mustReloadTextures = true;
-            ProjectManager.ProjectLoaded += () => mustReloadTextures = true;
-            ProjectManager.ProjectClosed += () => mustReloadTextures = true;
+            AssetDatabase.AssetsUpdated += OnAssetsUpdated;
+            ProjectManager.ProjectLoaded += OnProjectLoaded;
+            ProjectManager.ProjectClosed += OnProjectClosed;
         }
 
-        public override void Awake() => mustReloadTextures = true;
+        public override void Unload()
+        {
+            AssetDatabase.AssetsUpdated -= OnAssetsUpdated;
+            ProjectManager.ProjectLoaded -= OnProjectLoaded;
+            ProjectManager.ProjectClosed -= OnProjectClosed;
+        }
+
+        // Awake intentionally does NOT set mustReloadTextures. ProjectLoaded already covers the project-load path,
+        // and clearing the flag here would race against an in-flight reload started from an earlier Render tick
+        public override void Awake() { }
+
+        private static void OnAssetsUpdated()
+        {
+            HashSet<string> currentIds = [];
+            foreach (AssetMetadata meta in AssetDatabase.GetAssetsByType(AssetType.Texture))
+                currentIds.Add(meta.ID);
+
+            lock (knownTextureLock)
+            {
+                if (!currentIds.SetEquals(knownTextureIds))
+                    mustReloadTextures = true;
+            }
+        }
+
+        private static void OnProjectLoaded()
+        {
+            lock (knownTextureLock) knownTextureIds.Clear();
+            mustReloadTextures = true;
+        }
+
+        private static void OnProjectClosed()
+        {
+            lock (knownTextureLock) knownTextureIds.Clear();
+            mustReloadTextures = true;
+        }
 
         /// <summary>
         /// Flags the entire texture buffer for a full rebuild (every texture re-decoded
-        /// from disk). Use for project load/close or when assets are added/removed —
+        /// from disk). Use for project load/close or when assets are added/removed -
         /// which change the whole set of textures anyway (AssetDatabase.AssetsUpdated
         /// already triggers this automatically). For editing a single texture's import
-        /// settings, use <see cref="MarkTextureDirty"/> instead — it's far cheaper since
+        /// settings, use <see cref="MarkTextureDirty"/> instead - it's far cheaper since
         /// it leaves every other texture's cached data untouched.
         /// </summary>
         public static void MarkDirty() => mustReloadTextures = true;
 
         /// <summary>
-        /// Flags a single texture for reimport — reloads and re-mips just this one asset
+        /// Flags a single texture for reimport - reloads and re-mips just this one asset
         /// from disk (respecting its current import settings), then recombines the GPU
         /// buffer from cache. Every other texture's cached mip data is reused as-is, so
         /// this stays cheap no matter how many textures are in the project. Call this
@@ -137,7 +182,7 @@ namespace DivisionEngine.Systems
         }
 
         /// <summary>
-        /// Removes a single texture from the GPU buffer without attempting to reload it —
+        /// Removes a single texture from the GPU buffer without attempting to reload it -
         /// use this after explicitly unloading an asset (e.g. the editor's "Unload Asset"
         /// button), where the intent is for it to no longer occupy GPU memory at all.
         /// </summary>
@@ -154,7 +199,7 @@ namespace DivisionEngine.Systems
         }
 
         /// <summary>
-        /// Loads all textures from the asset database (full rebuild — every texture is
+        /// Loads all textures from the asset database (full rebuild - every texture is
         /// re-decoded and re-mipped from disk). Use MarkTextureDirty for single-texture
         /// updates instead of calling this directly wherever possible.
         /// </summary>
@@ -220,7 +265,7 @@ namespace DivisionEngine.Systems
         /// <summary>
         /// Reimports a specific set of textures (reload from disk, re-mip per current
         /// import settings) and recombines the flat GPU buffer from cache afterward.
-        /// Every texture NOT in <paramref name="assetIds"/> is left completely untouched —
+        /// Every texture NOT in <paramref name="assetIds"/> is left completely untouched -
         /// its cached mip chain is just re-copied into the new buffer as-is.
         /// </summary>
         private static async Task ReimportTexturesAsync(List<string> assetIds)
@@ -240,8 +285,7 @@ namespace DivisionEngine.Systems
                         }
                         else
                         {
-                            // Asset failed to load (deleted, decode error, etc.) — drop it
-                            // from the buffer rather than serve stale pixel data for it.
+                            // Asset failed to load (deleted, decode error, etc.)
                             textureMipCache.Remove(id);
                             textureMetaCache.Remove(id);
                             textureOrder.Remove(id);
@@ -261,7 +305,7 @@ namespace DivisionEngine.Systems
         /// <summary>
         /// Loads (or reloads) a single texture asset from disk, builds its mip chain per
         /// its current import settings, and stores the result in the per-texture cache.
-        /// Does not touch the flattened GPU buffer — callers must invoke RebuildFlatBuffer
+        /// Does not touch the flattened GPU buffer - callers must invoke RebuildFlatBuffer
         /// afterward (LoadAllTexturesAsync and ReimportTexturesAsync both do this).
         /// </summary>
         private static async Task<bool> LoadAndCacheTextureAsync(string assetId, bool reportProgress, int totalCount)
@@ -298,7 +342,7 @@ namespace DivisionEngine.Systems
         /// <summary>
         /// Flattens the per-texture mip-chain cache into the single GPU buffer +
         /// metadata array, in textureOrder. This is pure array concatenation and offset
-        /// bookkeeping — no image decoding or mip generation happens here, which is why
+        /// bookkeeping - no image decoding or mip generation happens here, which is why
         /// it's cheap enough to call after reimporting just one texture.
         /// </summary>
         private static void RebuildFlatBuffer()

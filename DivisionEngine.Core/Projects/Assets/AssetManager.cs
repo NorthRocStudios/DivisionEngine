@@ -28,7 +28,7 @@ namespace DivisionEngine.Projects.Assets
 
         /// <summary>
         /// Fired whenever an asset's load state changes (Unloaded/Loading/Loaded).
-        /// May be invoked from a background thread — subscribers must marshal to UI thread.
+        /// May be invoked from a background thread - subscribers must marshal to UI thread.
         /// </summary>
         public event Action<string, AssetLoadState>? AssetLoadStateChanged;
 
@@ -68,7 +68,7 @@ namespace DivisionEngine.Projects.Assets
 
             // A concurrent call (e.g. two components referencing the same asset,
             // or a watcher-triggered reload racing a manual load) may already be
-            // loading this ID — piggyback on it instead of loading it twice.
+            // loading this ID - piggyback on it instead of loading it twice.
             Task? existingLoad;
             lock (stateLock) inFlightLoads.TryGetValue(id, out existingLoad);
             if (existingLoad != null)
@@ -180,7 +180,7 @@ namespace DivisionEngine.Projects.Assets
 
         /// <summary>
         /// Forcibly discards a cached asset regardless of reference count, so the next
-        /// LoadAssetAsync call reloads it fresh from disk — re-reading any metadata
+        /// LoadAssetAsync call reloads it fresh from disk - re-reading any metadata
         /// (e.g. import settings) that changed since it was originally cached.
         /// </summary>
         public void InvalidateAsset(string id)

@@ -122,7 +122,7 @@ public partial class AssetsWindow : EditorWindow
             if (CurrentView == ViewState.Tiles) Dispatcher.UIThread.Post(UpdateTileColumns);
         };
 
-        // Table (list) panel — TableView handles its own virtualized scrolling
+        // Table (list) panel - TableView handles its own virtualized scrolling
         tableView = new TableView
         {
             IsVisible = false,
@@ -162,8 +162,19 @@ public partial class AssetsWindow : EditorWindow
             IsVisible = false,
             Children =
             {
-                new MaterialIcon { Kind = MaterialIconKind.FolderOpenOutline, Width = 64, Height = 64, Foreground = Brushes.Gray },
-                (emptyStateText = new TextBlock { Foreground = Brushes.Gray, FontStyle = FontStyle.Italic, HorizontalAlignment = HorizontalAlignment.Center }),
+                new MaterialIcon 
+                { 
+                    Kind = MaterialIconKind.FolderOpenOutline, 
+                    Width = 64, 
+                    Height = 64, 
+                    Foreground = Brushes.Gray
+                },
+                (emptyStateText = new TextBlock 
+                { 
+                    Foreground = Brushes.Gray, 
+                    FontStyle = FontStyle.Italic, 
+                    HorizontalAlignment = HorizontalAlignment.Center
+                }),
             }
         };
 
@@ -200,7 +211,8 @@ public partial class AssetsWindow : EditorWindow
         };
         upDirButton = new Button
         {
-            Content = new MaterialIcon { Kind = MaterialIconKind.FolderUpload, Width = 18, Height = 18, Foreground = EditorColor.FromRGB(80, 80, 80) },
+            Content = new MaterialIcon { Kind = MaterialIconKind.FolderUpload, Width = 18, Height = 18, 
+                Foreground = EditorColor.FromRGB(80, 80, 80) },
             Background = EditorColor.FromRGB(12, 12, 12),
             Margin = new Thickness(8, 2, 2, 2),
             Padding = new Thickness(3, 1, 3, 1),
@@ -298,8 +310,8 @@ public partial class AssetsWindow : EditorWindow
         currentPath = string.Empty;
         currentWindows.Add(this);
 
-        // ProjectLoaded may have already fired before this window existed —
-        // subscribe now instead of waiting for an event that already happened.
+        // ProjectLoaded may have already fired before this window existed -
+        // subscribe now instead of waiting for an event that already happened
         if (ProjectManager.IsCurrentLoaded)
         {
             SubscribeToFolderEventsIfNeeded();
@@ -307,7 +319,6 @@ public partial class AssetsWindow : EditorWindow
         }
 
         Selection.OnSelectionChanged += OnGlobalSelectionChanged; // subscribe to selection
-
         Dispatcher.UIThread.Post(() => Setup(GetDefaultAssetsPath()));
     }
 
@@ -325,9 +336,9 @@ public partial class AssetsWindow : EditorWindow
         AssetManager? current = ProjectManager.AssetManager;
         if (ReferenceEquals(subscribedAssetManager, current)) return;
 
-        if (subscribedAssetManager != null) subscribedAssetManager.AssetLoadStateChanged -= OnAssetLoadStateChanged;
+        subscribedAssetManager?.AssetLoadStateChanged -= OnAssetLoadStateChanged;
         subscribedAssetManager = current;
-        if (subscribedAssetManager != null) subscribedAssetManager.AssetLoadStateChanged += OnAssetLoadStateChanged;
+        subscribedAssetManager?.AssetLoadStateChanged += OnAssetLoadStateChanged;
     }
 
     private void UnsubscribeAssetManager()
@@ -363,7 +374,7 @@ public partial class AssetsWindow : EditorWindow
     {
         try
         {
-            using var stream = File.OpenRead(filePath);
+            using FileStream stream = File.OpenRead(filePath);
             return await Task.Run(() => new Bitmap(stream));
         }
         catch (Exception ex)
@@ -385,33 +396,28 @@ public partial class AssetsWindow : EditorWindow
         }));
         menu.Items.Add(new Separator());
         menu.Items.Add(EditorUI.CreateContextMenuItem("New Folder", MaterialIconKind.FolderPlus, () => CreateNewAsset(true)));
-        menu.Items.Add(EditorUI.CreateContextMenuItem("New Component", MaterialIconKind.CodeBraces, () => CreateNewAsset(false, "cs",
-            "using DivisionEngine;\n" +
-            "using DivisionEngine.Components;\n" +
-            "using DivisionEngine.Components.FieldAttributes;\n" +
-            "using DivisionEngine.MathUtilities;\n\n" +
-            "public class NewComponent : IComponent\n" +
-            "{\n" +
-            "   [Range(0f, 1f)] private float demoValue;\n\n" +
-            "   public NewComponent()\n" +
-            "   {\n" +
-            "       demoValue = 1f;\n" +
-            "   }\n\n" +
-            "   public IComponent Clone() => new NewComponent\n" +
-            "   {\n" +
-            "       demoValue = demoValue,\n" +
-            "   };\n" +
-            "}\n")));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(EditorUI.CreateContextMenuItem("New Component", MaterialIconKind.CodeBraces, () =>
+            CreateNewAsset(false, "cs", ComponentTemplate, "NewComponent")));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("New System", MaterialIconKind.Cog, () =>
+            CreateNewAsset(false, "cs", SystemTemplate, "NewSystem")));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("New Singleton", MaterialIconKind.Numeric1Circle, () =>
+            CreateNewAsset(false, "cs", SingletonTemplate, "NewSingleton")));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("New Script", MaterialIconKind.FileCode, () =>
+            CreateNewAsset(false, "cs", BlankTemplate, "NewScript")));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("New Compute Shader", MaterialIconKind.Chip, () =>
+            CreateNewAsset(false, "cs", ComputeShaderTemplate, "NewShader")));
+        menu.Items.Add(new Separator());
         menu.Items.Add(EditorUI.CreateContextMenuItem("New Text File", MaterialIconKind.FileDocument, () => CreateNewAsset(false, "txt", "")));
         menu.Items.Add(EditorUI.CreateContextMenuItem("New JSON File", MaterialIconKind.CodeJson, () => CreateNewAsset(false, "json", "{\n    \n}")));
 
-        // Shared between tile mode and table mode — a ContextMenu isn't part of the
+        // Shared between tile mode and table mode - a ContextMenu isn't part of the
         // visual tree until opened, so one instance can serve both owner controls.
         scrollViewer.ContextMenu = menu;
         tableView.ContextMenu = menu;
     }
 
-    private void CreateNewAsset(bool isFolder, string extension = "", string defaultContent = "")
+    private void CreateNewAsset(bool isFolder, string extension = "", string defaultContent = "", string? defaultName = null)
     {
         Border tempItem = new Border
         {
@@ -431,7 +437,9 @@ public partial class AssetsWindow : EditorWindow
 
         TextBox nameBox = new()
         {
-            Text = isFolder ? "New Folder" : $"New{extension.ToUpper()}File",
+            // Use the caller-supplied default name when provided (e.g. "NewSystem"
+            // for the system template) instead of the generic "NewCSFile".
+            Text = isFolder ? "New Folder" : (defaultName ?? $"New{extension.ToUpper()}File"),
             FontSize = 10,
             TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -479,10 +487,7 @@ public partial class AssetsWindow : EditorWindow
     {
         try
         {
-            if (isFolder)
-            {
-                Directory.CreateDirectory(Path.Combine(currentPath, name));
-            }
+            if (isFolder) Directory.CreateDirectory(Path.Combine(currentPath, name));
             else
             {
                 string fileName = extension == "cs" ? name : $"{name}.{extension}";
@@ -496,6 +501,73 @@ public partial class AssetsWindow : EditorWindow
             Debug.Error($"Failed to create {(isFolder ? "folder" : "file")}: {name}", ex);
         }
     }
+
+    #endregion
+    #region scriptTemplates
+
+    private const string ComponentTemplate =
+        "using DivisionEngine;\n" +
+        "using DivisionEngine.Components;\n" +
+        "using DivisionEngine.Components.FieldAttributes;\n" +
+        "using DivisionEngine.MathUtilities;\n\n" +
+        "public class NewComponent : IComponent\n" +
+        "{\n" +
+        "    [Range(0f, 1f)] public float demoValue;\n\n" +
+        "    public NewComponent()\n" +
+        "    {\n" +
+        "        demoValue = 1f;\n" +
+        "    }\n\n" +
+        "    public IComponent Clone() => new NewComponent\n" +
+        "    {\n" +
+        "        demoValue = demoValue,\n" +
+        "    };\n" +
+        "}\n";
+
+    private const string SystemTemplate =
+        "using DivisionEngine;\n\n" +
+        "public class NewSystem : SystemBase\n" +
+        "{\n" +
+        "    public override void Update()\n" +
+        "    {\n" +
+        "        // Called once per frame.\n" +
+        "    }\n" +
+        "}\n";
+
+    private const string SingletonTemplate =
+        "using DivisionEngine;\n" +
+        "using DivisionEngine.Components;\n\n" +
+        "/// <summary>\n" +
+        "/// A globally-accessible component. Only one instance should exist per world.\n" +
+        "/// </summary>\n" +
+        "public class NewSingleton : IComponent\n" +
+        "{\n" +
+        "    public static NewSingleton? Instance { get; private set; }\n\n" +
+        "    public NewSingleton()\n" +
+        "    {\n" +
+        "        Instance = this;\n" +
+        "    }\n\n" +
+        "    public IComponent Clone() => new NewSingleton();\n" +
+        "}\n";
+
+    private const string BlankTemplate =
+        "using DivisionEngine;\n" +
+        "using DivisionEngine.Components;\n" +
+        "using DivisionEngine.Components.FieldAttributes;\n" +
+        "using DivisionEngine.MathUtilities;\n\n" +
+        "// Add your code here.\n";
+
+    private const string ComputeShaderTemplate =
+        "using ComputeSharp;\n\n" +
+        "[ThreadGroupSize(DefaultThreadGroupSizes.XY)]\n" +
+        "[GeneratedComputeShaderDescriptor]\n" +
+        "public readonly partial struct NewShader : IComputeShader\n" +
+        "{\n" +
+        "    public readonly ReadWriteBuffer<float> Buffer;\n\n" +
+        "    public void Execute()\n" +
+        "    {\n" +
+        "        Buffer[ThreadIds.X] = ThreadIds.X;\n" +
+        "    }\n" +
+        "}\n";
 
     #endregion
     #region navigation
@@ -698,15 +770,15 @@ public partial class AssetsWindow : EditorWindow
     private void OnGlobalSelectionChanged(object? selection)
     {
         if (selection is string assetId && AssetDatabase.GetAssetMetadataByID(assetId) != null)
-            SelectItem(assetId, true); // Asset selected from elsewhere
+            SelectItem(assetId); // Asset selected from elsewhere
         else ClearSelection();
     }
 
-    private void SelectItem(string path, bool isAsset = false)
+    private void SelectItem(string path)
     {
         selectedItemPath = path;
         UpdateTileHighlights();
-        UpdateListSelection(path, isAsset);
+        UpdateListSelection(path);
     }
 
     private void ClearSelection()
@@ -722,7 +794,7 @@ public partial class AssetsWindow : EditorWindow
         foreach (var kv in tileIdentifiers) UpdateTileBackground(kv.Key);
     }
 
-    private void UpdateListSelection(string identifier, bool isAsset)
+    private void UpdateListSelection(string identifier)
     {
         if (rowItemsByIdentifier.TryGetValue(identifier, out AssetRowItem? row))
         {
@@ -741,19 +813,27 @@ public partial class AssetsWindow : EditorWindow
 
     private Border BuildTile(Func<double, MaterialIcon> iconFactory, string name, string? subtitle,
         Action onTap, Action onDoubleTap, ContextMenu contextMenu,
-        string? tintAssetId = null, string? identifier = null, Func<Task<Bitmap?>>? thumbnailLoader = null)
+        string? tintAssetId = null, string? identifier = null,
+        Func<Task<Bitmap?>>? thumbnailLoader = null,
+        string? badgeText = null, IBrush? badgeBrush = null,
+        Color? accentColor = null)
     {
         Border border = CreateTileBorder();
 
+        // Accent the border for scripts
+        if (accentColor.HasValue)
+        {
+            border.BorderBrush = new SolidColorBrush(accentColor.Value);
+            border.BorderThickness = new Thickness(2, 2, 2, 2);
+        }
+
         // Apply tint (sets Tag and Background)
-        if (tintAssetId != null)
-            ApplyAssetTint(tintAssetId, brush => SetTileBaseBackground(border, brush));
+        if (tintAssetId != null) ApplyAssetTint(tintAssetId, brush => SetTileBaseBackground(border, brush));
 
         string id = identifier ?? tintAssetId ?? Guid.NewGuid().ToString();
         tileIdentifiers[border] = id;
         tileHovered[border] = false;
 
-        // Hover events
         border.PointerEntered += (_, _) =>
         {
             tileHovered[border] = true;
@@ -765,7 +845,7 @@ public partial class AssetsWindow : EditorWindow
             UpdateTileBackground(border);
         };
 
-        // Content
+        // Base content - icon, name, subtitle.
         string display = name.Length > 12 ? string.Concat(name.AsSpan(0, 10), "..") : name;
         MaterialIcon icon = iconFactory(48);
         icon.Margin = new Thickness(0, 0, 0, 5);
@@ -774,7 +854,8 @@ public partial class AssetsWindow : EditorWindow
         {
             Orientation = Orientation.Vertical,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 8, 6, 8), // replaces the border's old Padding
         };
         stack.Children.Add(icon);
         stack.Children.Add(new TextBlock
@@ -795,7 +876,31 @@ public partial class AssetsWindow : EditorWindow
             HorizontalAlignment = HorizontalAlignment.Center
         });
 
-        border.Child = stack;
+        Grid contentGrid = new();
+        contentGrid.Children.Add(stack);
+
+        if (!string.IsNullOrEmpty(badgeText))
+        {
+            Border badge = new()
+            {
+                Background = badgeBrush ?? EditorColor.FromRGB(60, 60, 60),
+                // Top-right rounded to match the border's corner; bottom-left rounded for a "ribbon tab" silhouette
+                CornerRadius = new CornerRadius(0, 3, 0, 5),
+                Padding = new Thickness(5, 1, 6, 1),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Child = new TextBlock
+                {
+                    Text = badgeText,
+                    FontSize = 7,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = Brushes.White,
+                },
+            };
+            contentGrid.Children.Add(badge);
+        }
+
+        border.Child = contentGrid;
         border.Tapped += (_, _) => onTap();
         border.DoubleTapped += (_, _) => onDoubleTap();
         border.ContextMenu = contextMenu;
@@ -841,13 +946,9 @@ public partial class AssetsWindow : EditorWindow
         bool isHovered = tileHovered.TryGetValue(border, out bool hover) && hover;
 
         IBrush background;
-        if (isSelected)
-            background = EditorColor.FromRGB(60, 90, 120); // selection color
-        else if (isHovered)
-            background = TintHover;
-        else
-            background = (IBrush)border.Tag!; // base background (tint or default)
-
+        if (isSelected) background = EditorColor.FromRGB(60, 90, 120); // selection color
+        else if (isHovered) background = TintHover;
+        else background = (IBrush)border.Tag!; // base background (tint or default)
         border.Background = background;
     }
 
@@ -863,7 +964,7 @@ public partial class AssetsWindow : EditorWindow
                 Foreground = EditorColor.FromColor(ColorPalette.Mint),
             },
             folder.Name, null,
-            onTap: () => SelectItem(folder.FullName, false),
+            onTap: () => SelectItem(folder.FullName),
             () => Dispatcher.UIThread.Post(() => Setup(folder.FullName)),
             BuildFolderContextMenu(folder, () => ShowInPlaceRename(border, folder.Name, folder.FullName, true)));
         assetsTileGrid.Children.Add(border);
@@ -875,9 +976,10 @@ public partial class AssetsWindow : EditorWindow
         border = BuildTile(
             size => CreateFileIcon(file.Extension, size),
             Path.GetFileNameWithoutExtension(file.Name), file.Extension.ToUpperInvariant(),
-            onTap: () => SelectItem(file.FullName, false),
+            onTap: () => SelectItem(file.FullName),
             () => EditorUI.OpenFile(file),
-            BuildFileContextMenu(file, () => ShowInPlaceRename(border, Path.GetFileNameWithoutExtension(file.Name), file.FullName, false, file.Extension)));
+            BuildFileContextMenu(file, () => 
+            ShowInPlaceRename(border, Path.GetFileNameWithoutExtension(file.Name), file.FullName, false, file.Extension)));
         assetsTileGrid.Children.Add(border);
     }
 
@@ -889,6 +991,30 @@ public partial class AssetsWindow : EditorWindow
         if (asset.Type == AssetType.Texture && File.Exists(fullPath))
             thumbnailLoader = () => LoadTexturePreviewAsync(fullPath);
 
+        // Script assets get an accent border + corner badge showing their target
+        string? badgeText = null;
+        IBrush? badgeBrush = null;
+        Color? accentColor = null;
+        if (asset.Type == AssetType.Script)
+        {
+            bool isEditorScript = asset.RelativePath
+                .Replace('/', '\\')
+                .Contains(@"\Editor\", StringComparison.OrdinalIgnoreCase);
+
+            if (isEditorScript)
+            {
+                accentColor = Color.FromRgb(180, 120, 50);   // warm amber
+                badgeBrush = new SolidColorBrush(Color.FromRgb(140, 90, 40));
+                badgeText = "EDITOR";
+            }
+            else
+            {
+                accentColor = Color.FromRgb(60, 120, 190);   // cool blue
+                badgeBrush = new SolidColorBrush(Color.FromRgb(40, 80, 130));
+                badgeText = "PLAYER";
+            }
+        }
+
         Border border = null!;
         border = BuildTile(
             size => EditorUI.CreateAssetTypeIcon(asset.Type, size),
@@ -896,13 +1022,29 @@ public partial class AssetsWindow : EditorWindow
             onTap: () =>
             {
                 Selection.SelectAsset(asset.ID);
-                SelectItem(asset.ID, true);
+                SelectItem(asset.ID);
             },
-            () => EditorUI.OpenAsset(asset),
-            BuildAssetContextMenu(asset, () => ShowInPlaceRename(border, Path.GetFileNameWithoutExtension(asset.FileName), fullPath, false, Path.GetExtension(asset.FileName))),
+            () => OpenAssetDoubleTap(asset),
+            BuildAssetContextMenu(asset, () => ShowInPlaceRename(border,
+                Path.GetFileNameWithoutExtension(asset.FileName), fullPath, false,
+                Path.GetExtension(asset.FileName))),
             asset.ID,
-            thumbnailLoader: thumbnailLoader);
+            thumbnailLoader: thumbnailLoader,
+            badgeText: badgeText,
+            badgeBrush: badgeBrush,
+            accentColor: accentColor);
         assetsTileGrid.Children.Add(border);
+    }
+
+    private static void OpenAssetDoubleTap(AssetMetadata asset)
+    {
+        if (asset.Type == AssetType.Script && ProjectManager.IsCurrentLoaded)
+        {
+            string fullPath = Path.Combine(ProjectManager.CurrentProjectPath!, asset.RelativePath);
+            VisualStudioLauncher.OpenSolution(ProjectManager.CurrentProjectPath!, fullPath);
+            return;
+        }
+        EditorUI.OpenAsset(asset);
     }
 
     private static Border CreateTileBorder(double width = 80, double height = 85) => new()
@@ -912,11 +1054,11 @@ public partial class AssetsWindow : EditorWindow
         BorderThickness = new Thickness(0, 0, 1, 1),
         BorderBrush = EditorColor.FromRGB(10, 10, 10),
         Background = TileDefaultBg,
-        Tag = TileDefaultBg, // initialize base background
+        Tag = TileDefaultBg,
         CornerRadius = new CornerRadius(4),
         Margin = new Thickness(5),
-        Padding = new Thickness(5),
         Cursor = new Cursor(StandardCursorType.Hand),
+        ClipToBounds = true,
     };
 
     private static void SetTileBaseBackground(Border border, IBrush background)
@@ -969,6 +1111,27 @@ public partial class AssetsWindow : EditorWindow
 
     private void AddAssetRow(AssetMetadata asset)
     {
+        // Script badges
+        string badgeText = string.Empty;
+        IBrush? badgeBrush = null;
+        if (asset.Type == AssetType.Script)
+        {
+            bool isEditorScript = asset.RelativePath
+                .Replace('/', '\\')
+                .Contains(@"\Editor\", StringComparison.OrdinalIgnoreCase);
+
+            if (isEditorScript)
+            {
+                badgeText = "E";
+                badgeBrush = new SolidColorBrush(Color.FromRgb(140, 90, 40));
+            }
+            else
+            {
+                badgeText = "P";
+                badgeBrush = new SolidColorBrush(Color.FromRgb(40, 80, 130));
+            }
+        }
+
         AssetRowItem row = new()
         {
             Name = Path.GetFileNameWithoutExtension(asset.FileName),
@@ -976,8 +1139,11 @@ public partial class AssetsWindow : EditorWindow
             IsFolder = false,
             FullPath = Path.Combine(ProjectManager.CurrentProjectPath ?? "", asset.RelativePath),
             AssetId = asset.ID,
+            AssetMetadata = asset,
             TypeLabel = GetAssetTypeDisplayName(asset.Type),
             SizeLabel = EditorUI.FormatFileSize(asset.FileSize),
+            BadgeText = badgeText,
+            BadgeBrush = badgeBrush,
         };
         row.RowContextMenu = BuildAssetContextMenu(asset, () => row.IsEditing = true);
         rowItems.Add(row);
@@ -1008,9 +1174,26 @@ public partial class AssetsWindow : EditorWindow
             Converter = InvertBoolConverter.Instance,
         });
 
-        // Two-way bound to Name so the container survives virtualization/recycling correctly.
-        // If the user cancels, Name may hold the typed text until the next reload — harmless
-        // since it's display-only field and gets refreshed from disk on the next folder load.
+        // Badge for scripts - small "P" / "E" tag next to the icon
+        Border? badge = null;
+        if (!string.IsNullOrEmpty(item.BadgeText))
+        {
+            badge = new Border
+            {
+                Background = item.BadgeBrush ?? EditorColor.FromRGB(60, 60, 60),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(3, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = item.BadgeText,
+                    FontSize = 9,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = Brushes.White,
+                },
+            };
+        }
+
         TextBox editBox = new()
         {
             FontSize = 13,
@@ -1032,13 +1215,17 @@ public partial class AssetsWindow : EditorWindow
                 Dispatcher.UIThread.Post(() => { editBox.Focus(); editBox.SelectAll(); });
         };
 
-        return new StackPanel
+        StackPanel panel = new()
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             Margin = new Thickness(6, 2, 2, 2),
-            Children = { icon, displayText, editBox },
+            Children = { icon },
         };
+        if (badge != null) panel.Children.Add(badge);
+        panel.Children.Add(displayText);
+        panel.Children.Add(editBox);
+        return panel;
     }
 
     private void TableView_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1047,22 +1234,21 @@ public partial class AssetsWindow : EditorWindow
         if (item.AssetId != null)
         {
             Selection.SelectAsset(item.AssetId);
-            SelectItem(item.AssetId, true);
+            SelectItem(item.AssetId);
         }
-        else if (item.IsFolder)
-        {
-            SelectItem(item.FullPath, false);
-        }
-        else // file
-        {
-            SelectItem(item.FullPath, false);
-        }
+        else if (item.IsFolder) SelectItem(item.FullPath);
+        else SelectItem(item.FullPath);
     }
 
     private void TableView_DoubleTapped(object? sender, TappedEventArgs e)
     {
         if (tableView.SelectedItem is not AssetRowItem item || item.IsEditing) return;
         if (item.IsFolder) Dispatcher.UIThread.Post(() => Setup(item.FullPath));
+        else if (item.AssetMetadata?.Type == AssetType.Script && ProjectManager.IsCurrentLoaded)
+        {
+            string fullPath = Path.Combine(ProjectManager.CurrentProjectPath!, item.AssetMetadata.RelativePath);
+            VisualStudioLauncher.OpenSolution(ProjectManager.CurrentProjectPath!, fullPath);
+        }
         else EditorUI.OpenFile(new FileInfo(item.FullPath));
     }
 
@@ -1078,7 +1264,8 @@ public partial class AssetsWindow : EditorWindow
     private static ContextMenu BuildFolderContextMenu(DirectoryInfo folder, Action requestRename)
     {
         ContextMenu menu = CreateStyledContextMenu();
-        menu.Items.Add(EditorUI.CreateContextMenuItem("Open", MaterialIconKind.FolderOpen, () => Process.Start("explorer.exe", folder.FullName)));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("Open", MaterialIconKind.FolderOpen, 
+            () => Process.Start("explorer.exe", folder.FullName)));
         menu.Items.Add(EditorUI.CreateContextMenuItem("Rename", MaterialIconKind.Pencil, requestRename));
         menu.Items.Add(new Separator());
         menu.Items.Add(EditorUI.CreateContextMenuItem("Delete", MaterialIconKind.Delete, async () =>
@@ -1093,9 +1280,11 @@ public partial class AssetsWindow : EditorWindow
     private ContextMenu BuildFileContextMenu(FileInfo file, Action requestRename)
     {
         ContextMenu menu = CreateStyledContextMenu();
-        menu.Items.Add(EditorUI.CreateContextMenuItem("Open", MaterialIconKind.FileDocument, () => EditorUI.OpenFile(file)));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("Open", MaterialIconKind.FileDocument, 
+            () => EditorUI.OpenFile(file)));
         menu.Items.Add(EditorUI.CreateContextMenuItem("Rename", MaterialIconKind.Pencil, requestRename));
-        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy Path", MaterialIconKind.ContentCopy, () => CopyToClipboard(file.FullName)));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy Path", MaterialIconKind.ContentCopy, 
+            () => CopyToClipboard(file.FullName)));
         menu.Items.Add(new Separator());
         menu.Items.Add(EditorUI.CreateContextMenuItem("Delete", MaterialIconKind.Delete, async () =>
         {
@@ -1119,8 +1308,10 @@ public partial class AssetsWindow : EditorWindow
             string? dir = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) Process.Start("explorer.exe", dir);
         }));
-        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy GUID", MaterialIconKind.Identifier, () => CopyToClipboard(asset.ID)));
-        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy Path", MaterialIconKind.ContentCopy, () => CopyToClipboard(asset.RelativePath)));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy GUID", MaterialIconKind.Identifier, 
+            () => CopyToClipboard(asset.ID)));
+        menu.Items.Add(EditorUI.CreateContextMenuItem("Copy Path", MaterialIconKind.ContentCopy, 
+            () => CopyToClipboard(asset.RelativePath)));
         menu.Items.Add(new Separator());
         menu.Items.Add(EditorUI.CreateContextMenuItem("Rename", MaterialIconKind.Pencil, () =>
         {
@@ -1401,6 +1592,7 @@ public partial class AssetsWindow : EditorWindow
         public required bool IsFolder { get; init; }
         public required string FullPath { get; init; }
         public string? AssetId { get; init; }
+        public AssetMetadata? AssetMetadata { get; init; }
         public ContextMenu? RowContextMenu { get; set; }
 
         private string typeLabel = string.Empty;
@@ -1411,6 +1603,17 @@ public partial class AssetsWindow : EditorWindow
 
         private IBrush rowBackground = TileDefaultBg;
         public IBrush RowBackground { get => rowBackground; set => SetField(ref rowBackground, value); }
+
+        /// <summary>
+        /// Short badge text shown next to the icon in table view (e.g. "P" or "E").
+        /// Empty string for non-script assets.
+        /// </summary>
+        public string BadgeText { get; init; } = string.Empty;
+
+        /// <summary>
+        /// Accent color for the badge background. Ignored if BadgeText is empty.
+        /// </summary>
+        public IBrush? BadgeBrush { get; init; }
 
         private bool isEditing;
         public bool IsEditing { get => isEditing; set => SetField(ref isEditing, value); }

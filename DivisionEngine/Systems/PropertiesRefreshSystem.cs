@@ -62,11 +62,10 @@ namespace DivisionEngine.Editor.Systems
         /// </summary>
         /// <param name="entityId">Entity to update properties for</param>
         /// <param name="componentType">Component type to update properties for</param>
-        public static void OnFieldChanged(uint entityId, string componentType)
+        public static void OnFieldChanged(uint entityId, string? componentType)
         {
-            if (entityId != lastSelectedEntity) return;
+            if (entityId != lastSelectedEntity || string.IsNullOrEmpty(componentType)) return;
 
-            // Find the actual Type object
             Type? compType = null;
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -77,7 +76,7 @@ namespace DivisionEngine.Editor.Systems
             if (compType == null) return;
             componentsToRefresh.Add(compType);
             needsRefresh = true;
-            framesSinceLastRefresh = 0; // Reset frame counter
+            framesSinceLastRefresh = 0;
         }
 
         public static void ClearSelection()

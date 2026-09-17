@@ -9,21 +9,44 @@ using System.Text;
 
 namespace DivisionEngine.Projects.Assets
 {
+    /// <summary>
+    /// Which compiled assembly a script belongs to.
+    /// </summary>
+    public enum ScriptCompileTarget
+    {
+        /// <summary>
+        /// Scripts compiled into the project's player assembly.
+        /// </summary>
+        Player = 0,
+        /// <summary>
+        /// Scripts compiled into the project's editor assembly (inside an "Editor" folder).
+        /// </summary>
+        Editor = 1,
+    }
+
     [AssetType(AssetType.Script)]
     public class ScriptAsset(AssetMetadata metadata) : Asset(metadata)
     {
         private string? sourceCode;
         private DateTime lastLoadedTime;
 
-        /// <summary>
-        /// Gets the source code of the script.
-        /// </summary>
+        /// <summary>Gets the source code of the script, or null if not loaded.</summary>
         public string? SourceCode => sourceCode;
 
-        /// <summary>
-        /// Gets the full path to the script file.
-        /// </summary>
+        /// <summary>Gets the absolute file path to the script.</summary>
         public string FullPath => Path.Combine(AssetDatabase.ProjectPath, RelativePath);
+
+        /// <summary>
+        /// Which compiled assembly this script belongs to. Determined by whether
+        /// the script lives inside an "Editor" folder at any depth, matching the
+        /// convention the IDE scaffolder encodes in its compile-item globs.
+        /// </summary>
+        public ScriptCompileTarget CompileTarget => IsEditorScript(RelativePath)
+            ? ScriptCompileTarget.Editor
+            : ScriptCompileTarget.Player;
+
+        /// <summary>Last write time observed at the moment the script was loaded.</summary>
+        public DateTime LastLoadedTimeUtc => lastLoadedTime;
 
         public override async Task<bool> LoadAsync()
         {
@@ -31,7 +54,6 @@ namespace DivisionEngine.Projects.Assets
 
             try
             {
-                // Read the script file as text
                 sourceCode = await File.ReadAllTextAsync(FullPath, Encoding.UTF8);
                 lastLoadedTime = File.GetLastWriteTimeUtc(FullPath);
 
@@ -66,11 +88,6 @@ namespace DivisionEngine.Projects.Assets
             return true;
         }
 
-        /// <summary>
-        /// Gets the script content as a string.
-        /// </summary>
-        public override string ToString() => sourceCode ?? string.Empty;
-
         public override void Unload()
         {
             if (!IsLoaded) return;
@@ -79,6 +96,20 @@ namespace DivisionEngine.Projects.Assets
             IsLoaded = false;
 
             Debug.Info($"Script unloaded: {Metadata.FileName}");
+        }
+
+        public override string ToString() => sourceCode ?? string.Empty;
+
+        /// <summary>
+        /// Returns true if the relative path contains an "Editor" folder segment
+        /// at any depth. This is the single authoritative definition of the
+        /// convention; the IDE scaffolder's globs mirror it, and if the
+        /// convention ever changes, it changes here.
+        /// </summary>
+        private static bool IsEditorScript(string relativePath)
+        {
+            string normalized = "\\" + relativePath.Replace('/', '\\') + "\\";
+            return normalized.Contains(@"\Editor\", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

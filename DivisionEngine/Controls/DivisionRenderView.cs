@@ -123,7 +123,7 @@ public class DivisionRenderView : Control
                 float h = Math.Max(1f, (float)Bounds.Height);
                 App.UserInput?.AccumulateMouseUVDelta(new float2(dx / w, dy / h));
 
-                suppressNextMove = true; // the warp below raises its own move — ignore it too
+                suppressNextMove = true; // the warp below raises its own move - ignore it too
                 WarpCursor(dragCenterScreen);
             }
             return; // don't fall through to the normal absolute-position path while dragging
@@ -151,7 +151,7 @@ public class DivisionRenderView : Control
             dragCenterScreen = this.PointToScreen(new Point(Bounds.Width / 2, Bounds.Height / 2));
 
             isLookDragging = true;
-            suppressNextMove = true; // the warp below will itself raise a PointerMoved — ignore it
+            suppressNextMove = true; // the warp below will itself raise a PointerMoved - ignore it
             WarpCursor(dragCenterScreen);
 
             Cursor = new Cursor(StandardCursorType.None);
@@ -170,7 +170,7 @@ public class DivisionRenderView : Control
             Cursor = Cursor.Default;
 
             // Restore the cursor to where the drag actually started, rather than
-            // leaving it stranded at the recenter point — standard editor-camera UX,
+            // leaving it stranded at the recenter point - standard editor-camera UX,
             // and keeps InputSystem's absolute-position tracking sane for clicks after release
             WarpCursor(dragStartScreen);
             Point local = this.PointToClient(dragStartScreen);

@@ -80,6 +80,20 @@ namespace DivisionEngine
         public static void RegisterAllSystems() => WorldManager.CurrentWorld!.RegisterAllSystems();
 
         /// <summary>
+        /// Registers any SystemBase types that are loaded in the current AppDomain
+        /// but not already present in this world. Preserves existing system instances
+        /// (and their state) - only genuinely new types are instantiated.
+        /// <para>
+        /// Matching is done by <see cref="Type.FullName"/> rather than Type reference
+        /// because recompiling scripts produces a new assembly with new Type objects
+        /// for the same classes, and the old load context can't be unloaded while
+        /// existing system instances still reference it. Matching by name keeps the
+        /// existing instances authoritative.
+        /// </para>
+        /// </summary>
+        public static void RegisterNewSystems() => WorldManager.CurrentWorld!.RegisterNewSystems();
+
+        /// <summary>
         /// Gets a system of the specified type from the world.
         /// </summary>
         /// <typeparam name="T">Type of system to retrieve</typeparam>

@@ -148,7 +148,7 @@ namespace DivisionEngine.Rendering.Terrain
             {
                 float4 phacelle = PhacelleNoise(p * freq, SafeNormalize(gullySlope), cellScale, 0.25f, normalization);
 
-                // Matches GLSL's `phacelle.zw *= -freq` — p was scaled by freq, and slope
+                // Matches GLSL's `phacelle.zw *= -freq` - p was scaled by freq, and slope
                 // directions point down, hence the negation. Everything below this line
                 // must use the transformed derivative, not the raw PhacelleNoise output.
                 float2 phacelleDeriv = new float2(phacelle.Z, phacelle.W) * -freq;

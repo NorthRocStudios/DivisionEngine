@@ -205,15 +205,108 @@ namespace DivisionEngine
 
             foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
             {
-                foreach (Type t in a.GetTypes())
+                if (a.IsDynamic) continue;
+
+                Type[] types;
+                try { types = a.GetTypes(); }
+                catch (ReflectionTypeLoadException ex)
                 {
-                    if (typeof(SystemBase).IsAssignableFrom(t) && !t.IsAbstract)
+                    types = [.. ex.Types.Where(t => t != null).Cast<Type>()];
+                    Debug.Warning($"World: partial type load from {a.GetName().Name}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.Warning($"World: skipping assembly {a.GetName().Name}", ex);
+                    continue;
+                }
+
+                foreach (Type t in types)
+                {
+                    if (typeof(SystemBase).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface)
                     {
-                        if (Activator.CreateInstance(t) is SystemBase sys) RegisterSystem(sys);
-                        else throw new NotImplementedException($"System of type {t} is not implemented correctly!");
+                        try
+                        {
+                            if (Activator.CreateInstance(t) is SystemBase sys) RegisterSystem(sys);
+                            else Debug.Warning($"World: could not instantiate {t.Name}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.Warning($"World: failed to instantiate {t.Name}", ex);
+                        }
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Registers any SystemBase types that are loaded in the current AppDomain
+        /// but not already present in this world. Preserves existing system instances
+        /// (and their state) - only genuinely new types are instantiated.
+        /// <para>
+        /// Matching is done by <see cref="Type.FullName"/> rather than Type reference
+        /// because recompiling scripts produces a new assembly with new Type objects
+        /// for the same classes, and the old load context can't be unloaded while
+        /// existing system instances still reference it. Matching by name keeps the
+        /// existing instances authoritative.
+        /// </para>
+        /// </summary>
+        public void RegisterNewSystems()
+        {
+            // Match by fully-qualified name, not Type reference. See remarks.
+            HashSet<string> existingNames = new(StringComparer.Ordinal);
+            foreach (SystemBase sys in systems)
+            {
+                string? name = sys.GetType().FullName;
+                if (name != null) existingNames.Add(name);
+            }
+
+            List<SystemBase> newSystems = [];
+            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (a.IsDynamic) continue;
+
+                Type[] types;
+                try { types = a.GetTypes(); }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    types = [.. ex.Types.Where(t => t != null).Cast<Type>()];
+                    Debug.Warning($"World: partial type load from {a.GetName().Name}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.Warning($"World: skipping assembly {a.GetName().Name}", ex);
+                    continue;
+                }
+
+                foreach (Type t in types)
+                {
+                    if (!typeof(SystemBase).IsAssignableFrom(t)) continue;
+                    if (t.IsAbstract || t.IsInterface) continue;
+
+                    string? fullName = t.FullName;
+                    if (fullName == null || existingNames.Contains(fullName)) continue;
+
+                    try
+                    {
+                        if (Activator.CreateInstance(t) is SystemBase sys)
+                        {
+                            RegisterSystem(sys);
+                            newSystems.Add(sys);
+                            existingNames.Add(fullName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.Warning($"World: failed to instantiate system {t.Name}", ex);
+                    }
+                }
+            }
+
+            if (newSystems.Count == 0) return;
+            foreach (SystemBase sys in newSystems) sys.Awake();
+            foreach (SystemBase sys in newSystems) sys.AppStart();
+
+            Debug.Info($"World: registered {newSystems.Count} new system(s)");
         }
 
         /// <summary>

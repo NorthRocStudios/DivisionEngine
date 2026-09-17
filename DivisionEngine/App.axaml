@@ -64,7 +64,7 @@
             <Setter Property="Padding" Value="6,4,6,4"/>
         </Style>
 
-        <!--Field Editor Control Styles (Properties Window) — applied via Classes="field-editor"-->
+        <!--Field Editor Control Styles (Properties Window) - applied via Classes="field-editor"-->
         <Style Selector="NumericUpDown.field-editor">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="Background" Value="#202020"/>

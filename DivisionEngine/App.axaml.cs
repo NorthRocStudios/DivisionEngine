@@ -14,6 +14,7 @@ using DivisionEngine.Editor.Settings;
 using DivisionEngine.Editor.ViewModels;
 using DivisionEngine.Input;
 using DivisionEngine.Projects;
+using DivisionEngine.Projects.Scripting;
 using DivisionEngine.Rendering;
 using DivisionEngine.Settings;
 using System;
@@ -78,6 +79,11 @@ namespace DivisionEngine.Editor
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
+                // Install the Roslyn compiler so projects compile scripts as they
+                // load. Doing this here (rather than in ProjectManager) keeps the
+                // engine core free of a Roslyn dependency.
+                ScriptCompilationPipeline.SetCompiler(new RoslynScriptCompiler());
+
                 // Settings are automatically loaded when Instance is first accessed
                 EditorSettings settings = EditorSettings.Instance;
 

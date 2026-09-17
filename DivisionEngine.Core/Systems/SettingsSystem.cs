@@ -20,11 +20,7 @@ namespace DivisionEngine.Systems
 
         public static Action? ApplySettings;
 
-        public override void AppStart()
-        {
-            // Ensure engine settings are loaded
-            _ = EngineSettings.Instance;
-        }
+        public override void AppStart() => _ = EngineSettings.Instance; // ensure loaded
 
         public override void EditorUpdate()
         {

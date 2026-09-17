@@ -358,7 +358,7 @@ namespace DivisionEngine
         /// <summary>
         /// Single dispatch for a primitive's own local-space distance, excluding terrain.
         /// Takes only what it needs (type + one float4), not the full DTO, to keep
-        /// per-call codegen light — this gets called multiple times per normal.
+        /// per-call codegen light - this gets called multiple times per normal.
         /// </summary>
         private static float EvaluatePrimitiveDistanceFast(int type, float4 parameters, float3 localPt)
         {
@@ -420,11 +420,11 @@ namespace DivisionEngine
         /// <summary>
         /// Computes a surface normal using only the known hit object's own primitive
         /// field, instead of the full multi-object WorldSDF. Cuts normal calculation
-        /// from O(4 * totalObjectCount) world samples down to O(4) — since WorldSDF is
+        /// from O(4 * totalObjectCount) world samples down to O(4) - since WorldSDF is
         /// a hard-min union (no smooth blending), the gradient at a given hit point is
         /// exactly this object's own gradient there, so this isn't an approximation
         /// except at the measure-zero seam where two objects are exactly tied.
-        /// Not used for terrain (type 9) — see ComputeSurfaceNormal below.
+        /// Not used for terrain (type 9) - see ComputeSurfaceNormal below.
         /// </summary>
         private float3 FastNormalSingleObject(float3 pos, SDFObjectDTO sdf)
         {

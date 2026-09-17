@@ -24,6 +24,7 @@ using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects;
 using DivisionEngine.Projects.Assets;
+using DivisionEngine.Projects.Scripting;
 using DivisionEngine.Systems;
 using Material.Icons;
 using Material.Icons.Avalonia;
@@ -62,14 +63,14 @@ public partial class PropertiesWindow : EditorWindow
     private object? currentSelection;
 
     // Keyed by (entity, component type) so a field's "Reset to Default" can rebuild exactly
-    // the card it lives in — whether that's the selected entity's panel or a World-view tab.
+    // the card it lives in - whether that's the selected entity's panel or a World-view tab
     private readonly Dictionary<(uint EntityId, Type CompType), StackPanel> componentFieldPanels = [];
 
     // Static dictionary to persist expanded state across all instances and rebuilds
     private static readonly Dictionary<string, bool> cardExpandedState = [];
     private static readonly Lock stateLock = new();
 
-    // Rendering-info tab: live system stats, refreshed on a timer while the World view is open.
+    // Rendering-info tab: live system stats, refreshed on a timer while the World view is open
     private DispatcherTimer? renderInfoRefreshTimer;
     private TextBlock? renderInfoTextureText, renderInfoSdfText, renderInfoLightText;
 
@@ -138,7 +139,17 @@ public partial class PropertiesWindow : EditorWindow
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
         Flyout addComponentFlyout = new() { Placement = PlacementMode.Top, ShowMode = FlyoutShowMode.Standard, Content = CreateAddComponentMenu() };
-        addComponentButton.Click += (_, _) => addComponentFlyout.ShowAt(addComponentButton);
+        addComponentButton.Click += (_, _) =>
+        {
+            // Build the menu fresh on every open so newly-compiled component types are picked up without requiring the window to be reopened
+            Flyout flyout = new()
+            {
+                Placement = PlacementMode.Top,
+                ShowMode = FlyoutShowMode.Standard,
+                Content = CreateAddComponentMenu(),
+            };
+            flyout.ShowAt(addComponentButton);
+        };
 
         Grid mainGrid = new()
         {
@@ -284,20 +295,35 @@ public partial class PropertiesWindow : EditorWindow
     private static List<Type> GetComponentTypes()
     {
         List<Type> componentTypes = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            try
-            {
-                componentTypes.AddRange(assembly.GetTypes().Where(t => typeof(IComponent).IsAssignableFrom(t) &&
-                !t.IsAbstract && !t.IsInterface && t != typeof(IComponent)));
-            }
+            if (assembly.IsDynamic) continue;
+
+            Type[] types;
+            try { types = assembly.GetTypes(); }
             catch (ReflectionTypeLoadException ex)
             {
-                componentTypes.AddRange(ex.Types.Where(t => t != null && typeof(IComponent).IsAssignableFrom(t) &&
-                !t.IsAbstract && !t.IsInterface && t != typeof(IComponent)).Cast<Type>());
+                types = [.. ex.Types.Where(t => t != null).Cast<Type>()];
                 Debug.Warning($"Could not load some component types from {assembly.FullName}");
             }
-            catch (Exception ex) { Debug.Warning($"Error loading component types from {assembly.FullName}", ex); }
+            catch (Exception ex)
+            {
+                Debug.Warning($"Error loading component types from {assembly.FullName}", ex);
+                continue;
+            }
+
+            foreach (Type t in types)
+            {
+                if (!typeof(IComponent).IsAssignableFrom(t)) continue;
+                if (t.IsAbstract || t.IsInterface || t == typeof(IComponent)) continue;
+
+                string? fullName = t.FullName;
+                if (fullName == null || !seen.Add(fullName)) continue;
+
+                componentTypes.Add(t);
+            }
         }
         return componentTypes;
     }
@@ -494,9 +520,9 @@ public partial class PropertiesWindow : EditorWindow
         }
 
         if (metadata.Type == AssetType.Texture)
-        {
             AddTextureSettingsPanel(assetPanel, metadata);
-        }
+        else if (metadata.Type == AssetType.Script)
+            AddScriptCompilationPanel(assetPanel, metadata, loadedAsset as ScriptAsset);
 
         // Action buttons panel
         StackPanel actionButtonsPanel = new()
@@ -656,7 +682,7 @@ public partial class PropertiesWindow : EditorWindow
     private static string CardTitleFor(string componentLabel, uint entityId)
     {
         string name = W.TryGetEntityName(entityId);
-        return string.IsNullOrEmpty(name) ? $"{componentLabel} — Entity_{entityId}" : $"{componentLabel} — {name}";
+        return string.IsNullOrEmpty(name) ? $"{componentLabel} - Entity_{entityId}" : $"{componentLabel} - {name}";
     }
 
     private StackPanel BuildRenderInfoCard()
@@ -705,13 +731,11 @@ public partial class PropertiesWindow : EditorWindow
         uint entityId, string? cardTitle = null, bool allowRemove = true)
     {
         StackPanel fieldsPanel = new() { Margin = new Thickness(8, 4, 4, 8) };
-        foreach (FieldInfo field in compType.GetFields(BindingFlags.Public | BindingFlags.Instance))
+        foreach (FieldInfo field in GetEditableFields(compType))
         {
-            if (field.GetCustomAttribute<HideInEditorAttribute>() != null) continue;
             StackPanel? fieldEditor = CreateFieldEditor(field, instance, entityId, () => RefreshComponent(entityId, compType));
             if (fieldEditor != null) fieldsPanel.Children.Add(fieldEditor);
         }
-        if (fieldsPanel.Children.Count == 0) return;
 
         componentFieldPanels[(entityId, compType)] = fieldsPanel;
         Action? onRemove = allowRemove ? () =>
@@ -734,6 +758,22 @@ public partial class PropertiesWindow : EditorWindow
             onRemove,
             cardKey));
     }
+
+    /// <summary>
+    /// Returns true if a field carries any of the attributes our inspector
+    /// understands. Used to decide whether to surface a private field in the
+    /// editor (public fields are always shown).
+    /// </summary>
+    private static bool HasEditorAttribute(FieldInfo field) =>
+        field.GetCustomAttribute<RangeAttribute>() != null ||
+        field.GetCustomAttribute<MinAttribute>() != null ||
+        field.GetCustomAttribute<MaxAttribute>() != null ||
+        field.GetCustomAttribute<ColorAttribute>() != null ||
+        field.GetCustomAttribute<RotationAttribute>() != null ||
+        field.GetCustomAttribute<TooltipAttribute>() != null ||
+        field.GetCustomAttribute<HeaderAttribute>() != null ||
+        field.GetCustomAttribute<SpaceAttribute>() != null ||
+        field.GetCustomAttribute<MultilineAttribute>() != null;
 
     /// <summary>
     /// Builds a collapsible card. Used for component editors and for the World-view info cards.
@@ -864,9 +904,8 @@ public partial class PropertiesWindow : EditorWindow
         if (fresh == null) return;
 
         fieldsPanel.Children.Clear();
-        foreach (FieldInfo field in compType.GetFields(BindingFlags.Public | BindingFlags.Instance))
+        foreach (FieldInfo field in GetEditableFields(compType))
         {
-            if (field.GetCustomAttribute<HideInEditorAttribute>() != null) continue;
             StackPanel? fieldEditor = CreateFieldEditor(field, fresh, entityId, () => RefreshComponent(entityId, compType));
             if (fieldEditor != null) fieldsPanel.Children.Add(fieldEditor);
         }
@@ -881,6 +920,17 @@ public partial class PropertiesWindow : EditorWindow
         if (currentSelection is uint curEntityId) RefreshComponent(curEntityId, compType);
     }
 
+    private static IEnumerable<FieldInfo> GetEditableFields(Type compType)
+    {
+        foreach (FieldInfo field in compType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (field.GetCustomAttribute<HideInEditorAttribute>() != null) continue;
+            if (!field.IsPublic && !HasEditorAttribute(field)) continue;
+            if (field.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)) continue;
+            yield return field;
+        }
+    }
+
     #endregion
     #region fieldEditors
 
@@ -888,7 +938,6 @@ public partial class PropertiesWindow : EditorWindow
     {
         Type fieldType = field.FieldType;
         object? fieldValue = field.GetValue(component);
-        void Notify() => PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name);
 
         float topMargin = field.GetCustomAttribute<SpaceAttribute>()?.Space ?? 0f;
         HeaderAttribute? headerAttr = field.GetCustomAttribute<HeaderAttribute>();
@@ -923,12 +972,11 @@ public partial class PropertiesWindow : EditorWindow
         {
             if (defaultValue == null) return;
             field.SetValue(component, defaultValue);
-            Notify();
             onReset();
         };
         fieldContextMenu.Items.Add(resetMenuItem);
 
-        // "Open Asset" — only meaningful for asset-reference fields
+        // "Open Asset" - only meaningful for asset-reference fields
         bool isAssetRefField = fieldType == typeof(AssetRef) ||
             (fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() == typeof(AssetRef<>));
         if (isAssetRefField)
@@ -978,15 +1026,15 @@ public partial class PropertiesWindow : EditorWindow
             float lo = minAttr?.Min ?? -2000000000f, hi = maxAttr?.Max ?? 2000000000f;
             if (rangeAttr != null)
             {
-                NumericUpDown box = CreateFloatNumericBox(value, f => { field.SetValue(component, f); Notify(); }, false, lo, hi);
+                NumericUpDown box = CreateFloatNumericBox(value, f => { field.SetValue(component, f); }, false, lo, hi);
                 editorControl = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
                     Children = { CreateFloatSlider(value, rangeAttr.Min, rangeAttr.Max, f =>
-                    { field.SetValue(component, f); box.Value = (decimal)f; Notify(); }), box }
+                    { field.SetValue(component, f); box.Value = (decimal)f; }), box }
                 };
             }
-            else editorControl = CreateFloatNumericBox(value, f => { field.SetValue(component, f); Notify(); }, true, lo, hi);
+            else editorControl = CreateFloatNumericBox(value, f => { field.SetValue(component, f); }, true, lo, hi);
         }
         else if (fieldValue != null && fieldType == typeof(int)) // Integer fields and sliders
         {
@@ -994,25 +1042,25 @@ public partial class PropertiesWindow : EditorWindow
             int lo = minAttr != null ? (int)minAttr.Min : int.MinValue, hi = maxAttr != null ? (int)maxAttr.Max : int.MaxValue;
             if (rangeAttr != null)
             {
-                NumericUpDown box = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); Notify(); }, false, lo, hi);
+                NumericUpDown box = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); }, false, lo, hi);
                 editorControl = new StackPanel { Orientation = Orientation.Horizontal, 
                     Children = { CreateIntegerSlider(value, (int)rangeAttr.Min, (int)rangeAttr.Max, i => 
-                    { field.SetValue(component, i); box.Value = i; Notify(); }), box } };
+                    { field.SetValue(component, i); box.Value = i; }), box } };
             }
-            else editorControl = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); Notify(); }, true, lo, hi);
+            else editorControl = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); }, true, lo, hi);
         }
         else if (fieldValue != null && fieldType == typeof(string)) // Text fields
         {
             TextBox textBox = new() { Classes = { "field-editor" }, Text = (string)fieldValue, 
                 AcceptsReturn = field.GetCustomAttribute<MultilineAttribute>() != null };
             textBox.PropertyChanged += (_, e) => { if (e.Property == TextBox.TextProperty) 
-                { field.SetValue(component, textBox.Text); Notify(); } };
+                { field.SetValue(component, textBox.Text); } };
             editorControl = textBox;
         }
         else if (fieldValue != null && fieldType == typeof(bool)) // Toggle fields
         {
             CheckBox checkBox = new() { Classes = { "field-editor" }, IsChecked = (bool)fieldValue, IsDefault = false };
-            checkBox.IsCheckedChanged += (_, _) => { field.SetValue(component, checkBox.IsChecked); Notify(); };
+            checkBox.IsCheckedChanged += (_, _) => { field.SetValue(component, checkBox.IsChecked); };
             editorControl = checkBox;
         }
         else if (fieldValue != null && fieldType == typeof(float2)) // 2D vector fields
@@ -1021,7 +1069,7 @@ public partial class PropertiesWindow : EditorWindow
             editorControl = BuildAxisRow(["X", "Y"], [state.X, state.Y], (axis, v) =>
             {
                 if (axis == 0) state.X = v; else state.Y = v;
-                field.SetValue(component, state); Notify();
+                field.SetValue(component, state);
             }, out _);
         }
         else if (fieldValue != null && fieldType == typeof(float3)) // 3D vector fields and colors (no alpha)
@@ -1036,7 +1084,7 @@ public partial class PropertiesWindow : EditorWindow
                 editorControl = BuildAxisRow(["X", "Y", "Z"], [state.X, state.Y, state.Z], (axis, v) =>
                 {
                     if (axis == 0) state.X = v; else if (axis == 1) state.Y = v; else state.Z = v;
-                    field.SetValue(component, state); Notify();
+                    field.SetValue(component, state);
                 }, out _);
             }
         }
@@ -1054,7 +1102,7 @@ public partial class PropertiesWindow : EditorWindow
                 editorControl = BuildAxisRow(["X", "Y", "Z", "W"], [state.X, state.Y, state.Z, state.W], (axis, v) =>
                 {
                     switch (axis) { case 0: state.X = v; break; case 1: state.Y = v; break; case 2: state.Z = v; break; default: state.W = v; break; }
-                    field.SetValue(component, state); Notify();
+                    field.SetValue(component, state);
                 }, out _);
             }
         }
@@ -1071,7 +1119,7 @@ public partial class PropertiesWindow : EditorWindow
                 VerticalAlignment = VerticalAlignment.Center,
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
-            picker.SelectedDateChanged += (_, _) => { field.SetValue(component, picker.SelectedDate); Notify(); };
+            picker.SelectedDateChanged += (_, _) => { field.SetValue(component, picker.SelectedDate); };
             editorControl = picker;
         }
         else if (fieldValue != null && fieldType == typeof(float4x4)) // 4D matrix fields
@@ -1097,7 +1145,7 @@ public partial class PropertiesWindow : EditorWindow
     }
 
     /// <summary>
-    /// Builds a horizontal row of labeled NumericUpDown boxes — shared by float2/float3/float4/rotation.
+    /// Builds a horizontal row of labeled NumericUpDown boxes - shared by float2/float3/float4/rotation.
     /// </summary>
     private static StackPanel BuildAxisRow(string[] labels, float[] initial, Action<int, float> onAxisChanged, out NumericUpDown[] boxes)
     {
@@ -1143,7 +1191,7 @@ public partial class PropertiesWindow : EditorWindow
         comboBox.SelectionChanged += (_, _) =>
         {
             if (comboBox.SelectedItem is not EnumItem selected) return;
-            try { field.SetValue(component, selected.Value); PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name); }
+            try { field.SetValue(component, selected.Value); PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName); }
             catch (Exception ex) { Debug.Error($"Failed to set enum value for {field.Name}", ex); }
         };
         return new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Spacing = 4, Children = { comboBox } };
@@ -1236,7 +1284,7 @@ public partial class PropertiesWindow : EditorWindow
                     float4x4 current = (float4x4)field.GetValue(component)!;
                     current.SetVal(r, c, val);
                     field.SetValue(component, current);
-                    PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name);
+                    PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
                 });
                 numBox.Width = 24; numBox.Height = 20; numBox.Margin = new Thickness(2);
                 rowCells.Children.Add(numBox);
@@ -1302,7 +1350,7 @@ public partial class PropertiesWindow : EditorWindow
         {
             Color c = colorPicker.Color;
             field.SetValue(component, new float4(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f));
-            PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name);
+            PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
         };
         return new StackPanel { Orientation = Orientation.Horizontal, MinHeight = 10, 
             VerticalAlignment = VerticalAlignment.Center, Children = { colorPicker } };
@@ -1336,7 +1384,7 @@ public partial class PropertiesWindow : EditorWindow
         {
             Color c = colorPicker.Color;
             field.SetValue(component, new float3(c.R / 255f, c.G / 255f, c.B / 255f));
-            PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name);
+            PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
         };
         return new StackPanel
         {
@@ -1447,7 +1495,7 @@ public partial class PropertiesWindow : EditorWindow
         try
         {
             if (Activator.CreateInstance(compType) is IComponent freshInstance)
-                return compType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(freshInstance);
+                return compType.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(freshInstance);
         }
         catch (Exception ex) { Debug.Warning($"Failed to get default value for {compType.Name}.{fieldName}", ex); }
         return null;
@@ -1607,7 +1655,7 @@ public partial class PropertiesWindow : EditorWindow
     }
 
     /// <summary>
-    /// Adds a "Path" row whose value acts as a hyperlink — clicking it reveals the asset's
+    /// Adds a "Path" row whose value acts as a hyperlink - clicking it reveals the asset's
     /// file in the OS file explorer with the file pre-selected/highlighted.
     /// </summary>
     private static void AddPathPropertyRow(StackPanel panel, string? fullPath, string relativePath)
@@ -1873,6 +1921,321 @@ public partial class PropertiesWindow : EditorWindow
         settingsPanel.Children.Add(mipRow);
 
         panel.Children.Add(settingsPanel);
+    }
+
+    /// <summary>
+    /// Adds a compilation-info panel to a selected script asset: which assembly it
+    /// belongs to, whether it's currently part of the compiled manifest, any
+    /// diagnostics reported for it by the last compile pass, and a source preview.
+    /// </summary>
+    private static void AddScriptCompilationPanel(
+        StackPanel panel, AssetMetadata metadata, ScriptAsset? script)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Script Compilation",
+            FontSize = 13,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Brushes.White,
+            Margin = new Thickness(0, 12, 0, 4),
+        });
+
+        // Compile target + assembly name
+        string targetLabel = script?.CompileTarget.ToString() ?? "Unknown";
+        string projectName = ProjectManager.CurrentProjectName ?? "Project";
+        string assemblyName = script?.CompileTarget == ScriptCompileTarget.Editor
+            ? $"{projectName}.Editor"
+            : $"{projectName}.Player";
+
+        AddPropertyRow(panel, "Compile Target", targetLabel);
+        AddPropertyRow(panel, "Assembly", assemblyName);
+
+        // Manifest membership
+        ScriptManifest? manifest = ScriptCompilationPipeline.CurrentManifest;
+        bool inManifest = manifest != null &&
+            (manifest.PlayerScripts.Any(s => s.ID == metadata.ID) ||
+             manifest.EditorScripts.Any(s => s.ID == metadata.ID));
+
+        DockPanel manifestRow = new() { Margin = new Thickness(0, 2, 0, 2) };
+        TextBlock manifestLabel = new()
+        {
+            Text = "In Manifest:",
+            FontSize = 11,
+            Foreground = EditorColor.FromRGB(180, 180, 180),
+            MinWidth = 100,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(manifestLabel, Dock.Left);
+        TextBlock manifestValue = new()
+        {
+            Text = inManifest ? "Yes" : "No",
+            FontSize = 11,
+            Foreground = inManifest
+                ? new SolidColorBrush(Color.FromRgb(76, 175, 80))
+                : Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(manifestValue, Dock.Left);
+        manifestRow.Children.Add(manifestLabel);
+        manifestRow.Children.Add(manifestValue);
+        panel.Children.Add(manifestRow);
+
+        // Compilation status banner
+        ScriptCompileResult? last = ScriptCompilationPipeline.LastResult;
+        if (last != null)
+        {
+            int errorCount = last.Diagnostics.Count(d => d.Severity == ScriptDiagnosticSeverity.Error);
+            int warnCount = last.Diagnostics.Count(d => d.Severity == ScriptDiagnosticSeverity.Warning);
+
+            string statusText;
+            Color statusColor;
+            if (errorCount > 0)
+            {
+                statusText = $"Build failed - {errorCount} error(s)";
+                statusColor = Color.FromRgb(220, 80, 80);
+            }
+            else if (warnCount > 0)
+            {
+                statusText = $"Build succeeded - {warnCount} warning(s)";
+                statusColor = Color.FromRgb(220, 180, 60);
+            }
+            else
+            {
+                statusText = $"Build succeeded ({last.Duration.TotalMilliseconds:F0}ms)";
+                statusColor = Color.FromRgb(76, 175, 80);
+            }
+
+            Border banner = new()
+            {
+                Background = new SolidColorBrush(Color.FromRgb(28, 28, 28)),
+                BorderBrush = new SolidColorBrush(statusColor),
+                BorderThickness = new Thickness(2, 0, 0, 0),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(8, 5),
+                Margin = new Thickness(0, 6, 0, 6),
+                Child = new TextBlock
+                {
+                    Text = statusText,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(statusColor),
+                },
+            };
+            panel.Children.Add(banner);
+
+            // Diagnostics for this specific script
+            List<ScriptDiagnostic> ownDiagnostics = [.. last.Diagnostics
+                .Where(d => !string.IsNullOrEmpty(d.FilePath) &&
+                            string.Equals(Path.GetFileName(d.FilePath), metadata.FileName,
+                                          StringComparison.OrdinalIgnoreCase))];
+
+            if (ownDiagnostics.Count > 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "Diagnostics",
+                    FontSize = 12,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = Brushes.White,
+                    Margin = new Thickness(0, 8, 0, 4),
+                });
+
+                foreach (ScriptDiagnostic diag in ownDiagnostics)
+                {
+                    Color diagColor = diag.Severity switch
+                    {
+                        ScriptDiagnosticSeverity.Error => Color.FromRgb(220, 80, 80),
+                        ScriptDiagnosticSeverity.Warning => Color.FromRgb(220, 180, 60),
+                        _ => Color.FromRgb(150, 150, 150),
+                    };
+
+                    Border diagBorder = new()
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(24, 24, 24)),
+                        BorderBrush = new SolidColorBrush(diagColor),
+                        BorderThickness = new Thickness(2, 0, 0, 0),
+                        CornerRadius = new CornerRadius(2),
+                        Padding = new Thickness(6, 4),
+                        Margin = new Thickness(0, 0, 0, 3),
+                    };
+
+                    StackPanel diagContent = new() { Spacing = 2 };
+                    diagContent.Children.Add(new TextBlock
+                    {
+                        Text = diag.Line > 0 ? $"Line {diag.Line}, Col {diag.Column}" : "-",
+                        FontSize = 10,
+                        Foreground = new SolidColorBrush(diagColor),
+                        FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                    });
+                    diagContent.Children.Add(new SelectableTextBlock
+                    {
+                        Text = diag.Message,
+                        FontSize = 11,
+                        Foreground = Brushes.White,
+                        TextWrapping = TextWrapping.Wrap,
+                    });
+                    diagBorder.Child = diagContent;
+                    panel.Children.Add(diagBorder);
+                }
+            }
+        }
+
+        // Source preview (collapsible)
+        if (script != null && !string.IsNullOrEmpty(script.SourceCode))
+        {
+            const int MaxLines = 200;
+            string[] lines = script.SourceCode.Replace("\r\n", "\n").Split('\n');
+            int shown = math.min(lines.Length, MaxLines);
+            string preview = string.Join('\n', lines.Take(shown));
+            if (lines.Length > MaxLines)
+                preview += $"\n\n... ({lines.Length - MaxLines} more lines)";
+
+            SelectableTextBlock sourceText = new()
+            {
+                Text = preview,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 11,
+                Foreground = EditorColor.FromRGB(200, 200, 200),
+                TextWrapping = TextWrapping.NoWrap,
+            };
+
+            ScrollViewer sourceScroll = new()
+            {
+                Content = sourceText,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 320,
+            };
+
+            // Keyed on the script's ID so each script remembers its own expanded
+            // state across selection changes
+            string stateKey = $"SourcePreview_{metadata.ID}";
+            panel.Children.Add(BuildCollapsibleSection(
+                "Source Preview",
+                sourceScroll,
+                stateKey,
+                icon: MaterialIconKind.CodeBraces,
+                defaultExpanded: false));
+        }
+
+        // Actions
+        StackPanel actions = new()
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 6, 0, 4),
+        };
+
+        Button recompileButton = new()
+        {
+            Content = "Recompile Project",
+            FontSize = 12,
+            Padding = new Thickness(12, 6),
+            Background = EditorColor.FromRGB(40, 60, 80),
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+        };
+        recompileButton.Click += async (_, _) =>
+        {
+            recompileButton.Content = "Compiling...";
+            recompileButton.IsEnabled = false;
+            try { await ScriptCompilationPipeline.RefreshAndCompileAsync(); }
+            finally
+            {
+                recompileButton.Content = "Recompile Project";
+                recompileButton.IsEnabled = true;
+            }
+        };
+        actions.Children.Add(recompileButton);
+        panel.Children.Add(actions);
+    }
+
+    /// <summary>
+    /// Wraps content in a collapsible section: a header row with a chevron and
+    /// title that toggles the content's visibility. State is persisted in the
+    /// same static dictionary used by <see cref="BuildCard"/>, keyed on
+    /// <paramref name="stateKey"/> so it survives panel rebuilds.
+    /// </summary>
+    private static StackPanel BuildCollapsibleSection(
+        string title,
+        Control content,
+        string stateKey,
+        MaterialIconKind icon = MaterialIconKind.CodeBraces,
+        bool defaultExpanded = false)
+    {
+        bool expanded;
+        lock (stateLock)
+        {
+            expanded = cardExpandedState.TryGetValue(stateKey, out bool state)
+                ? state
+                : defaultExpanded;
+        }
+        Border headerBorder = new()
+        {
+            Background = EditorColor.FromRGB(36, 36, 36),
+            BorderBrush = EditorColor.FromRGB(17, 17, 17),
+            BorderThickness = new Thickness(0, 0, 1, 1),
+            CornerRadius = expanded
+                ? new CornerRadius(4, 4, 0, 0)
+                : new CornerRadius(4, 4, 4, 4),
+            Padding = new Thickness(6, 4),
+            Margin = new Thickness(0, 8, 0, 0),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        MaterialIcon chevron = new()
+        {
+            Kind = expanded ? MaterialIconKind.ChevronDown : MaterialIconKind.ChevronRight,
+            Width = 14,
+            Height = 14,
+            Foreground = EditorColor.FromRGB(148, 148, 148),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0),
+        };
+        MaterialIcon sectionIcon = new()
+        {
+            Kind = icon,
+            Width = 14,
+            Height = 14,
+            Foreground = EditorColor.FromRGB(148, 148, 148),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        TextBlock titleText = new()
+        {
+            Text = title,
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = EditorColor.FromRGB(200, 200, 200),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        headerBorder.Child = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { chevron, sectionIcon, titleText },
+        };
+        Border contentBorder = new()
+        {
+            Background = EditorColor.FromRGB(16, 16, 16),
+            BorderBrush = EditorColor.FromRGB(10, 10, 10),
+            BorderThickness = new Thickness(0, 0, 1, 1),
+            CornerRadius = new CornerRadius(0, 0, 4, 4),
+            Padding = new Thickness(6, 6, 6, 6),
+            Child = content,
+            IsVisible = expanded,
+        };
+        headerBorder.Tapped += (_, _) =>
+        {
+            expanded = !expanded;
+            contentBorder.IsVisible = expanded;
+            chevron.Kind = expanded ? MaterialIconKind.ChevronDown : MaterialIconKind.ChevronRight;
+            headerBorder.CornerRadius = expanded
+                ? new CornerRadius(4, 4, 0, 0)
+                : new CornerRadius(4, 4, 4, 4);
+
+            lock (stateLock) cardExpandedState[stateKey] = expanded;
+        };
+        return new StackPanel { Children = { headerBorder, contentBorder } };
     }
 
     #endregion
