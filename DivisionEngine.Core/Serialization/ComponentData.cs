@@ -43,8 +43,13 @@ namespace DivisionEngine.Serialization
         /// <param name="component">Component to serialize</param>
         public ComponentData(IComponent component)
         {
-            TypeName = component.GetType().Name;
-            AssemblyName = component.GetType().Assembly.FullName!;
+            Type t = component.GetType();
+            // Full name disambiguates when two types share a simple name across
+            // namespaces. Simple assembly name is what Type.GetType expects after
+            // the comma; the full display name includes version/culture/token that
+            // usually can't be resolved for a collectible script assembly
+            TypeName = t.FullName ?? t.Name;
+            AssemblyName = t.Assembly.GetName().Name ?? t.Assembly.FullName!;
             Properties = Serialize.Component(component);
         }
     }

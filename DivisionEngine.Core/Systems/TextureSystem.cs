@@ -77,6 +77,13 @@ namespace DivisionEngine.Systems
 
         public override void Render()
         {
+            // Only the current world's TextureSystem drives reloads. Orphaned
+            // instances from previous worlds may still be invoked by the render
+            // pipeline while it's bound to an old world during a project
+            // transition, and they would otherwise consume the shared static flag
+            // and fire their own load. Guard against that by checking identity.
+            if (!ReferenceEquals(WorldManager.CurrentWorld?.GetSystem<TextureSystem>(), this)) return;
+
             if (mustReloadTextures && !loadingTextures)
             {
                 // Snapshot the current texture set before starting the reload. Any

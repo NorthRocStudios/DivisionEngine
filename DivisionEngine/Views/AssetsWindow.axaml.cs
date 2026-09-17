@@ -45,7 +45,7 @@ public partial class AssetsWindow : EditorWindow
 {
     public enum ViewState { Tiles, List }
 
-    public ViewState CurrentView { get; private set; }
+    public static ViewState CurrentView { get; private set; } = ViewState.Tiles;
 
     private static readonly List<AssetsWindow?> currentWindows = [];
 
@@ -306,7 +306,6 @@ public partial class AssetsWindow : EditorWindow
 
         AttachBackgroundContextMenu();
 
-        CurrentView = ViewState.Tiles;
         currentPath = string.Empty;
         currentWindows.Add(this);
 
@@ -495,6 +494,12 @@ public partial class AssetsWindow : EditorWindow
                 await File.WriteAllTextAsync(Path.Combine(currentPath, fileName), defaultContent);
             }
             Debug.Info($"Created {(isFolder ? "folder" : "file")}: {name}");
+
+            // Explicitly refresh the folder. The file watcher normally handles
+            // this, but on a fresh project (or on some Windows filesystem configs)
+            // the Created event can be delayed or missed entirely, leaving the
+            // file invisible until the user navigates away and back.
+            await Dispatcher.UIThread.InvokeAsync(() => AssetDatabase.RefreshFolder(currentPath));
         }
         catch (Exception ex)
         {
@@ -855,7 +860,7 @@ public partial class AssetsWindow : EditorWindow
             Orientation = Orientation.Vertical,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 8, 6, 8), // replaces the border's old Padding
+            Margin = new Thickness(6, 8, 6, 8),
         };
         stack.Children.Add(icon);
         stack.Children.Add(new TextBlock
@@ -1047,7 +1052,7 @@ public partial class AssetsWindow : EditorWindow
         EditorUI.OpenAsset(asset);
     }
 
-    private static Border CreateTileBorder(double width = 80, double height = 85) => new()
+    private static Border CreateTileBorder(double width = 80, double height = 90) => new()
     {
         Width = width,
         Height = height,

@@ -23,7 +23,8 @@ namespace DivisionEngine.Editor.Settings
         /// </summary>
         /// <remarks>This property ensures that only one instance of the editor settings is used
         /// throughout the application. The instance is initialized lazily and is loaded from persistent storage when
-        /// first accessed.</remarks>
+        /// first accessed.
+        /// </remarks>
         [JsonIgnore]
         public static EditorSettings Instance
         {
@@ -49,9 +50,6 @@ namespace DivisionEngine.Editor.Settings
             AutoSaveInterval = 120;
             RecentProjects = [];
             MaxRecentProjects = 10;
-
-            AutoRecompileOnScriptChange = true;
-            ReloadWorldOnRecompile = false;
         }
 
         [JsonIgnore]
@@ -80,20 +78,6 @@ namespace DivisionEngine.Editor.Settings
         {
             get => Get(nameof(MaxRecentProjects), 20);
             set => Set(nameof(MaxRecentProjects), value);
-        }
-
-        [JsonIgnore]
-        public bool AutoRecompileOnScriptChange
-        {
-            get => Get(nameof(AutoRecompileOnScriptChange), true);
-            set => Set(nameof(AutoRecompileOnScriptChange), value);
-        }
-
-        [JsonIgnore]
-        public bool ReloadWorldOnRecompile
-        {
-            get => Get(nameof(ReloadWorldOnRecompile), false);
-            set => Set(nameof(ReloadWorldOnRecompile), value);
         }
 
         // Implement for editor later:

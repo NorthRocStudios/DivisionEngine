@@ -36,6 +36,7 @@
       
         <!--Tab Item Styles-->
         <Style Selector="TabItem">
+            <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Padding" Value="0,0,0,0"/>

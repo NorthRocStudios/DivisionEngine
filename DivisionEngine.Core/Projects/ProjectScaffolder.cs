@@ -34,17 +34,13 @@ namespace DivisionEngine.Projects
         /// </summary>
         public static bool EnsureScaffolding(string projName, string projDir)
         {
-            if (string.IsNullOrWhiteSpace(projName) || string.IsNullOrWhiteSpace(projDir))
-                return false;
-
+            if (string.IsNullOrWhiteSpace(projName) || string.IsNullOrWhiteSpace(projDir)) return false;
             try
             {
                 Directory.CreateDirectory(projDir);
                 Directory.CreateDirectory(Path.Combine(projDir, "Assets"));
-                Directory.CreateDirectory(Path.Combine(projDir, "Assets", "Scripts"));
 
                 string engineAssemblyPath = typeof(ProjectManager).Assembly.Location;
-
                 string playerCsprojPath = Path.Combine(projDir, $"{projName}.Player.csproj");
                 string editorCsprojPath = Path.Combine(projDir, $"{projName}.Editor.csproj");
                 string slnPath = Path.Combine(projDir, $"{projName}.sln");
@@ -317,8 +313,7 @@ namespace DivisionEngine.Projects
                 if (!seen.Add(location)) continue;
 
                 // Prefer the assembly's simple name; fall back to the filename
-                string assemblyName = asm.GetName().Name
-                    ?? Path.GetFileNameWithoutExtension(location);
+                string assemblyName = asm.GetName().Name ?? Path.GetFileNameWithoutExtension(location);
 
                 itemGroup.Add(new XElement("Reference",
                     new XAttribute("Include", assemblyName),

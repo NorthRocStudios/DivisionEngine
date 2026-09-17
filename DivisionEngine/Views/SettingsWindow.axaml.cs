@@ -136,6 +136,8 @@ public partial class SettingsWindow : EditorWindow
         AddBoolSetting("VSync", settings.VSync, val => settings.VSync = val);
         AddBoolSetting("Checkerboard Rendering", settings.CheckerboardRendering, val => settings.CheckerboardRendering = val);
         AddIntSetting("Max FPS (0 = unlimited)", settings.MaxFPS, 0, 1024, val => settings.MaxFPS = val);
+        AddBoolSetting("Auto Recompile On Script Change", settings.AutoRecompileOnScriptChange, val => settings.AutoRecompileOnScriptChange = val);
+        AddBoolSetting("Reload World On Recompile", settings.ReloadWorldOnRecompile, val => settings.ReloadWorldOnRecompile = val);
     }
 
     /// <summary>

@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Components;
+using DivisionEngine.Projects.Scripting;
 using DivisionEngine.Serialization;
 using System.Reflection;
 
@@ -191,6 +192,13 @@ namespace DivisionEngine
         /// Searches all assemblies in the Application Domain to find all classes that inherit from SystemBase and registers them automatically.
         /// </summary>
         /// <exception cref="NotImplementedException">Throws an exception if a system is not implemented correctly</exception>
+        /// <summary>
+        /// Searches all assemblies in the Application Domain to find all classes that
+        /// inherit from SystemBase and registers them automatically. Types are
+        /// deduplicated by fully-qualified name — if the same class exists in both an
+        /// old (still-alive) and new script assembly, only the first-encountered
+        /// instance is registered.
+        /// </summary>
         public void RegisterAllSystems()
         {
             systems.Clear();
@@ -202,6 +210,8 @@ namespace DivisionEngine
             unloadSystems.Clear();
             appExitSystems.Clear();
             renderSystems.Clear();
+
+            HashSet<string> seenNames = new(StringComparer.Ordinal);
 
             foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -222,17 +232,20 @@ namespace DivisionEngine
 
                 foreach (Type t in types)
                 {
-                    if (typeof(SystemBase).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface)
+                    if (!typeof(SystemBase).IsAssignableFrom(t)) continue;
+                    if (t.IsAbstract || t.IsInterface) continue;
+
+                    string? fullName = t.FullName;
+                    if (fullName == null || !seenNames.Add(fullName)) continue;
+
+                    try
                     {
-                        try
-                        {
-                            if (Activator.CreateInstance(t) is SystemBase sys) RegisterSystem(sys);
-                            else Debug.Warning($"World: could not instantiate {t.Name}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.Warning($"World: failed to instantiate {t.Name}", ex);
-                        }
+                        if (Activator.CreateInstance(t) is SystemBase sys) RegisterSystem(sys);
+                        else Debug.Warning($"World: could not instantiate {t.Name}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.Warning($"World: failed to instantiate {t.Name}", ex);
                     }
                 }
             }
@@ -252,7 +265,7 @@ namespace DivisionEngine
         /// </summary>
         public void RegisterNewSystems()
         {
-            // Match by fully-qualified name, not Type reference. See remarks.
+            // Match by fully-qualified name, not Type reference
             HashSet<string> existingNames = new(StringComparer.Ordinal);
             foreach (SystemBase sys in systems)
             {
@@ -598,29 +611,22 @@ namespace DivisionEngine
         {
             try
             {
-                // Find component type
-                Type? componentType = Type.GetType($"{componentData.TypeName}, {componentData.AssemblyName}") ?? AppDomain.CurrentDomain.GetAssemblies()
-                        .SelectMany(a => a.GetTypes())
-                        .FirstOrDefault(t => t.Name == componentData.TypeName &&
-                                             typeof(IComponent).IsAssignableFrom(t));
+                Type? componentType = ResolveComponentType(componentData);
                 if (componentType == null || !typeof(IComponent).IsAssignableFrom(componentType))
                 {
                     Debug.Error($"Component type not found: {componentData.TypeName}");
                     return;
                 }
 
-                // Create component instance
                 if (Activator.CreateInstance(componentType) is not IComponent component)
                 {
                     Debug.Error($"Failed to create component: {componentData.TypeName}");
                     return;
                 }
 
-                // Deserialize component properties
                 Deserialize.SetComponentProperties(component, componentData.Properties);
 
-                // Add to world, call generic AddComponent
-                var addMethod = GetType().GetMethod("AddComponent")!
+                MethodInfo? addMethod = GetType().GetMethod("AddComponent")!
                     .MakeGenericMethod(componentType);
                 addMethod.Invoke(this, [entityId, component]);
             }
@@ -628,6 +634,78 @@ namespace DivisionEngine
             {
                 Debug.Error($"Failed to load component {componentData.TypeName}", ex);
             }
+        }
+
+        /// <summary>
+        /// Resolves a component type from serialized data, in order of preference:
+        /// <list type="number">
+        ///   <item>Direct Type.GetType — works for engine and framework types whose
+        ///         assembly the default context can resolve.</item>
+        ///   <item>Current script load context — where user-compiled components live.
+        ///         Searched before the general AppDomain scan because the collectible
+        ///         context is invisible to Type.GetType.</item>
+        ///   <item>Every non-dynamic assembly in the AppDomain — wrapped per-assembly
+        ///         so a single bad assembly can't abort the search.</item>
+        /// </list>
+        /// </summary>
+        private static Type? ResolveComponentType(ComponentData componentData)
+        {
+            string qualifiedName = string.IsNullOrEmpty(componentData.AssemblyName)
+                ? componentData.TypeName
+                : $"{componentData.TypeName}, {componentData.AssemblyName}";
+
+            Type? direct = Type.GetType(qualifiedName, throwOnError: false);
+            if (direct != null && typeof(IComponent).IsAssignableFrom(direct)) return direct;
+
+            ScriptLoadContext? scriptContext = ScriptCompilationPipeline.CurrentLoadContext;
+            if (scriptContext != null)
+            {
+                foreach (Assembly asm in scriptContext.LoadedAssemblies)
+                {
+                    Type? t = TryGetType(asm, componentData.TypeName);
+                    if (t != null && typeof(IComponent).IsAssignableFrom(t)) return t;
+                }
+            }
+
+            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic) continue;
+                Type? t = TryGetType(asm, componentData.TypeName);
+                if (t != null && typeof(IComponent).IsAssignableFrom(t)) return t;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Looks up a type in an assembly by full or simple name. Wrapped in
+        /// try/catch because <see cref="Assembly.GetTypes"/> can throw
+        /// <see cref="ReflectionTypeLoadException"/> for assemblies with
+        /// unresolvable dependencies — a common situation when an old script
+        /// assembly is still loaded and holding a stale reference.
+        /// </summary>
+        private static Type? TryGetType(Assembly asm, string name)
+        {
+            try
+            {
+                // Cheap path — no need to enumerate all types.
+                Type? direct = asm.GetType(name, throwOnError: false);
+                if (direct != null) return direct;
+
+                foreach (Type t in asm.GetTypes())
+                    if (t.Name == name || t.FullName == name) return t;
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                // Partial load — check whatever types resolved.
+                foreach (Type? t in ex.Types)
+                    if (t != null && (t.Name == name || t.FullName == name)) return t;
+            }
+            catch
+            {
+                // Some assemblies refuse to enumerate at all. Skip them.
+            }
+            return null;
         }
 
         #endregion

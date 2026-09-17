@@ -28,29 +28,38 @@ namespace DivisionEngine.Editor.Systems
             if (lastSelectedEntity == uint.MaxValue) return;
             if (!needsRefresh && componentsToRefresh.Count == 0) return;
 
+            // During a project transition, the world may not exist. Skip this tick
+            // rather than letting the properties windows query a null world.
+            if (WorldManager.CurrentWorld == null)
+            {
+                componentsToRefresh.Clear();
+                needsRefresh = false;
+                return;
+            }
+
             framesSinceLastRefresh++;
-            if (framesSinceLastRefresh >= 2) // Refresh after 2 frames (allows multiple changes to batch together)
+            if (framesSinceLastRefresh >= 2)
             {
                 framesSinceLastRefresh = 0;
                 needsRefresh = false;
 
-                // Make a copy to avoid modification during iteration
                 HashSet<Type> refreshesToProcess = [.. componentsToRefresh];
                 componentsToRefresh.Clear();
 
                 foreach (Type compType in refreshesToProcess)
-                {
                     foreach (PropertiesWindow? window in PropertiesWindow.GetCurrentWindows())
-                    {
                         window?.RefreshComponent(compType);
-                        Debug.Log("Update transform properties");
-                    }
-                }
             }
         }
 
         public static void OnEntitySelected(uint entityId)
         {
+            if (!W.EntityExists(entityId))
+            {
+                ClearSelection();
+                return;
+            }
+
             lastSelectedEntity = entityId;
             componentsToRefresh.Clear();
             needsRefresh = false;

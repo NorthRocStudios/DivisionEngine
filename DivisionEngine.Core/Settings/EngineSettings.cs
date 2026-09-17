@@ -49,6 +49,9 @@ namespace DivisionEngine.Settings
             VSync = true;
             MaxFPS = 0;
             MouseSensitivity = 0.5f;
+
+            AutoRecompileOnScriptChange = true;
+            ReloadWorldOnRecompile = true;
         }
 
         [JsonIgnore]
@@ -100,6 +103,20 @@ namespace DivisionEngine.Settings
             set => Set(nameof(MouseSensitivity), Math.Clamp(value, 0.01f, 20f));
         }
 
+        [JsonIgnore]
+        public bool AutoRecompileOnScriptChange
+        {
+            get => Get(nameof(AutoRecompileOnScriptChange), true);
+            set => Set(nameof(AutoRecompileOnScriptChange), value);
+        }
+
+        [JsonIgnore]
+        public bool ReloadWorldOnRecompile
+        {
+            get => Get(nameof(ReloadWorldOnRecompile), true);
+            set => Set(nameof(ReloadWorldOnRecompile), value);
+        }
+
         // Ideas for later:
 
         //[JsonIgnore]
@@ -107,13 +124,6 @@ namespace DivisionEngine.Settings
         //{
         //    get => Get(nameof(MaxRaySteps), 128);
         //    set => Set(nameof(MaxRaySteps), value);
-        //}
-
-        //[JsonIgnore]
-        //public bool ShadowsEnabled
-        //{
-        //    get => Get(nameof(ShadowsEnabled), true);
-        //    set => Set(nameof(ShadowsEnabled), value);
         //}
 
         //[JsonIgnore]
@@ -177,13 +187,6 @@ namespace DivisionEngine.Settings
         //{
         //    get => Get(nameof(ShowTutorials), true);
         //    set => Set(nameof(ShowTutorials), value);
-        //}
-
-        //[JsonIgnore]
-        //public int Difficulty
-        //{
-        //    get => Get(nameof(Difficulty), 1);
-        //    set => Set(nameof(Difficulty), Math.Clamp(value, 0, 2));
         //}
 
         /// <summary>

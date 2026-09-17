@@ -44,10 +44,11 @@ namespace DivisionEngine.Serialization
             foreach (FieldInfo field in fields)
             {
                 // Skip certain field modifiers
-                if (field.IsLiteral && !field.IsInitOnly) continue; // const fields
+                if (field.IsLiteral && !field.IsInitOnly) continue;
                 if (field.IsStatic) continue;
-                if (field.IsInitOnly) continue; // skip readonly fields
+                if (field.IsInitOnly) continue;
                 if (field.GetCustomAttribute<NonSerializedAttribute>() != null) continue;
+                if (field.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() != null) continue;
 
                 Type fieldType = field.FieldType;
                 object? fieldVal = field.GetValue(component);
