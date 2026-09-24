@@ -8,6 +8,7 @@
 using ComputeSharp;
 using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Effects;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.AntiAliasing;
 using DivisionEngine.Rendering.Denoising;
 using DivisionEngine.Rendering.Effects;
@@ -486,8 +487,8 @@ namespace DivisionEngine.Rendering
         {
             lock (SyncLock)
             {
-                EmbeddedWidth = Math.Max(1, width);
-                EmbeddedHeight = Math.Max(1, height);
+                EmbeddedWidth = math.max(1, width);
+                EmbeddedHeight = math.max(1, height);
             }
         }
 
@@ -721,8 +722,8 @@ namespace DivisionEngine.Rendering
 
             if (boundWorld == null) return;
             boundWorld.CallRender();
-            int lowResWidth = Math.Max(1, texWidth / 4),
-                lowResHeight = Math.Max(1, texHeight / 4);
+            int lowResWidth = math.max(1, texWidth / 4),
+                lowResHeight = math.max(1, texHeight / 4);
 
             SDFWorldDTO worldDTO;
             SDFObjectDTO[] sdfObjDTO;
@@ -1076,7 +1077,7 @@ namespace DivisionEngine.Rendering
                                 postProcess.bloomKnee,
                                 postProcess.bloomIntensity,
                                 postProcess.bloomRadius,
-                                Math.Max(1, postProcess.bloomPasses),
+                                math.max(1, postProcess.bloomPasses),
                                 currentTexture,
                                 postProcessTex,
                                 bloomBrightTex,
@@ -1245,9 +1246,9 @@ namespace DivisionEngine.Rendering
                     {
                         float4 p = Pixels[srcRowStart + x];
                         int o = (dstRowStart + x) * 4;
-                        embeddedBgraBuffer[o + 0] = (byte)Math.Clamp(p.Z * 255f, 0, 255);
-                        embeddedBgraBuffer[o + 1] = (byte)Math.Clamp(p.Y * 255f, 0, 255);
-                        embeddedBgraBuffer[o + 2] = (byte)Math.Clamp(p.X * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 0] = (byte)math.clamp(p.Z * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 1] = (byte)math.clamp(p.Y * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 2] = (byte)math.clamp(p.X * 255f, 0, 255);
                         embeddedBgraBuffer[o + 3] = 255;
                     }
                 });

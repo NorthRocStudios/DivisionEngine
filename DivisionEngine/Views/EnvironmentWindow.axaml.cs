@@ -11,6 +11,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using DivisionEngine.Editor.Controls;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 using DivisionEngine.Systems;
 using System;
@@ -111,7 +112,7 @@ public partial class EnvironmentWindow : EditorWindow
         }
         widthHeightText = new TextBlock
         {
-            Text = $"(Width {width}px,  Height {height}px,  FPS {Math.Round(TimeSystem.FPS)})",
+            Text = $"(Width {width}px,  Height {height}px,  FPS {math.round(TimeSystem.FPS)})",
             FontSize = 12,
             FontWeight = FontWeight.Regular,
             Foreground = EditorColor.FromRGB(128, 128, 128),
@@ -179,7 +180,7 @@ public partial class EnvironmentWindow : EditorWindow
             int height = (int)bounds.Height;
             double fps = TimeSystem.FPS;
 
-            widthHeightText.Text = $"(Width {width}px,  Height {height}px,  FPS {Math.Round(fps)})";
+            widthHeightText.Text = $"(Width {width}px,  Height {height}px,  FPS {math.round(fps)})";
         }
     }
 

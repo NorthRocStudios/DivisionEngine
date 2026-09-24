@@ -5,6 +5,7 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
+using DivisionEngine.MathLib;
 using System.Text.Json.Serialization;
 
 namespace DivisionEngine.Settings
@@ -100,7 +101,7 @@ namespace DivisionEngine.Settings
         public float MouseSensitivity
         {
             get => Get(nameof(MouseSensitivity), 1f);
-            set => Set(nameof(MouseSensitivity), Math.Clamp(value, 0.01f, 20f));
+            set => Set(nameof(MouseSensitivity), math.clamp(value, 0.01f, 20f));
         }
 
         [JsonIgnore]
@@ -130,35 +131,35 @@ namespace DivisionEngine.Settings
         //public int ShadowQuality
         //{
         //    get => Get(nameof(ShadowQuality), 2);
-        //    set => Set(nameof(ShadowQuality), Math.Clamp(value, 0, 2));
+        //    set => Set(nameof(ShadowQuality), math.clamp(value, 0, 2));
         //}
 
         //[JsonIgnore]
         //public float RenderScale
         //{
         //    get => Get(nameof(RenderScale), 1.0f);
-        //    set => Set(nameof(RenderScale), Math.Clamp(value, 0.25f, 2.0f));
+        //    set => Set(nameof(RenderScale), math.clamp(value, 0.25f, 2.0f));
         //}
 
         //[JsonIgnore]
         //public float MasterVolume
         //{
         //    get => Get(nameof(MasterVolume), 1.0f);
-        //    set => Set(nameof(MasterVolume), Math.Clamp(value, 0f, 1f));
+        //    set => Set(nameof(MasterVolume), math.clamp(value, 0f, 1f));
         //}
 
         //[JsonIgnore]
         //public float MusicVolume
         //{
         //    get => Get(nameof(MusicVolume), 0.8f);
-        //    set => Set(nameof(MusicVolume), Math.Clamp(value, 0f, 1f));
+        //    set => Set(nameof(MusicVolume), math.clamp(value, 0f, 1f));
         //}
 
         //[JsonIgnore]
         //public float SFXVolume
         //{
         //    get => Get(nameof(SFXVolume), 1.0f);
-        //    set => Set(nameof(SFXVolume), Math.Clamp(value, 0f, 1f));
+        //    set => Set(nameof(SFXVolume), math.clamp(value, 0f, 1f));
         //}
 
         //[JsonIgnore]

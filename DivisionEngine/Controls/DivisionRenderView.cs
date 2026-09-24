@@ -14,6 +14,7 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using DivisionEngine.Editor.Systems;
 using DivisionEngine.Input;
+using DivisionEngine.MathLib;
 using System;
 using System.Runtime.InteropServices;
 
@@ -66,16 +67,16 @@ public class DivisionRenderView : Control
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        int w = Math.Max(1, (int)finalSize.Width);
-        int h = Math.Max(1, (int)finalSize.Height);
+        int w = math.max(1, (int)finalSize.Width);
+        int h = math.max(1, (int)finalSize.Height);
         App.Renderer?.SetEmbeddedViewportSize(w, h);
         return base.ArrangeOverride(finalSize);
     }
 
     public override void Render(DrawingContext context)
     {
-        int w = Math.Max(1, (int)Bounds.Width);
-        int h = Math.Max(1, (int)Bounds.Height);
+        int w = math.max(1, (int)Bounds.Width);
+        int h = math.max(1, (int)Bounds.Height);
 
         if (bitmap == null || w != lastWidth || h != lastHeight)
         {
@@ -119,8 +120,8 @@ public class DivisionRenderView : Control
 
             if (dx != 0 || dy != 0)
             {
-                float w = Math.Max(1f, (float)Bounds.Width);
-                float h = Math.Max(1f, (float)Bounds.Height);
+                float w = math.max(1f, (float)Bounds.Width);
+                float h = math.max(1f, (float)Bounds.Height);
                 App.UserInput?.AccumulateMouseUVDelta(new float2(dx / w, dy / h));
 
                 suppressNextMove = true; // the warp below raises its own move - ignore it too

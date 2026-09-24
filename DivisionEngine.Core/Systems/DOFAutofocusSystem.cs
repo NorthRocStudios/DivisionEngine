@@ -7,6 +7,7 @@
 //
 using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Effects;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 
 namespace DivisionEngine.Systems
@@ -70,12 +71,12 @@ namespace DivisionEngine.Systems
                 camera.farClip
             );
 
-            postEffects.focusDistance = Math.Clamp(
+            postEffects.focusDistance = math.clamp(
                 focusDistance,
                 MinFocusDistance,
                 MaxFocusDistance
             );
-            postEffects.focalLength = Math.Max(focalLength, 1f);
+            postEffects.focalLength = math.max(focalLength, 1f);
         }
 
         /// <summary>
@@ -97,7 +98,7 @@ namespace DivisionEngine.Systems
             float focusDistance = depthNormals[centerIndex].X * farPlane;
 
             // Find the closest object within the center region (25% of screen)
-            int regionRadius = (int)(Math.Min(width, height) * 0.125f); // 12.5% radius from center
+            int regionRadius = (int)(math.min(width, height) * 0.125f); // 12.5% radius from center
             float closestDepth = farPlane;
 
             for (int y = (int)centerY - regionRadius; y <= (int)centerY + regionRadius; y++)
@@ -134,8 +135,8 @@ namespace DivisionEngine.Systems
 
             // Calc depth range
             float depthRange = maxDepth - minDepth;
-            float focalLength = Math.Max(depthRange * 0.3f, 5f);
-            focalLength = Math.Min(focalLength, 100f);
+            float focalLength = math.max(depthRange * 0.3f, 5f);
+            focalLength = math.min(focalLength, 100f);
             return (focusDistance, focalLength);
         }
     }

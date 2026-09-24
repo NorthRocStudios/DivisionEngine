@@ -5,6 +5,7 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
+using DivisionEngine.MathLib;
 using DivisionEngine.Projects;
 using DivisionEngine.Projects.Assets;
 using DivisionEngine.Rendering;
@@ -207,8 +208,8 @@ namespace DivisionEngine.Systems
                         try
                         {
                             var (pixels, w, h) = asset.GetPixelData();
-                            int naturalMax = (int)Math.Floor(Math.Log2(Math.Max(w, h))) + 1;
-                            int maxLevels = Math.Clamp(
+                            int naturalMax = (int)math.floor(math.log2(math.max(w, h))) + 1;
+                            int maxLevels = math.clamp(
                                 asset.MaxMipmap <= 0 ? naturalMax : asset.MaxMipmap,
                                 1, naturalMax);
 
@@ -311,8 +312,8 @@ namespace DivisionEngine.Systems
 
             while ((w > 1 || h > 1) && levels.Count < maxLevels)
             {
-                int nw = Math.Max(1, w / 2);
-                int nh = Math.Max(1, h / 2);
+                int nw = math.max(1, w / 2);
+                int nh = math.max(1, h / 2);
                 uint[] next = new uint[nw * nh];
 
                 // Capture for closure clarity - these don't change inside the loops
@@ -321,16 +322,16 @@ namespace DivisionEngine.Systems
 
                 for (int y = 0; y < nh; y++)
                 {
-                    int y0 = Math.Min(y * 2, srcH - 1);
-                    int y1 = Math.Min(y * 2 + 1, srcH - 1);
+                    int y0 = math.min(y * 2, srcH - 1);
+                    int y1 = math.min(y * 2 + 1, srcH - 1);
                     int rowOut = y * nw;
                     int rowIn0 = y0 * srcW;
                     int rowIn1 = y1 * srcW;
 
                     for (int x = 0; x < nw; x++)
                     {
-                        int x0 = Math.Min(x * 2, srcW - 1);
-                        int x1 = Math.Min(x * 2 + 1, srcW - 1);
+                        int x0 = math.min(x * 2, srcW - 1);
+                        int x1 = math.min(x * 2 + 1, srcW - 1);
                         next[rowOut + x] = AveragePixels(
                             src[rowIn0 + x0], src[rowIn0 + x1],
                             src[rowIn1 + x0], src[rowIn1 + x1]);

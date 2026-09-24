@@ -1041,14 +1041,14 @@ namespace DivisionEngine.Editor
                 int oldIndex = sourceTabs.IndexOf(tab);
                 if (oldIndex < 0) return;
                 if (insertIndex > oldIndex) insertIndex--; // account for the item's own removal shift
-                insertIndex = System.Math.Clamp(insertIndex, 0, sourceTabs.Count - 1);
+                insertIndex = math.clamp(insertIndex, 0, sourceTabs.Count - 1);
                 if (insertIndex != oldIndex) sourceTabs.Move(oldIndex, insertIndex);
             }
             else
             {
                 // Moving to a different panel
                 if (!sourceTabs.Remove(tab)) return;
-                insertIndex = System.Math.Clamp(insertIndex, 0, targetTabs.Count);
+                insertIndex = math.clamp(insertIndex, 0, targetTabs.Count);
                 targetTabs.Insert(insertIndex, tab);
 
                 switch (targetPanel)

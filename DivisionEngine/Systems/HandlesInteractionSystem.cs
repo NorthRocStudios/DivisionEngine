@@ -8,6 +8,7 @@
 using DivisionEngine.Components;
 using DivisionEngine.Editor.Settings;
 using DivisionEngine.Input;
+using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Rendering;
 
@@ -148,7 +149,7 @@ namespace DivisionEngine.Editor.Systems
                     lastMousePos = mousePos;
 
                     currentPosition = entityTransform!.position;
-                    distanceToCamera = Math.Sqrt(
+                    distanceToCamera = math.sqrt(
                         (cameraPosition.X - currentPosition.X) * (cameraPosition.X - currentPosition.X) +
                         (cameraPosition.Y - currentPosition.Y) * (cameraPosition.Y - currentPosition.Y) +
                         (cameraPosition.Z - currentPosition.Z) * (cameraPosition.Z - currentPosition.Z)
@@ -166,7 +167,7 @@ namespace DivisionEngine.Editor.Systems
 
                     // Use the entity's position for distance calculation
                     float3 entityPos = entityTransform.position;
-                    distanceToCamera = Math.Sqrt(
+                    distanceToCamera = math.sqrt(
                         (cameraPosition.X - entityPos.X) * (cameraPosition.X - entityPos.X) +
                         (cameraPosition.Y - entityPos.Y) * (cameraPosition.Y - entityPos.Y) +
                         (cameraPosition.Z - entityPos.Z) * (cameraPosition.Z - entityPos.Z)
@@ -234,7 +235,7 @@ namespace DivisionEngine.Editor.Systems
                         RenderPipeline.Instance?.ShowHandles(transform.position, EditorSettings.Instance!.EditorHandleScale);
 
                         // Update distance as we move
-                        distanceToCamera = Math.Sqrt(
+                        distanceToCamera = math.sqrt(
                             (cameraPosition.X - currentPosition.X) * (cameraPosition.X - currentPosition.X) +
                             (cameraPosition.Y - currentPosition.Y) * (cameraPosition.Y - currentPosition.Y) +
                             (cameraPosition.Z - currentPosition.Z) * (cameraPosition.Z - currentPosition.Z)
@@ -251,13 +252,13 @@ namespace DivisionEngine.Editor.Systems
                         switch (selectedHandle)
                         {
                             case 5: // X Scale (orange square)
-                                newScale.X = Math.Max(0.01f, currentScale.X + scaleDelta);
+                                newScale.X = math.max(0.01f, currentScale.X + scaleDelta);
                                 break;
                             case 6: // Y Scale (green square)
-                                newScale.Y = Math.Max(0.01f, currentScale.Y + scaleDelta);
+                                newScale.Y = math.max(0.01f, currentScale.Y + scaleDelta);
                                 break;
                             case 7: // Z Scale (blue square)
-                                newScale.Z = Math.Max(0.01f, currentScale.Z + scaleDelta);
+                                newScale.Z = math.max(0.01f, currentScale.Z + scaleDelta);
                                 break;
                         }
 
@@ -324,7 +325,7 @@ namespace DivisionEngine.Editor.Systems
             );
 
             // Normalize the screen axis to get direction
-            float screenAxisLength = Math.Sqrt(screenAxis.X * screenAxis.X + screenAxis.Y * screenAxis.Y);
+            float screenAxisLength = math.sqrt(screenAxis.X * screenAxis.X + screenAxis.Y * screenAxis.Y);
             if (screenAxisLength > 0.001f)
                 screenAxis = new float2(screenAxis.X / screenAxisLength, screenAxis.Y / screenAxisLength);
             else screenAxis = selectedHandle == 1 ? new float2(1, 0) : new float2(0, 1);
@@ -384,7 +385,7 @@ namespace DivisionEngine.Editor.Systems
                 camTransform.Forward.Y + camTransform.Right.Y * px + camTransform.Up.Y * py,
                 camTransform.Forward.Z + camTransform.Right.Z * px + camTransform.Up.Z * py);
 
-            float len = Math.Sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
+            float len = math.sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
             if (len > 0.0001f) dir = new float3(dir.X / len, dir.Y / len, dir.Z / len);
             return dir;
         }
@@ -392,7 +393,7 @@ namespace DivisionEngine.Editor.Systems
         private static float ComputeRingAngle(float3 rayOrigin, float3 rayDir, float3 center, float3 axis, float3 planeU, float3 planeV)
         {
             float denom = Vector.Dot(rayDir, axis);
-            if (Math.Abs(denom) < 0.0001f) return float.NaN;
+            if (math.abs(denom) < 0.0001f) return float.NaN;
 
             float3 toCenter = new float3(center.X - rayOrigin.X, center.Y - rayOrigin.Y, center.Z - rayOrigin.Z);
             float t = Vector.Dot(toCenter, axis) / denom;
@@ -403,7 +404,7 @@ namespace DivisionEngine.Editor.Systems
 
             float u = Vector.Dot(rel, planeU);
             float v = Vector.Dot(rel, planeV);
-            return Math.Atan2(v, u);
+            return math.atan2(v, u);
         }
     }
 }

@@ -5,6 +5,7 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 using SkiaSharp;
 
@@ -47,7 +48,7 @@ namespace DivisionEngine.Projects.Assets
                     };
 
                 if (props.TryGetValue("MaxMipmap", out object? m) && int.TryParse(m.ToString(), out int mip))
-                    MaxMipmap = Math.Clamp(mip, 0, 16);
+                    MaxMipmap = math.clamp(mip, 0, 16);
 
                 if (props.TryGetValue("CubemapLayout", out object? layoutObj) &&
                     Enum.TryParse(layoutObj.ToString(), out CubemapLayout layout))
