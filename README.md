@@ -41,8 +41,8 @@ Check them out here:
 - [ComputeSharp](https://github.com/Sergio0694/ComputeSharp)
 - [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia)
 
-> **Upcoming Change:** In a future release, **ComputeSharp will be replaced by [DivisionTranslate](https://github.com/NorthRocStudios/DivisionTranslate) and [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)**.  
-> DivisionTranslate will provide a shader compiler and translator, while DivisionMath will offer a unified math API. Together, they will deliver the full functionality of ComputeSharp and more with improved cross-platform support, CPU/GPU parity, and a consistent math layer for both CPU and GPU code.
+> **Upcoming Change:** In a future release, **ComputeSharp will be replaced by [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) and [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)**.  
+> DivisionCompute will provide a shader compiler and translator, while DivisionMath will offer a unified math API. Together, they will deliver the full functionality of ComputeSharp and more with improved cross-platform support, CPU/GPU parity, and a consistent math layer for both CPU and GPU code.
 
 ## Resources:
 Follow the development: https://trello.com/b/mWtyHBMf/division-engine
