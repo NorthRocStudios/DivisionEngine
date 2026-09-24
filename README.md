@@ -6,8 +6,9 @@
 
 [![Version](https://img.shields.io/github/v/release/DivisionEngine/DivisionEngine?label=Version&include_prereleases)](https://github.com/DivisionEngine/DivisionEngine/releases)
 [![License](https://img.shields.io/github/license/DivisionEngine/DivisionEngine)](LICENSE.txt)
-[![.NET](https://img.shields.io/badge/.NET-9.0-purple)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
 [![AvaloniaUI](https://img.shields.io/badge/Avalonia-UI-blue)](https://avaloniaui.net/)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Rex-J-W)
 
 </div>
 
@@ -40,6 +41,9 @@ Check them out here:
 - [Silk.NET](https://github.com/dotnet/Silk.NET)
 - [ComputeSharp](https://github.com/Sergio0694/ComputeSharp)
 - [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia)
+
+> **Upcoming Change:** In a future release, **ComputeSharp will be replaced by [DivisionTranslate](https://github.com/NorthRocStudios/DivisionTranslate) and [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)**.  
+> DivisionTranslate will provide a shader compiler and translator, while DivisionMath will offer a unified math API. Together, they will deliver the full functionality of ComputeSharp and more with improved cross-platform support, CPU/GPU parity, and a consistent math layer for both CPU and GPU code.
 
 ## Resources:
 Follow the development: https://trello.com/b/mWtyHBMf/division-engine
@@ -91,3 +95,8 @@ Texturing System:
 Multiple Workflows:
 <img width="1919" height="1028" alt="Screenshot 2026-09-02 020709" src="https://github.com/user-attachments/assets/353f6bb6-527a-4336-99b2-01b55e936383" />
 
+## Sponsor
+
+If you find Division Engine useful, consider supporting development:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Rex-J-W)
