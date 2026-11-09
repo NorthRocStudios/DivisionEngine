@@ -5,8 +5,6 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using DivisionEngine.MathLib;
-
 namespace DivisionEngine.Audio
 {
     /// <summary>

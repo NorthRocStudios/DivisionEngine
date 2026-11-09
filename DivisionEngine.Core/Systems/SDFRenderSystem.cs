@@ -124,6 +124,23 @@ namespace DivisionEngine.Systems
                 worldData.skyType = (int)environment.skyType;
                 worldData.skyIntensity = environment.skyIntensity;
 
+                // Procedural (physically based) sky
+                worldData.planetRadius = environment.planetRadius;
+                worldData.atmosphereHeight = environment.atmosphereHeight;
+                worldData.atmosphereDensity = environment.atmosphereDensity;
+                worldData.atmosphereExposure = environment.atmosphereExposure;
+                worldData.mieAnisotropy = environment.mieAnisotropy;
+                worldData.sunDiscSize = environment.sunDiscSize;
+                worldData.sunFalloff = environment.sunFalloff;
+                worldData.sunIntensity = environment.sunIntensity;
+                worldData.sunColor = environment.sunColor;
+                worldData.cloudCoverage = environment.cloudCoverage;
+                worldData.cloudDensity = environment.cloudDensity;
+                worldData.cloudBaseHeight = environment.cloudBaseHeight;
+                worldData.cloudThickness = environment.cloudThickness;
+                worldData.cloudScale = environment.cloudScale;
+                worldData.cloudSpeed = environment.cloudSpeed;
+
                 // Wind
                 worldData.windDirection = environment.windDirection;
                 worldData.windStrength = environment.windStrength;
@@ -410,4 +427,7 @@ namespace DivisionEngine.Systems
         }
     }
 }
+
+
+
 

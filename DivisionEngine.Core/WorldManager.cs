@@ -33,6 +33,16 @@ namespace DivisionEngine
         /// </summary>
         /// <param name="makeCurrent">Makes the newly created default world the current world</param>
         /// <returns>The new default world</returns>
+        /// <summary>
+        /// Returns the currently loaded world, warning when none exists. Editor code
+        /// that needs a world should call this instead of repeating the null check.
+        /// </summary>
+        public static World? RequireCurrentWorld()
+        {
+            World? world = CurrentWorld;
+            if (world == null) Debug.Warning("No world is currently loaded to add entities to");
+            return world;
+        }
         public static World CreateDefaultWorld(bool makeCurrent)
         {
             World newDefaultWorld = new World("default");
@@ -162,7 +172,6 @@ namespace DivisionEngine
             });
             newDefaultWorld.AddComponent(boxEntity, new Shadows());
             newDefaultWorld.AddComponent(boxEntity, new Reflections());
-
             // Create world
             SetWorld(newDefaultWorld);
             if (makeCurrent)
@@ -263,6 +272,20 @@ namespace DivisionEngine
         #endregion playModeSpecific
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

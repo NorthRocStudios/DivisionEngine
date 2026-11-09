@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -9,13 +9,13 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using DivisionEngine.Editor.ViewModels;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects.Assets;
 using Material.Icons;
 using Material.Icons.Avalonia;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 
@@ -160,7 +160,30 @@ namespace DivisionEngine.Editor
 
         public static MenuItem CreateContextMenuItem(string text, MaterialIconKind icon, Action action, IBrush? foreground = null)
         {
-            MenuItem menuItem = new MenuItem
+            MenuItem menuItem = CreateSubmenuHeader(text, icon, foreground);
+            menuItem.Click += (s, e) => action();
+            return menuItem;
+        }
+
+        /// <summary>
+        /// Creates a submenu whose header shows an icon and label, populated with
+        /// the supplied items. Mirrors <see cref="CreateContextMenuItem"/> so nested
+        /// menus look identical to flat ones.
+        /// </summary>
+        /// <param name="text">Submenu label</param>
+        /// <param name="icon">Submenu icon</param>
+        /// <param name="items">Items to place inside the submenu</param>
+        /// <param name="foreground">Optional text/icon brush</param>
+        public static MenuItem CreateSubmenu(string text, MaterialIconKind icon, IEnumerable<MenuItem> items, IBrush? foreground = null)
+        {
+            MenuItem submenu = CreateSubmenuHeader(text, icon, foreground);
+            foreach (MenuItem item in items) submenu.Items.Add(item);
+            return submenu;
+        }
+
+        private static MenuItem CreateSubmenuHeader(string text, MaterialIconKind icon, IBrush? foreground)
+        {
+            return new MenuItem
             {
                 Header = new StackPanel
                 {
@@ -184,8 +207,6 @@ namespace DivisionEngine.Editor
                 },
                 Foreground = foreground ?? Brushes.White,
             };
-            menuItem.Click += (s, e) => action();
-            return menuItem;
         }
 
         /// <summary>
@@ -243,3 +264,4 @@ namespace DivisionEngine.Editor
         }
     }
 }
+

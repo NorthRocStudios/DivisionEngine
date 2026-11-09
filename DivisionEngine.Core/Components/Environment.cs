@@ -68,6 +68,35 @@ namespace DivisionEngine.Components
         [Header("HDRI Sky")]
         public AssetRef<TextureAsset> hdriMap = default;
 
+        [Header("Procedural Sky")]
+        [Tooltip("Planet radius in world units")]
+        [Min(1f)] public float planetRadius = 6371000f;
+        [Tooltip("Atmosphere shell thickness in world units")]
+        [Min(1f)] public float atmosphereHeight = 60000f;
+        [Tooltip("Overall atmosphere density")]
+        [Range(0f, 5f)] public float atmosphereDensity = 1f;
+        [Tooltip("Exposure multiplier for the atmosphere radiance")]
+        [Min(0f)] public float atmosphereExposure = 12f;
+        [Tooltip("Mie forward-scattering term")]
+        [Range(-0.99f, 0.99f)] public float mieAnisotropy = 0.6f;
+
+        [Header("Sun")]
+        [Tooltip("Sun angular radius in radians")]
+        [Range(0.001f, 0.2f)] public float sunDiscSize = 0.0093f;
+        [Tooltip("Soft edge width of the sun disc in radians")]
+        [Range(0.001f, 0.2f)] public float sunFalloff = 0.010f;
+        [Tooltip("Sun radiance multiplier")]
+        [Min(0f)] public float sunIntensity = 8f;
+        [Color(false)] public float4 sunColor = new float4(1f, 0.95f, 0.85f, 1f);
+
+        [Header("Clouds")]
+        [Range(0f, 1f)] public float cloudCoverage = 0.40f;
+        [Min(0f)] public float cloudDensity = 1.2f;
+        [Min(0f)] public float cloudBaseHeight = 400f;
+        [Min(1f)] public float cloudThickness = 900f;
+        [Min(0.00001f)] public float cloudScale = 0.0012f;
+        [Min(0f)] public float cloudSpeed = 1f;
+
         [Header("Wind")]
         public float2 windDirection = new float2(0.5f, 0.5f);
         [Range(0f, 1f)] public float windStrength = 0.3f;
@@ -85,9 +114,34 @@ namespace DivisionEngine.Components
             topSkyColor = topSkyColor,
             hdriMap = hdriMap,
 
+            planetRadius = planetRadius,
+            atmosphereHeight = atmosphereHeight,
+            atmosphereDensity = atmosphereDensity,
+            atmosphereExposure = atmosphereExposure,
+            mieAnisotropy = mieAnisotropy,
+            sunDiscSize = sunDiscSize,
+            sunFalloff = sunFalloff,
+            sunIntensity = sunIntensity,
+            sunColor = sunColor,
+            cloudCoverage = cloudCoverage,
+            cloudDensity = cloudDensity,
+            cloudBaseHeight = cloudBaseHeight,
+            cloudThickness = cloudThickness,
+            cloudScale = cloudScale,
+            cloudSpeed = cloudSpeed,
+
             windDirection = windDirection,
             windStrength = windStrength,
             windFrequency = windFrequency,
         };
     }
 }
+
+
+
+
+
+
+
+
+

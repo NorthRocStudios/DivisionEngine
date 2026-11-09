@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -33,6 +33,23 @@ namespace DivisionEngine.Rendering
         public int maxRaySteps; // 4b
         public int maxShadowRaySteps; // 4b
         public float3 mainLightDir; // 12b - precalculate main light direction
+
+        // Procedural (physically based) sky
+        public float planetRadius; // 4b
+        public float atmosphereHeight; // 4b
+        public float atmosphereDensity; // 4b
+        public float atmosphereExposure; // 4b
+        public float mieAnisotropy; // 4b
+        public float sunDiscSize; // 4b
+        public float sunFalloff; // 4b
+        public float sunIntensity; // 4b
+        public float4 sunColor; // 16b
+        public float cloudCoverage; // 4b
+        public float cloudDensity; // 4b
+        public float cloudBaseHeight; // 4b
+        public float cloudThickness; // 4b
+        public float cloudScale; // 4b
+        public float cloudSpeed; // 4b
 
         // Misc Properties
         public float time; // 4b
@@ -141,3 +158,6 @@ namespace DivisionEngine.Rendering
         public float size;        // Original terrain scale
     }
 }
+
+
+

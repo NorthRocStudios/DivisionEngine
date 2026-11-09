@@ -484,25 +484,13 @@ public partial class WorldWindow : EditorWindow
 
         foreach (var type in entityTypes)
         {
-            MenuItem entityItem = new MenuItem
-            {
-                Header = type.Value.DisplayName,
-                Icon = new MaterialIcon { Kind = type.Value.Icon, Width = 16, Height = 16 },
-                Foreground = Brushes.White,
-            };
-            entityItem.Click += (s, e) => EditorUI.CreateEntityStatic(type.Key);
-            backgroundContextMenu.Items.Add(entityItem);
+            backgroundContextMenu.Items.Add(
+                EditorUI.CreateContextMenuItem(type.Value.DisplayName, type.Value.Icon,
+                    () => EditorUI.CreateEntityStatic(type.Key)));
         }
 
         // SDF fractals live in their own section next to the primitives
         backgroundContextMenu.Items.Add(new Separator());
-
-        MenuItem fractalsMenu = new MenuItem
-        {
-            Header = "SDF Fractals",
-            Icon = new MaterialIcon { Kind = MaterialIconKind.Shape, Width = 16, Height = 16 },
-            Foreground = Brushes.White,
-        };
 
         var fractalTypes = new Dictionary<string, (string DisplayName, MaterialIconKind Icon)>
         {
@@ -511,19 +499,16 @@ public partial class WorldWindow : EditorWindow
             ["mandelbox"] = ("Mandelbox", MaterialIconKind.Cube),
         };
 
+        List<MenuItem> fractalItems = [];
         foreach (var type in fractalTypes)
         {
-            MenuItem fractalItem = new MenuItem
-            {
-                Header = type.Value.DisplayName,
-                Icon = new MaterialIcon { Kind = type.Value.Icon, Width = 16, Height = 16 },
-                Foreground = Brushes.White,
-            };
-            fractalItem.Click += (s, e) => EditorUI.CreateEntityStatic(type.Key);
-            fractalsMenu.Items.Add(fractalItem);
+            fractalItems.Add(
+                EditorUI.CreateContextMenuItem(type.Value.DisplayName, type.Value.Icon,
+                    () => EditorUI.CreateEntityStatic(type.Key)));
         }
 
-        backgroundContextMenu.Items.Add(fractalsMenu);
+        backgroundContextMenu.Items.Add(
+            EditorUI.CreateSubmenu("SDF Fractals", MaterialIconKind.Shape, fractalItems));
 
         scrollViewer.ContextMenu = backgroundContextMenu;
     }

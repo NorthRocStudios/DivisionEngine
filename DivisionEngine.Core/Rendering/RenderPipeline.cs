@@ -541,6 +541,22 @@ namespace DivisionEngine.Rendering
 
         #endregion embeddedRendering
 
+        /// <summary>
+        /// Renders one frame offscreen and leaves the colour buffer in <see cref="Pixels"/>.
+        /// Used by the Division CLI screenshot command.
+        /// </summary>
+        public float4[]? RenderSingleFrame(int width, int height)
+        {
+            Device ??= GraphicsDevice.GetDefault();
+            if (boundWorld == null) BindCurrentWorld();
+            if (boundWorld == null) throw new InvalidOperationException("No world is bound.");
+
+            // Render a couple of frames so lazily created buffers are warm.
+            RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+            RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+            return Pixels;
+        }
+
         #region benchmark
 
         /// <summary>
@@ -911,10 +927,14 @@ namespace DivisionEngine.Rendering
 
                     if (rebuildTerrainBuffer && TerrainSystem.AllTerrainData != null && TerrainSystem.AllTerrainMetadata != null)
                     {
+                        // Scenes without terrain still need non-empty buffers to bind.
+                        float[] heights = TerrainSystem.AllTerrainData is { Length: > 0 } h ? h : new float[1];
+                        TerrainDTO[] metas = TerrainSystem.AllTerrainMetadata is { Length: > 0 } m ? m : new TerrainDTO[1];
+
                         terrainHeightBuffer?.Dispose();
-                        terrainHeightBuffer = Device?.AllocateReadOnlyBuffer(TerrainSystem.AllTerrainData);
+                        terrainHeightBuffer = Device?.AllocateReadOnlyBuffer(heights);
                         terrainMetadataBuffer?.Dispose();
-                        terrainMetadataBuffer = Device?.AllocateReadOnlyBuffer(TerrainSystem.AllTerrainMetadata);
+                        terrainMetadataBuffer = Device?.AllocateReadOnlyBuffer(metas);
                         rebuildTerrainBuffer = false;
                     }
 
@@ -1499,3 +1519,5 @@ namespace DivisionEngine.Rendering
         }
     }
 }
+
+

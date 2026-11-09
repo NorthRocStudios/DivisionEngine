@@ -789,10 +789,37 @@ namespace DivisionEngine
         private float3 GetSkyColor(float3 viewDir)
         {
             SDFWorldDTO world = worldData[0];
-            if (world.skyType == 0) return AddAtmosphericScattering(viewDir, world.skyColor.RGB * world.skyIntensity, world.mainLightDir);
-            else if (world.skyType == 1) return AddAtmosphericScattering(viewDir, GetGradientSkyColor(viewDir, world), world.mainLightDir);
-            else if (world.skyType == 2) return GetHDRISkyColor(viewDir, world);
-            return world.skyColor.RGB * world.skyIntensity;
+            if (world.skyType == 3)
+                return AtmosphereMath.ProceduralSky(viewDir, world.mainLightDir, world.sunColor.RGB,
+                    world.planetRadius, world.atmosphereHeight, world.atmosphereDensity, world.mieAnisotropy,
+                    1e9f, world.sunDiscSize, world.sunFalloff, world.sunIntensity, world.atmosphereExposure,
+                    world.cloudCoverage, world.cloudDensity, world.cloudBaseHeight, world.cloudThickness,
+                    world.cloudScale, world.cloudSpeed, world.time);
+
+            float3 sky;
+            if (world.skyType == 0) sky = AddAtmosphericScattering(viewDir, world.skyColor.RGB * world.skyIntensity, world.mainLightDir);
+            else if (world.skyType == 1) sky = AddAtmosphericScattering(viewDir, GetGradientSkyColor(viewDir, world), world.mainLightDir);
+            else if (world.skyType == 2) sky = GetHDRISkyColor(viewDir, world);
+            else sky = world.skyColor.RGB * world.skyIntensity;
+
+            return AddSun(sky, viewDir, world);
+        }
+
+        /// <summary>
+        /// Adds a limb-darkened sun disc plus a soft halo on top of any sky type.
+        /// </summary>
+        private static float3 AddSun(float3 sky, float3 viewDir, SDFWorldDTO world)
+        {
+            float3 sunDir = Hlsl.Normalize(world.mainLightDir + new float3(1e-5f, 1e-5f, 1e-5f));
+            float3 sunColor = world.sunColor.RGB * world.sunIntensity;
+
+            float disc = AtmosphereMath.LimbDarkenedSun(viewDir, sunDir, world.sunDiscSize, world.sunFalloff);
+            float sunAmount = Hlsl.Saturate(Hlsl.Dot(viewDir, sunDir));
+
+            // Disc plus a broad glow so the sun reads on bright HDRI skies too
+            sky += sunColor * disc * 40f;
+            sky += sunColor * Hlsl.Pow(sunAmount, 16f) * 0.08f;
+            return sky;
         }
 
         /// <summary>
@@ -1510,5 +1537,9 @@ namespace DivisionEngine
         #endregion main
     }
 }
+
+
+
+
 
 

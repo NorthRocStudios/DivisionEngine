@@ -13,7 +13,6 @@ using DivisionEngine.Components.SDFs.Effects;
 using DivisionEngine.Components.SDFs.Fractals;
 using DivisionEngine.Components.SDFs.Primitives;
 using DivisionEngine.Editor.Undo;
-using DivisionEngine.MathLib;
 using Environment = DivisionEngine.Components.Environment;
 
 namespace DivisionEngine.Editor
@@ -174,62 +173,40 @@ namespace DivisionEngine.Editor
         /// </summary>
         private const float FractalDefaultScale = 1.75f;
 
-        public static uint SDFMandelbulb(string name = "New Mandelbulb")
+        /// <summary>
+        /// Creates an entity with a transform and the supplied components, registers it
+        /// with the undo stack and selects it. Unity equivalent: GameObject + AddComponent.
+        /// </summary>
+        private static uint CreateEntity(string name, params IComponent[] components)
         {
-            if (WorldManager.CurrentWorld == null)
-            {
-                Debug.Warning("No world is currently loaded to add entities to");
-                return uint.MaxValue;
-            }
-            uint sdf = W.CreateTransformEntity(name);
-            W.AddComponent(sdf, new SDFMandelbulb());
-            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
-            W.AddComponent(sdf, new SDFMaterial());
-            W.AddComponent(sdf, new Shadows());
-            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
-            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
-            UndoManager.Execute(command);
-            Selection.SelectEntity(sdf);
-            return sdf;
+            World? world = WorldManager.RequireCurrentWorld();
+            if (world == null) return uint.MaxValue;
+
+            uint entity = W.CreateTransformEntity(name);
+            foreach (IComponent component in components) W.AddComponent(entity, component);
+
+            var cloned = world.GetClonedComponents(entity);
+            UndoManager.Execute(new AddEntityCommand(entity, cloned, name));
+            Selection.SelectEntity(entity);
+            return entity;
         }
 
-        public static uint SDFMengerSponge(string name = "New Menger Sponge")
+        /// <summary>
+        /// Creates a fractal entity with the default material/shadow components and
+        /// the uniform scale shared by every fractal preset.
+        /// </summary>
+        private static uint CreateFractal(string name, IComponent fractal)
         {
-            if (WorldManager.CurrentWorld == null)
-            {
-                Debug.Warning("No world is currently loaded to add entities to");
-                return uint.MaxValue;
-            }
-            uint sdf = W.CreateTransformEntity(name);
-            W.AddComponent(sdf, new SDFMengerSponge());
-            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
-            W.AddComponent(sdf, new SDFMaterial());
-            W.AddComponent(sdf, new Shadows());
-            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
-            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
-            UndoManager.Execute(command);
-            Selection.SelectEntity(sdf);
-            return sdf;
+            uint entity = CreateEntity(name, fractal, new SDFMaterial(), new Shadows());
+            if (entity != uint.MaxValue)
+                W.GetComponent<Transform>(entity)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
+            return entity;
         }
+        public static uint SDFMandelbulb(string name = "New Mandelbulb") => CreateFractal(name, new SDFMandelbulb());
 
-        public static uint SDFMandelbox(string name = "New Mandelbox")
-        {
-            if (WorldManager.CurrentWorld == null)
-            {
-                Debug.Warning("No world is currently loaded to add entities to");
-                return uint.MaxValue;
-            }
-            uint sdf = W.CreateTransformEntity(name);
-            W.AddComponent(sdf, new SDFMandelbox());
-            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
-            W.AddComponent(sdf, new SDFMaterial());
-            W.AddComponent(sdf, new Shadows());
-            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
-            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
-            UndoManager.Execute(command);
-            Selection.SelectEntity(sdf);
-            return sdf;
-        }
+        public static uint SDFMengerSponge(string name = "New Menger Sponge") => CreateFractal(name, new SDFMengerSponge());
+
+        public static uint SDFMandelbox(string name = "New Mandelbox") => CreateFractal(name, new SDFMandelbox());
 
         public static uint SDFBox(string name = "New Box")
         {
@@ -394,4 +371,6 @@ namespace DivisionEngine.Editor
         }
     }
 }
+
+
 

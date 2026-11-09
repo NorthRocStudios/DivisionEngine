@@ -8,7 +8,6 @@
 using DivisionEngine.Audio;
 using DivisionEngine.Components;
 using DivisionEngine.Components.Audio;
-using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects;
 using DivisionEngine.Projects.Assets;
