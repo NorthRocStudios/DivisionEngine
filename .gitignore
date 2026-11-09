@@ -365,3 +365,8 @@ FodyWeavers.xsd
 /DivisionKey.snk
 /DivisionEngine.Core/Rendering/ShaderUtilities/AtmosphereMath.cs
 /.dsh-scratch
+
+# DocFX build output (API pages are generated on every docs build)
+Docs/api/
+Docs/_site/
+Docs/.docfx/

@@ -1,0 +1,38 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": [
+            "DivisionEngine.Core/DivisionEngine.Core.csproj",
+            "DivisionEngine/DivisionEngine.Editor.csproj",
+            "DivisionEngine.Player/DivisionEngine.Player.csproj"
+          ],
+          "src": ".."
+        }
+      ],
+      "dest": "api"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["api/**.yml", "api/*.md"]
+      },
+      {
+        "files": ["index.md", "toc.yml", "articles/**.md", "articles/toc.yml"]
+      }
+    ],
+    "template": ["default", "modern"],
+    "globalMetadata": {
+      "_appTitle": "Division Engine",
+      "_appFooter": "Division Engine - SDF game engine documentation",
+      "_enableSearch": true,
+      "_gitContribute": {
+        "repo": "https://github.com/Rex-J-W/DivisionEngine",
+        "branch": "main"
+      }
+    },
+    "dest": "_site"
+  }
+}
