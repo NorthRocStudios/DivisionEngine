@@ -143,6 +143,9 @@ namespace DivisionEngine.Editor
                     "cylinder" => DefaultEntities.SDFCylinder(),
                     "capsule" => DefaultEntities.SDFCapsule(),
                     "cone" => DefaultEntities.SDFCone(),
+                    "mandelbulb" => DefaultEntities.SDFMandelbulb(),
+                    "mengersponge" => DefaultEntities.SDFMengerSponge(),
+                    "mandelbox" => DefaultEntities.SDFMandelbox(),
                     "terrain" => DefaultEntities.Terrain(),
                     _ => DefaultEntities.EmptyTransform()
                 };

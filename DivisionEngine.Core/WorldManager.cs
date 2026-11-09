@@ -98,6 +98,36 @@ namespace DivisionEngine
                 }
             }
 
+            // Default scene fractals (remove these two entities if you do not want
+            // them in newly created projects)
+            uint mandelbulbEntity = newDefaultWorld.CreateEntity("Mandelbulb");
+            newDefaultWorld.AddComponent(mandelbulbEntity, new Transform
+            {
+                position = new float3(-4.5f, 2.5f, 0f),
+                scaling = new float3(1.75f, 1.75f, 1.75f),
+            });
+            newDefaultWorld.AddComponent(mandelbulbEntity, new Components.SDFs.Fractals.SDFMandelbulb());
+            newDefaultWorld.AddComponent(mandelbulbEntity, new SDFMaterial
+            {
+                albedoColor = ColorPalette.Khaki,
+                roughness = 0.35f,
+            });
+            newDefaultWorld.AddComponent(mandelbulbEntity, new Shadows());
+
+            uint mengerEntity = newDefaultWorld.CreateEntity("MengerSponge");
+            newDefaultWorld.AddComponent(mengerEntity, new Transform
+            {
+                position = new float3(4.5f, 2.5f, 0f),
+                scaling = new float3(1.75f, 1.75f, 1.75f),
+            });
+            newDefaultWorld.AddComponent(mengerEntity, new Components.SDFs.Fractals.SDFMengerSponge());
+            newDefaultWorld.AddComponent(mengerEntity, new SDFMaterial
+            {
+                albedoColor = ColorPalette.Coral,
+                roughness = 0.3f,
+            });
+            newDefaultWorld.AddComponent(mengerEntity, new Shadows());
+
             // Terrain
             uint terrainEntity = newDefaultWorld.CreateEntity("Terrain");
             newDefaultWorld.AddComponent(terrainEntity, new Transform
@@ -233,3 +263,4 @@ namespace DivisionEngine
         #endregion playModeSpecific
     }
 }
+

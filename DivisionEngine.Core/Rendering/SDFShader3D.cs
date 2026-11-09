@@ -372,6 +372,12 @@ namespace DivisionEngine
             else if (type == 6) return SDFPrimitives.Cylinder(localPt, parameters.X, parameters.Y);
             else if (type == 7) return SDFPrimitives.Capsule(localPt, parameters.X, parameters.Y);
             else if (type == 8) return SDFPrimitives.Cone(localPt, parameters.XY, parameters.Z);
+            else if (type == 10) return SDFPrimitives.Mandelbulb(localPt,
+                Hlsl.Clamp(parameters.X, 2f, 16f), (int)Hlsl.Clamp(parameters.Y, 1f, 12f), Hlsl.Max(parameters.Z, 1.1f));
+            else if (type == 11) return SDFPrimitives.MengerSponge(localPt,
+                Hlsl.Max(parameters.X, 0.05f), Hlsl.Max(parameters.Y, 2f), (int)Hlsl.Clamp(parameters.Z, 0f, 6f));
+            else if (type == 12) return SDFPrimitives.Mandelbox(localPt,
+                parameters.X, parameters.Y, parameters.Z, (int)Hlsl.Clamp(parameters.W, 1f, 16f));
             else return SDFPrimitives.Sphere(localPt, parameters.X);
         }
 

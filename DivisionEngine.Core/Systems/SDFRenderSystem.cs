@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -10,6 +10,7 @@ using DivisionEngine.Components;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.Components.SDFs;
 using DivisionEngine.Components.SDFs.Effects;
+using DivisionEngine.Components.SDFs.Fractals;
 using DivisionEngine.Components.SDFs.Primitives;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
@@ -335,6 +336,29 @@ namespace DivisionEngine.Systems
                     SDFCone cone = W.GetComponent<SDFCone>(id)!;
                     curSDF.type = 8; // Cone type
                     curSDF.parameters = new float4(cone.cone.X, cone.cone.Y, cone.height, 0f);
+                    sdfObjects.Add(curSDF);
+                }
+
+                // Fractals
+                if (W.HasComponent<SDFMandelbulb>(id))
+                {
+                    SDFMandelbulb mandelbulb = W.GetComponent<SDFMandelbulb>(id)!;
+                    curSDF.type = 10; // Mandelbulb type
+                    curSDF.parameters = new float4(mandelbulb.power, mandelbulb.iterations, mandelbulb.bailout, 0f);
+                    sdfObjects.Add(curSDF);
+                }
+                if (W.HasComponent<SDFMengerSponge>(id))
+                {
+                    SDFMengerSponge sponge = W.GetComponent<SDFMengerSponge>(id)!;
+                    curSDF.type = 11; // Menger sponge type
+                    curSDF.parameters = new float4(sponge.size, sponge.holeScale, sponge.iterations, 0f);
+                    sdfObjects.Add(curSDF);
+                }
+                if (W.HasComponent<SDFMandelbox>(id))
+                {
+                    SDFMandelbox mandelbox = W.GetComponent<SDFMandelbox>(id)!;
+                    curSDF.type = 12; // Mandelbox type
+                    curSDF.parameters = new float4(mandelbox.scale, mandelbox.minRadius, mandelbox.foldLimit, mandelbox.iterations);
                     sdfObjects.Add(curSDF);
                 }
 

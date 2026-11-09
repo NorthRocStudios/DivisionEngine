@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -248,5 +248,139 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
 
         #endregion terrain
+
+        #region fractals
+
+        /// <summary>
+        /// Wraps each component of a vector into the range [0, period).
+        /// </summary>
+        /// <param name="x">Input vector</param>
+        /// <param name="period">Wrap period</param>
+        /// <returns>Wrapped vector</returns>
+        public static float3 Mod(float3 x, float period) => x - period * Hlsl.Floor(x / period);
+
+        /// <summary>
+        /// Distance estimator for the Mandelbulb, the 3D analogue of the Mandelbrot set.
+        /// Uses the classic triplex power formula with derivative tracking.
+        /// </summary>
+        /// <param name="pt">Point in fractal local space</param>
+        /// <param name="power">Triplex exponent (8 is the classic bulb)</param>
+        /// <param name="iterations">Number of iterations</param>
+        /// <param name="bailout">Escape radius</param>
+        /// <returns>Conservative distance to the fractal surface</returns>
+        public static float Mandelbulb(float3 pt, float power, int iterations, float bailout)
+        {
+            float3 z = pt;
+            float dr = 1f;
+            float r = 0f;
+            float escape = Hlsl.Max(bailout, 1.1f);
+            int steps = iterations < 1 ? 1 : iterations;
+
+            for (int i = 0; i < steps; i++)
+            {
+                r = Hlsl.Length(z);
+                if (r > escape) break;
+
+                float safeR = Hlsl.Max(r, 1e-6f);
+                float theta = Hlsl.Acos(Hlsl.Max(-1f, Hlsl.Min(1f, z.Z / safeR)));
+                float phi = Hlsl.Atan2(z.Y, z.X);
+
+                float radius = Hlsl.Pow(safeR, power);
+                dr = Hlsl.Pow(safeR, power - 1f) * power * dr + 1f;
+
+                theta *= power;
+                phi *= power;
+
+                float sinTheta = Hlsl.Sin(theta);
+                z = radius * new float3(sinTheta * Hlsl.Cos(phi), sinTheta * Hlsl.Sin(phi), Hlsl.Cos(theta)) + pt;
+            }
+
+            return 0.5f * Hlsl.Log(Hlsl.Max(r, 1e-6f)) * r / Hlsl.Max(dr, 1e-6f);
+        }
+
+        /// <summary>
+        /// Distance estimator for the Menger sponge: a cube with square holes
+        /// recursively punched through every face.
+        /// </summary>
+        /// <param name="pt">Point in fractal local space</param>
+        /// <param name="size">Half extent of the containing cube</param>
+        /// <param name="holeScale">Recursive hole scale, usually 3</param>
+        /// <param name="iterations">Number of subdivision levels</param>
+        /// <returns>Conservative distance to the fractal surface</returns>
+        public static float MengerSponge(float3 pt, float size, float holeScale, int iterations)
+        {
+            float half = Hlsl.Max(size, 0.05f);
+            float3 q = pt / half;
+            float d = Box(q, new float3(1f, 1f, 1f));
+            float s = 1f;
+            float scale = Hlsl.Max(holeScale, 2f);
+            int steps = iterations < 0 ? 0 : iterations;
+
+            for (int i = 0; i < steps; i++)
+            {
+                float3 a = Mod(q * s, 2f) - 1f;
+                s *= scale;
+                float3 fold = Hlsl.Abs(1f - 3f * Hlsl.Abs(a));
+                float da = Hlsl.Max(fold.X, fold.Y);
+                float db = Hlsl.Max(fold.Y, fold.Z);
+                float dc = Hlsl.Max(fold.Z, fold.X);
+                float c = (Hlsl.Min(da, Hlsl.Min(db, dc)) - 1f) / s;
+                d = Hlsl.Max(d, c);
+            }
+
+            return d * half;
+        }
+
+        /// <summary>
+        /// Distance estimator for the Mandelbox: a box/sphere folding fractal.
+        /// </summary>
+        /// <param name="pt">Point in fractal local space</param>
+        /// <param name="scale">Fold scale, usually around 2</param>
+        /// <param name="minRadius">Radius of the inner sphere fold</param>
+        /// <param name="foldLimit">Box fold limit</param>
+        /// <param name="iterations">Number of iterations</param>
+        /// <returns>Conservative distance to the fractal surface</returns>
+        public static float Mandelbox(float3 pt, float scale, float minRadius, float foldLimit, int iterations)
+        {
+            float limit = Hlsl.Max(foldLimit, 0.1f);
+            // A fold scale near +/-1 collapses the estimator; fall back to the classic value.
+            float safeScale = Hlsl.Abs(scale) < 1.1f ? -1.5f : scale;
+            float minR = Hlsl.Min(Hlsl.Max(minRadius, 1e-3f), limit);
+            float minR2 = minR * minR;
+            float limit2 = limit * limit;
+            float3 bound = new float3(limit, limit, limit);
+            float3 z = pt;
+            float dr = 1f;
+            int steps = iterations < 1 ? 1 : iterations;
+
+            for (int i = 0; i < steps; i++)
+            {
+                // Box fold
+                z = Hlsl.Max(Hlsl.Min(z, bound), -bound) * 2f - z;
+
+                // Sphere fold
+                float r2 = Hlsl.Dot(z, z);
+                if (r2 < minR2)
+                {
+                    float t = limit2 / minR2;
+                    z = z * t;
+                    dr = dr * t;
+                }
+                else if (r2 < limit2)
+                {
+                    float t = limit2 / Hlsl.Max(r2, 1e-9f);
+                    z = z * t;
+                    dr = dr * t;
+                }
+
+                z = z * safeScale + pt;
+                dr = dr * Hlsl.Abs(safeScale) + 1f;
+            }
+
+            return Hlsl.Length(z) / Hlsl.Max(Hlsl.Abs(dr), 1e-6f);
+        }
+
+        #endregion fractals
     }
 }
+

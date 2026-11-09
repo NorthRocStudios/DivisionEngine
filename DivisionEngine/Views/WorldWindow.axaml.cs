@@ -494,6 +494,37 @@ public partial class WorldWindow : EditorWindow
             backgroundContextMenu.Items.Add(entityItem);
         }
 
+        // SDF fractals live in their own section next to the primitives
+        backgroundContextMenu.Items.Add(new Separator());
+
+        MenuItem fractalsMenu = new MenuItem
+        {
+            Header = "SDF Fractals",
+            Icon = new MaterialIcon { Kind = MaterialIconKind.Shape, Width = 16, Height = 16 },
+            Foreground = Brushes.White,
+        };
+
+        var fractalTypes = new Dictionary<string, (string DisplayName, MaterialIconKind Icon)>
+        {
+            ["mandelbulb"] = ("Mandelbulb", MaterialIconKind.Star),
+            ["mengersponge"] = ("Menger Sponge", MaterialIconKind.Grain),
+            ["mandelbox"] = ("Mandelbox", MaterialIconKind.Cube),
+        };
+
+        foreach (var type in fractalTypes)
+        {
+            MenuItem fractalItem = new MenuItem
+            {
+                Header = type.Value.DisplayName,
+                Icon = new MaterialIcon { Kind = type.Value.Icon, Width = 16, Height = 16 },
+                Foreground = Brushes.White,
+            };
+            fractalItem.Click += (s, e) => EditorUI.CreateEntityStatic(type.Key);
+            fractalsMenu.Items.Add(fractalItem);
+        }
+
+        backgroundContextMenu.Items.Add(fractalsMenu);
+
         scrollViewer.ContextMenu = backgroundContextMenu;
     }
 

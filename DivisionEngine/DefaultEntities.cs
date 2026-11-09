@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -10,8 +10,10 @@ using DivisionEngine.Components.Audio;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.Components.SDFs;
 using DivisionEngine.Components.SDFs.Effects;
+using DivisionEngine.Components.SDFs.Fractals;
 using DivisionEngine.Components.SDFs.Primitives;
 using DivisionEngine.Editor.Undo;
+using DivisionEngine.MathLib;
 using Environment = DivisionEngine.Components.Environment;
 
 namespace DivisionEngine.Editor
@@ -157,6 +159,69 @@ namespace DivisionEngine.Editor
             }
             uint sdf = W.CreateTransformEntity(name);
             W.AddComponent(sdf, new SDFSphere());
+            W.AddComponent(sdf, new SDFMaterial());
+            W.AddComponent(sdf, new Shadows());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
+            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(sdf);
+            return sdf;
+        }
+
+        /// <summary>
+        /// Uniform scale applied to freshly created fractals so they read at a
+        /// similar size to the primitive shapes next to them.
+        /// </summary>
+        private const float FractalDefaultScale = 1.75f;
+
+        public static uint SDFMandelbulb(string name = "New Mandelbulb")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint sdf = W.CreateTransformEntity(name);
+            W.AddComponent(sdf, new SDFMandelbulb());
+            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
+            W.AddComponent(sdf, new SDFMaterial());
+            W.AddComponent(sdf, new Shadows());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
+            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(sdf);
+            return sdf;
+        }
+
+        public static uint SDFMengerSponge(string name = "New Menger Sponge")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint sdf = W.CreateTransformEntity(name);
+            W.AddComponent(sdf, new SDFMengerSponge());
+            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
+            W.AddComponent(sdf, new SDFMaterial());
+            W.AddComponent(sdf, new Shadows());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
+            AddEntityCommand command = new AddEntityCommand(sdf, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(sdf);
+            return sdf;
+        }
+
+        public static uint SDFMandelbox(string name = "New Mandelbox")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint sdf = W.CreateTransformEntity(name);
+            W.AddComponent(sdf, new SDFMandelbox());
+            W.GetComponent<Transform>(sdf)!.scaling = new float3(FractalDefaultScale, FractalDefaultScale, FractalDefaultScale);
             W.AddComponent(sdf, new SDFMaterial());
             W.AddComponent(sdf, new Shadows());
             var components = WorldManager.CurrentWorld!.GetClonedComponents(sdf);
@@ -329,3 +394,4 @@ namespace DivisionEngine.Editor
         }
     }
 }
+
