@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -468,6 +468,8 @@ public partial class WorldWindow : EditorWindow
             ["environment"] = ("Environment", MaterialIconKind.Grass),
             ["directionalLight"] = ("Directional Light", MaterialIconKind.WeatherSunny),
             ["pointLight"] = ("Point Light", MaterialIconKind.Lightbulb),
+            ["audioSource"] = ("Audio Source", MaterialIconKind.VolumeHigh),
+            ["audioListener"] = ("Audio Listener", MaterialIconKind.Headphones),
             ["sphere"] = ("Sphere", MaterialIconKind.Circle),
             ["box"] = ("Box", MaterialIconKind.Square),
             ["roundedBox"] = ("Rounded Box", MaterialIconKind.SquareRounded),

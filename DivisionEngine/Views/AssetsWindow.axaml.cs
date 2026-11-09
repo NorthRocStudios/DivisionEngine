@@ -56,6 +56,7 @@ public partial class AssetsWindow : EditorWindow
     private readonly ObservableCollection<AssetRowItem> rowItems = [];
     private readonly StackPanel emptyStateOverlay;
     private readonly TextBlock emptyStateText;
+    private ContextMenu? backgroundContextMenu;
 
     // Header
     private readonly StackPanel header;
@@ -389,6 +390,7 @@ public partial class AssetsWindow : EditorWindow
     private void AttachBackgroundContextMenu()
     {
         ContextMenu menu = CreateStyledContextMenu();
+        backgroundContextMenu = menu;
         menu.Items.Add(EditorUI.CreateContextMenuItem("Show in Explorer", MaterialIconKind.FolderOpen, () =>
         {
             if (!string.IsNullOrEmpty(currentPath) && Directory.Exists(currentPath)) Process.Start("explorer.exe", currentPath);
@@ -418,6 +420,16 @@ public partial class AssetsWindow : EditorWindow
 
     private void CreateNewAsset(bool isFolder, string extension = "", string defaultContent = "", string? defaultName = null)
     {
+        // Creating assets without a project has no valid destination folder and
+        // used to throw from the file watcher - refuse instead.
+        if (!ProjectManager.IsCurrentLoaded || string.IsNullOrEmpty(currentPath) || !Directory.Exists(currentPath))
+        {
+            Debug.Warning("Cannot create assets: no project is loaded");
+            return;
+        }
+
+        string targetPath = currentPath;
+
         Border tempItem = new Border
         {
             Width = 80,
@@ -467,7 +479,7 @@ public partial class AssetsWindow : EditorWindow
             if (!cancel)
             {
                 string newName = SanitizeFileName(nameBox.Text ?? string.Empty);
-                if (!string.IsNullOrEmpty(newName)) Task.Run(() => CreateFileOrFolderAsync(newName, isFolder, extension, defaultContent));
+                if (!string.IsNullOrEmpty(newName)) Task.Run(() => CreateFileOrFolderAsync(newName, isFolder, extension, defaultContent, targetPath));
             }
             assetsTileGrid.Children.Remove(tempItem);
         }
@@ -482,16 +494,24 @@ public partial class AssetsWindow : EditorWindow
         UpdateTileColumns();
     }
 
-    private async void CreateFileOrFolderAsync(string name, bool isFolder, string extension, string defaultContent)
+    private async void CreateFileOrFolderAsync(string name, bool isFolder, string extension, string defaultContent, string targetPath)
     {
         try
         {
-            if (isFolder) Directory.CreateDirectory(Path.Combine(currentPath, name));
+            // Re-check: the project may have been closed while the inline rename
+            // box was open, in which case targetPath is no longer valid.
+            if (!ProjectManager.IsCurrentLoaded || string.IsNullOrEmpty(targetPath) || !Directory.Exists(targetPath))
+            {
+                Debug.Warning("Cannot create assets: no project is loaded");
+                return;
+            }
+
+            if (isFolder) Directory.CreateDirectory(Path.Combine(targetPath, name));
             else
             {
                 string fileName = extension == "cs" ? name : $"{name}.{extension}";
                 if (!fileName.EndsWith($".{extension}")) fileName += $".{extension}";
-                await File.WriteAllTextAsync(Path.Combine(currentPath, fileName), defaultContent);
+                await File.WriteAllTextAsync(Path.Combine(targetPath, fileName), defaultContent);
             }
             Debug.Info($"Created {(isFolder ? "folder" : "file")}: {name}");
 
@@ -499,7 +519,7 @@ public partial class AssetsWindow : EditorWindow
             // this, but on a fresh project (or on some Windows filesystem configs)
             // the Created event can be delayed or missed entirely, leaving the
             // file invisible until the user navigates away and back.
-            await Dispatcher.UIThread.InvokeAsync(() => AssetDatabase.RefreshFolder(currentPath));
+            await Dispatcher.UIThread.InvokeAsync(() => AssetDatabase.RefreshFolder(targetPath));
         }
         catch (Exception ex)
         {
@@ -636,16 +656,50 @@ public partial class AssetsWindow : EditorWindow
     {
         if (string.IsNullOrEmpty(path))
         {
-            Debug.Warning("Could not load assets, no project is loaded");
-            directoryField.PlaceholderText = "No Project Loaded";
-            directoryField.Text = string.Empty;
-            itemCountText.Text = "0 items";
+            Debug.Warning("Assets window: no project loaded, showing empty state");
+            ShowNoProjectState();
             return false;
         }
+        SetAssetContextMenuEnabled(true);
         currentPath = path;
         if (path == directoryField.Text) Dispatcher.UIThread.Post(() => LoadAssetsAtPathNew(path));
         else directoryField.Text = path;
         return true;
+    }
+
+    /// <summary>
+    /// Puts the window into the "no project loaded" state: clears the asset grid,
+    /// shows the empty-state folder icon and disables asset creation, which would
+    /// otherwise write into an empty path and crash.
+    /// </summary>
+    private void ShowNoProjectState()
+    {
+        currentPath = string.Empty;
+        directoryField.PlaceholderText = "No Project Loaded";
+        directoryField.Text = string.Empty;
+        itemCountText.Text = "0 items";
+
+        assetTintSetters.Clear();
+        assetsTileGrid.Children.Clear();
+        rowItems.Clear();
+        tileIdentifiers.Clear();
+        tileHovered.Clear();
+        rowItemsByIdentifier.Clear();
+        ClearSelection();
+
+        ShowEmptyState("No Project Loaded");
+        SetAssetContextMenuEnabled(false);
+    }
+
+    /// <summary>
+    /// Enables or disables the asset background context menu (create file/folder),
+    /// so creation actions are unreachable while no project is loaded.
+    /// </summary>
+    private void SetAssetContextMenuEnabled(bool enabled)
+    {
+        if (backgroundContextMenu == null) return;
+        scrollViewer.ContextMenu = enabled ? backgroundContextMenu : null;
+        tableView.ContextMenu = enabled ? backgroundContextMenu : null;
     }
 
     private bool NavigateUpOneLevel()
@@ -1557,16 +1611,7 @@ public partial class AssetsWindow : EditorWindow
             AssetDatabase.FolderChanged -= OnAssetFolderChanged;
             subscribedToFolderEvents = false;
         }
-        Dispatcher.UIThread.Post(() =>
-        {
-            currentPath = string.Empty;
-            directoryField.PlaceholderText = "No Project Loaded";
-            directoryField.Text = string.Empty;
-            itemCountText.Text = "0 items";
-            assetsTileGrid.Children.Clear();
-            rowItems.Clear();
-            ShowEmptyState("No Project Loaded");
-        });
+        Dispatcher.UIThread.Post(ShowNoProjectState);
     }
 
     private void OnAssetFolderChanged(string folderPath)

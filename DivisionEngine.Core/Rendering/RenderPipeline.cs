@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -900,7 +900,7 @@ namespace DivisionEngine.Rendering
                 #region postProcessing
 
                 // Denoising
-                foreach (var (_, transform, camera) in boundWorld?.QueryData<Transform, Camera>())
+                foreach (var (_, transform, camera) in boundWorld?.QueryData<Transform, Camera>() ?? [])
                 {
                     // Division Denoising
                     if (camera.enableDivisionDenoise && CurrentDebugMode == DebugMode.None &&
@@ -957,7 +957,7 @@ namespace DivisionEngine.Rendering
                 }
 
                 // Post-processing effects
-                foreach (var (_, transform, camera, postProcess) in boundWorld?.QueryData<Transform, Camera, PostProcessing>())
+                foreach (var (_, transform, camera, postProcess) in boundWorld?.QueryData<Transform, Camera, PostProcessing>() ?? [])
                 {
                     // Depth of field
                     if (CurrentDebugMode == DebugMode.None && postProcess.enableDepthOfField &&

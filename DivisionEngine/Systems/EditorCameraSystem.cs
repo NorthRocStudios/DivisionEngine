@@ -30,7 +30,7 @@ namespace DivisionEngine.Editor.Systems
 
                 // Deactivate the editor camera
                 editorCamera = W.GetComponent<Camera>(EditorCamera.EditorCameraId);
-                if (editorCamera != null && !editorCamera.isActive) editorCamera.isActive = false;
+                if (editorCamera != null) editorCamera.isActive = false;
             }
             else
             {

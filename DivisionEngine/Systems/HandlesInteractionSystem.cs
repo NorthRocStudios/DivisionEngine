@@ -67,8 +67,13 @@ namespace DivisionEngine.Editor.Systems
 
         public override void EditorUpdate()
         {
-            if (RenderPipeline.Instance == null || EngineCore.IsInPlayMode) return;
+            if (RenderPipeline.Instance == null) return;
 
+            // Handles stay interactive in play mode too, matching the rest of the
+            // editor (selection already works while playing). Transform edits made
+            // during play are discarded when play mode stops, since the world is
+            // restored from its saved state.
+            //
             // Always update handle position to match selected entity's transform
             if (draggedEntity != uint.MaxValue && !IsDragging)
             {

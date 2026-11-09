@@ -688,6 +688,9 @@ public partial class PropertiesWindow : EditorWindow
                     AssetType.Script => await ProjectManager.AssetManager!.LoadAssetAsync<ScriptAsset>(assetId),
                     AssetType.SDF => await ProjectManager.AssetManager!.LoadAssetAsync<SDFAsset>(assetId),
                     AssetType.Material => await ProjectManager.AssetManager!.LoadAssetAsync<MaterialAsset>(assetId),
+                    AssetType.Audio => await ProjectManager.AssetManager!.LoadAssetAsync<AudioAsset>(assetId),
+                    AssetType.Texture => await ProjectManager.AssetManager!.LoadAssetAsync<TextureAsset>(assetId),
+                    AssetType.Font => await ProjectManager.AssetManager!.LoadAssetAsync<FontAsset>(assetId),
                     _ => await ProjectManager.AssetManager!.LoadAssetAsync<Asset>(assetId),
                 };
 

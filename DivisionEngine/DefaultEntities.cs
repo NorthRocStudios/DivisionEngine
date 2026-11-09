@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Components;
+using DivisionEngine.Components.Audio;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.Components.SDFs;
 using DivisionEngine.Components.SDFs.Effects;
@@ -113,6 +114,38 @@ namespace DivisionEngine.Editor
             UndoManager.Execute(command);
             Selection.SelectEntity(pointLight);
             return pointLight;
+        }
+
+        public static uint AudioSource(string name = "New Audio Source")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint audioSource = W.CreateTransformEntity(name);
+            W.AddComponent(audioSource, new AudioSource());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(audioSource);
+            AddEntityCommand command = new AddEntityCommand(audioSource, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(audioSource);
+            return audioSource;
+        }
+
+        public static uint AudioListener(string name = "New Audio Listener")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint listener = W.CreateTransformEntity(name);
+            W.AddComponent(listener, new AudioListener());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(listener);
+            AddEntityCommand command = new AddEntityCommand(listener, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(listener);
+            return listener;
         }
 
         public static uint SDFSphere(string name = "New Sphere")

@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -132,6 +132,8 @@ namespace DivisionEngine.Editor
                     "environment" => DefaultEntities.Environment(),
                     "directionallight" => DefaultEntities.DirectionalLight(),
                     "pointlight" => DefaultEntities.PointLight(),
+                    "audiosource" => DefaultEntities.AudioSource(),
+                    "audiolistener" => DefaultEntities.AudioListener(),
                     "sphere" => DefaultEntities.SDFSphere(),
                     "box" => DefaultEntities.SDFBox(),
                     "roundedbox" => DefaultEntities.SDFRoundedBox(),
