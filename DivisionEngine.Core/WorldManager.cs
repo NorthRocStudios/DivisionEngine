@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -85,8 +85,8 @@ namespace DivisionEngine
                     newDefaultWorld.AddComponent(sphereEntity, new SDFMaterial
                     {
                         albedoColor = ColorPalette.Khaki,
-                        roughness = 0.1f, //1f - i / (float)(sphereCount - 1),
-                        metallic = 1f, //1f - j / (float)(sphereCount - 1),
+                        roughness = 0.1f,
+                        metallic = 1f,
                         ior = 1.5f,
                     });
                     newDefaultWorld.AddComponent(sphereEntity, new Shadows());
@@ -263,4 +263,7 @@ namespace DivisionEngine
         #endregion playModeSpecific
     }
 }
+
+
+
 

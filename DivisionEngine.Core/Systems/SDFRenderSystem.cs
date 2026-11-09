@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -280,6 +280,7 @@ namespace DivisionEngine.Systems
                     SDFSphere sphere = W.GetComponent<SDFSphere>(id)!;
                     curSDF.type = 0; // Sphere type
                     curSDF.parameters = new float4(sphere.radius, 0f, 0f, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, sphere.radius, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFBox>(id)) // Check box primitive
@@ -287,6 +288,7 @@ namespace DivisionEngine.Systems
                     SDFBox box = W.GetComponent<SDFBox>(id)!;
                     curSDF.type = 1; // Box type
                     curSDF.parameters = new float4(box.size.X, box.size.Y, box.size.Z, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(box.size.X * box.size.X + box.size.Y * box.size.Y + box.size.Z * box.size.Z), transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFRoundedBox>(id)) // Check rounded box primitive
@@ -294,6 +296,7 @@ namespace DivisionEngine.Systems
                     SDFRoundedBox roundedBox = W.GetComponent<SDFRoundedBox>(id)!;
                     curSDF.type = 2; // Rounded box type
                     curSDF.parameters = new float4(roundedBox.size.X, roundedBox.size.Y, roundedBox.size.Z, roundedBox.bevel);
+                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(roundedBox.size.X * roundedBox.size.X + roundedBox.size.Y * roundedBox.size.Y + roundedBox.size.Z * roundedBox.size.Z) + roundedBox.bevel, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFTorus>(id)) // Check torus primitive
@@ -301,6 +304,7 @@ namespace DivisionEngine.Systems
                     SDFTorus torus = W.GetComponent<SDFTorus>(id)!;
                     curSDF.type = 3; // Torus type
                     curSDF.parameters = new float4(torus.wholeRadius, torus.ringRadius, 0f, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, torus.wholeRadius + torus.ringRadius, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFPyramid>(id)) // Check pyramid primitive
@@ -308,6 +312,7 @@ namespace DivisionEngine.Systems
                     SDFPyramid pyramid = W.GetComponent<SDFPyramid>(id)!;
                     curSDF.type = 4; // Pyramid type
                     curSDF.parameters = new float4(pyramid.height, 0f, 0f, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, pyramid.height + 1f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFPlane>(id)) // Check plane primitive
@@ -315,6 +320,7 @@ namespace DivisionEngine.Systems
                     SDFPlane plane = W.GetComponent<SDFPlane>(id)!;
                     curSDF.type = 5; // Plane type
                     curSDF.parameters = new float4(plane.normal.X, plane.normal.Y, plane.normal.Z, plane.height);
+                    curSDF.bounds = Bounds(curSDF.position, 1e9f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFCylinder>(id)) // Check cylinder primitive
@@ -322,6 +328,7 @@ namespace DivisionEngine.Systems
                     SDFCylinder cylinder = W.GetComponent<SDFCylinder>(id)!;
                     curSDF.type = 6; // Cylinder type
                     curSDF.parameters = new float4(cylinder.radius, cylinder.height, 0f, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(cylinder.radius * cylinder.radius + cylinder.height * cylinder.height), transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFCapsule>(id)) // Check capsule primitive
@@ -329,6 +336,7 @@ namespace DivisionEngine.Systems
                     SDFCapsule capsule = W.GetComponent<SDFCapsule>(id)!;
                     curSDF.type = 7; // Capsule type
                     curSDF.parameters = new float4(capsule.radius, capsule.height, 0f, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, capsule.radius + capsule.height, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFCone>(id)) // Check cone primitive
@@ -336,6 +344,7 @@ namespace DivisionEngine.Systems
                     SDFCone cone = W.GetComponent<SDFCone>(id)!;
                     curSDF.type = 8; // Cone type
                     curSDF.parameters = new float4(cone.cone.X, cone.cone.Y, cone.height, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, math.max(cone.height, cone.cone.X) * 1.5f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
 
@@ -345,6 +354,7 @@ namespace DivisionEngine.Systems
                     SDFMandelbulb mandelbulb = W.GetComponent<SDFMandelbulb>(id)!;
                     curSDF.type = 10; // Mandelbulb type
                     curSDF.parameters = new float4(mandelbulb.power, mandelbulb.iterations, mandelbulb.bailout, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, 1.4f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFMengerSponge>(id))
@@ -352,6 +362,7 @@ namespace DivisionEngine.Systems
                     SDFMengerSponge sponge = W.GetComponent<SDFMengerSponge>(id)!;
                     curSDF.type = 11; // Menger sponge type
                     curSDF.parameters = new float4(sponge.size, sponge.holeScale, sponge.iterations, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, sponge.size * 1.732f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFMandelbox>(id))
@@ -359,6 +370,7 @@ namespace DivisionEngine.Systems
                     SDFMandelbox mandelbox = W.GetComponent<SDFMandelbox>(id)!;
                     curSDF.type = 12; // Mandelbox type
                     curSDF.parameters = new float4(mandelbox.scale, mandelbox.minRadius, mandelbox.foldLimit, mandelbox.iterations);
+                    curSDF.bounds = Bounds(curSDF.position, 8f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
 
@@ -369,6 +381,7 @@ namespace DivisionEngine.Systems
                     curSDF.type = 9;
                     curSDF.terrainDataIndex = TerrainSystem.GetTerrainMetadataIndex(id);
                     curSDF.parameters = new float4(terrain.scale, terrain.height, terrain.frequency, terrain.lacunarity);
+                    curSDF.bounds = Bounds(curSDF.position, 1e9f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
 
@@ -378,6 +391,14 @@ namespace DivisionEngine.Systems
             return (worldData, sdfObjects.ToArray(), sdfLights.ToArray());
         }
 
+        /// <summary>
+        /// Builds the world-space bounding sphere used to skip objects during ray marching.
+        /// </summary>
+        private static float4 Bounds(float3 position, float radius, float3 scaling)
+        {
+            float maxScale = math.max(scaling.X, math.max(scaling.Y, scaling.Z));
+            return new float4(position.X, position.Y, position.Z, radius * maxScale * 1.05f + 0.01f);
+        }
         private static int GetTexMetaID(AssetRef<TextureAsset> assetRef) =>
             assetRef.IsLoaded ? TextureSystem.GetTextureMetadataIndex(assetRef.ID) : -1;
 
@@ -389,3 +410,4 @@ namespace DivisionEngine.Systems
         }
     }
 }
+

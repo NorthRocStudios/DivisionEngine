@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -63,6 +63,12 @@ namespace DivisionEngine.Rendering
         public float4 rotation; // 16b
         public float3 scaling; // 12b
         public float4 parameters; // 16b
+        /// <summary>
+        /// Bounding sphere used for early rejection during ray marching.
+        /// xyz is the world-space center, w is the radius. Infinite objects
+        /// (planes, terrain) use a huge radius so they are never skipped.
+        /// </summary>
+        public float4 bounds; // 16b
         public float stepBias; // 4b
         public int terrainDataIndex; // 4b
 

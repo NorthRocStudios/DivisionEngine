@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -389,11 +389,22 @@ namespace DivisionEngine
         private float WorldSDF(float3 point, out int closest)
         {
             float minDist = MIN_TRAVERSE_DIST;
+            float cullDist = 1e9f;
             closest = -1;
             for (int i = 0; i < sdfObjects.Length; i++)
             {
-                float dist = ObjectSDF(point, sdfObjects[i]);
-                if (Hlsl.Abs(dist) < minDist)
+                SDFObjectDTO obj = sdfObjects[i];
+
+                // Skipping spheres: if this object's bounding sphere is farther away
+                // than the closest surface found so far, its exact SDF cannot change
+                // the result, so skip the (potentially very expensive) evaluation.
+                if (Hlsl.Length(point - obj.bounds.XYZ) - obj.bounds.W > cullDist) continue;
+
+                float dist = ObjectSDF(point, obj);
+                float absDist = Hlsl.Abs(dist);
+                if (absDist < cullDist) cullDist = absDist;
+
+                if (absDist < minDist)
                 {
                     closest = i;
                     minDist = dist;
@@ -1499,3 +1510,5 @@ namespace DivisionEngine
         #endregion main
     }
 }
+
+
