@@ -541,6 +541,68 @@ namespace DivisionEngine.Rendering
 
         #endregion embeddedRendering
 
+        #region benchmark
+
+        /// <summary>
+        /// Result of an offscreen render benchmark.
+        /// </summary>
+        public sealed class BenchmarkResult(int width, int height, int frames, double averageMs, double medianMs, double p95Ms)
+        {
+            /// <summary>Render width in pixels.</summary>
+            public int Width { get; } = width;
+            /// <summary>Render height in pixels.</summary>
+            public int Height { get; } = height;
+            /// <summary>Number of measured frames.</summary>
+            public int Frames { get; } = frames;
+            /// <summary>Mean frame time in milliseconds.</summary>
+            public double AverageMs { get; } = averageMs;
+            /// <summary>Median frame time in milliseconds.</summary>
+            public double MedianMs { get; } = medianMs;
+            /// <summary>95th percentile frame time in milliseconds.</summary>
+            public double P95Ms { get; } = p95Ms;
+            /// <summary>Frames per second derived from the mean frame time.</summary>
+            public double Fps => AverageMs > 0 ? 1000.0 / AverageMs : 0;
+        }
+
+        /// <summary>
+        /// Renders frames offscreen at a fixed resolution and measures frame times.
+        /// Used by the Division CLI benchmark command so performance can be measured
+        /// without opening the editor or depending on its window layout.
+        /// </summary>
+        /// <param name="width">Render width in pixels</param>
+        /// <param name="height">Render height in pixels</param>
+        /// <param name="frames">Number of frames to measure</param>
+        /// <param name="warmupFrames">Frames rendered before measuring (shader/JIT warmup)</param>
+        public BenchmarkResult Benchmark(int width, int height, int frames, int warmupFrames = 10)
+        {
+            Device ??= GraphicsDevice.GetDefault();
+            if (boundWorld == null) BindCurrentWorld();
+            if (boundWorld == null) throw new InvalidOperationException("No world is loaded to benchmark.");
+
+            for (int i = 0; i < warmupFrames; i++)
+                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+
+            double[] times = new double[frames];
+            for (int i = 0; i < frames; i++)
+            {
+                Stopwatch sw = Stopwatch.StartNew();
+                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+                sw.Stop();
+                times[i] = sw.Elapsed.TotalMilliseconds;
+            }
+
+            Array.Sort(times);
+            double average = 0;
+            foreach (double t in times) average += t;
+            average /= frames;
+
+            double median = times[frames / 2];
+            double p95 = times[Math.Min(frames - 1, (int)(frames * 0.95))];
+            return new BenchmarkResult(width, height, frames, average, median, p95);
+        }
+
+        #endregion benchmark
+
         /// <summary>
         /// Initializes and runs the render window.
         /// </summary>

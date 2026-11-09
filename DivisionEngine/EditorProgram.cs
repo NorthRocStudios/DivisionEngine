@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -19,8 +19,13 @@ namespace DivisionEngine.Editor
         // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
         // yet and stuff might break.
         [STAThread]
-        public static void Main(string[] args) => BuildAvaloniaApp()
-            .StartWithClassicDesktopLifetime(args);
+        public static int Main(string[] args)
+        {
+            // `--cli <command>` runs headless commands (benchmark, info) without opening the editor.
+            if (DivisionCLI.TryRun(args)) return DivisionCLI.ExitCode;
+
+            return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
 
         // Avalonia configuration, don't remove; also used by visual designer.
         public static AppBuilder BuildAvaloniaApp()
@@ -30,3 +35,4 @@ namespace DivisionEngine.Editor
                 .LogToTrace();
     }
 }
+
