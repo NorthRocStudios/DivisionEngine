@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -181,11 +181,14 @@ namespace DivisionEngine.Editor.Systems
                     selectedHandle = handleId;
                     lastMousePos = mousePos;
 
+                    // Ring normal = u x v from GetRingBasis; the previous values were
+                    // negated to compensate for the inverted rotation used when rendering,
+                    // which made the drag run against the mouse.
                     rotationAxis = handleId switch
                     {
-                        8 => new float3(-1, 0, 0),
-                        9 => new float3(0, -1, 0),
-                        _ => new float3(0, 0, -1)
+                        8 => new float3(1, 0, 0),
+                        9 => new float3(0, 1, 0),
+                        _ => new float3(0, 0, 1)
                     };
 
                     var (planeU, planeV) = GetRingBasis(handleId);
@@ -285,7 +288,10 @@ namespace DivisionEngine.Editor.Systems
                                 if (angleDelta > 3.14159265f) angleDelta -= 6.28318530718f;
                                 else if (angleDelta < -3.14159265f) angleDelta += 6.28318530718f;
 
-                                // Verify against your actual Quaternion API (name/order may differ)
+                                // Rotation is stored local->world, so pre-multiplying the
+                                // delta rotates around the WORLD axis of the ring (Unity's
+                                // global handle). Post-multiplying would rotate around the
+                                // object's local axis instead.
                                 float4 deltaRot = Quaternion.CreateFromAxisAngle(rotationAxis, angleDelta);
                                 transform.rotation = Quaternion.Normalize(Quaternion.Multiply(deltaRot, transform.rotation));
 

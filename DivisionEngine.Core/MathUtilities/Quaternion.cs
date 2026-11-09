@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -147,10 +147,23 @@ namespace DivisionEngine.MathUtilities
         /// <returns>Float3 rotated vector</returns>
         public static float3 RotateVector(this float4 quaternion, float3 vector)
         {
-            float3 qVec = new float3(-quaternion.X, -quaternion.Y, -quaternion.Z);
+            // Standard quaternion rotation: v' = v + 2w(q x v) + 2q x (q x v).
+            // This must match ShaderMath.RotateVector exactly - the previous version
+            // negated the vector part, which made the CPU compute the conjugate
+            // (inverse) rotation while the shader computed the forward one.
+            float3 qVec = new float3(quaternion.X, quaternion.Y, quaternion.Z);
             float3 t = qVec.Cross(vector).Multiply(2.0f);
             return vector.Add(t.Multiply(quaternion.W)).Add(qVec.Cross(t));
         }
+
+        /// <summary>
+        /// Rotates a float3 vector by the inverse of a quaternion rotation.
+        /// </summary>
+        /// <param name="quaternion">Quaternion rotation to invert</param>
+        /// <param name="vector">Vector to rotate</param>
+        /// <returns>Float3 rotated by the conjugate rotation</returns>
+        public static float3 InverseRotateVector(this float4 quaternion, float3 vector) =>
+            new float4(-quaternion.X, -quaternion.Y, -quaternion.Z, quaternion.W).RotateVector(vector);
 
         /*/// <summary>
         /// Converts a quaternion to Euler angles (roll, pitch, yaw) in radians.

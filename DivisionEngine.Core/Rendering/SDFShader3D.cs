@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -330,7 +330,8 @@ namespace DivisionEngine
         private float ObjectSDF(float3 point, SDFObjectDTO obj)
         {
             float3 curPoint = point - obj.position;
-            curPoint = ShaderMath.RotateVector(curPoint, obj.rotation);
+            // obj.rotation is local->world, so the world->local transform is its inverse.
+            curPoint = ShaderMath.InverseRotateVector(curPoint, obj.rotation);
             curPoint *= obj.scaling;
 
             if (obj.type == 9) // Get terrain height at this point
@@ -745,8 +746,8 @@ namespace DivisionEngine
             out float3 localPos, out float3 blend, out float3 albedo,
             out float metallic, out float roughness, out float3 finalNormal)
         {
-            localPos = ShaderMath.RotateVector(hitPoint - sdf.position, sdf.rotation);
-            float3 localGeoNormal = Hlsl.Normalize(ShaderMath.RotateVector(geoNormal, sdf.rotation));
+            localPos = ShaderMath.InverseRotateVector(hitPoint - sdf.position, sdf.rotation);
+            float3 localGeoNormal = Hlsl.Normalize(ShaderMath.InverseRotateVector(geoNormal, sdf.rotation));
             blend = TriplanarWeights(localGeoNormal, sdf.triplanarBlend);
             float scale = Hlsl.Rcp(Hlsl.Max(sdf.texTilingOffset.X, EPSILON));
 
@@ -759,7 +760,7 @@ namespace DivisionEngine
             roughness = Hlsl.Max(SampleTriplanarScalarMip(sdf.roughTexMetaID, localPos, blend, scale, mipLevel, sdf.roughness), 0.045f);
 
             float3 localFinalNormal = SampleNormalTriplanarMip(sdf.normalTexMetaID, localPos, localGeoNormal, blend, scale, sdf.normalStrength, mipLevel);
-            finalNormal = Hlsl.Normalize(ShaderMath.InverseRotateVector(localFinalNormal, sdf.rotation));
+            finalNormal = Hlsl.Normalize(ShaderMath.RotateVector(localFinalNormal, sdf.rotation));
         }
 
         #endregion pbr_workflow

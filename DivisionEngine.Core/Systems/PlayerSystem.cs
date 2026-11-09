@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -66,16 +66,23 @@ namespace DivisionEngine.Systems
                 if (mouseDelta.X == 0f && mouseDelta.Y == 0f) return;
 
                 EngineSettings settings = EngineSettings.Instance;
-                float yaw = mouseDelta.X * player.mouseSensitivity * settings.MouseSensitivity;
+                // Positive rotation about +Y turns the view to the left, so yaw is
+                // negated to keep "drag mouse right -> look right".
+                float yaw = -mouseDelta.X * player.mouseSensitivity * settings.MouseSensitivity;
                 float pitch = -mouseDelta.Y * player.mouseSensitivity * settings.MouseSensitivity;
 
                 float4 currentRot = transform.rotation;
                 float4 yawRot = Quaternion.CreateFromAxisAngle(new float3(0, 1, 0), yaw);
                 float4 pitchRot = Quaternion.CreateFromAxisAngle(new float3(1, 0, 0), pitch);
 
-                // Apply yaw first, then pitch, order matters!
-                float4 newRot = Quaternion.Multiply(currentRot, yawRot);
-                newRot = Quaternion.Multiply(pitchRot, newRot);
+                // Pitch around the camera's LOCAL right axis, then yaw around WORLD up:
+                //     q' = Ry * q * Rx
+                // Keeping that order means q always stays a pure yaw-then-pitch rotation,
+                // so the camera's right vector never leaves the horizon (no barrel roll).
+                // The old order (pitchRot * q * yawRot) pitched around world X instead,
+                // which turns into roll as soon as the camera has any yaw.
+                float4 newRot = Quaternion.Multiply(currentRot, pitchRot);
+                newRot = Quaternion.Multiply(yawRot, newRot);
                 transform.rotation = newRot.Normalize();
             }
         }

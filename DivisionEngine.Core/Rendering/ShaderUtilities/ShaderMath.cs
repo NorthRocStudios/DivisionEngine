@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -86,21 +86,22 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float3 WorldToLocalPoint(float3 worldPoint, float3 position, float4 rotation, float3 scaling)
         {
             float3 p = worldPoint - position;
-            p = RotateVector(p, rotation); // matches WorldSDF's convention exactly
+            // Rotation is local->world, so going world->local needs the inverse.
+            p = InverseRotateVector(p, rotation); // matches WorldSDF's convention exactly
             p *= scaling;                   // scaling = 1/worldScale, so textures stay fixed to the primitive's own UV space regardless of object scale
             return p;
         }
 
         public static float3 WorldToLocalDirection(float3 worldDir, float4 rotation)
         {
-            return Hlsl.Normalize(RotateVector(worldDir, rotation));
+            return Hlsl.Normalize(InverseRotateVector(worldDir, rotation));
         }
 
         public static float3 LocalToWorldDirection(float3 localDir, float4 rotation)
         {
             // Inverse of WorldToLocalDirection, needed to bring a locally-perturbed
             // normal (e.g. from a normal map) back into world space
-            return Hlsl.Normalize(InverseRotateVector(localDir, rotation));
+            return Hlsl.Normalize(RotateVector(localDir, rotation));
         }
 
         /// <summary>

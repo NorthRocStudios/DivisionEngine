@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -59,7 +59,11 @@ namespace DivisionEngine
             uint sunEntity = newDefaultWorld.CreateEntity("Sun");
             newDefaultWorld.AddComponent(sunEntity, new Transform
             {
-                rotation = new float3(140f, -70f, 0f).EulerToQuaternion(),
+                // EulerToQuaternion takes radians - these are authored in degrees.
+                rotation = new float3(
+                    140f * DivisionEngine.MathUtilities.Math.Deg2Rad,
+                    -70f * DivisionEngine.MathUtilities.Math.Deg2Rad,
+                    0f).EulerToQuaternion(),
             });
             newDefaultWorld.AddComponent(sunEntity, new DirectionalLight());
 
