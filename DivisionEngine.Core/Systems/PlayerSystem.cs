@@ -53,7 +53,7 @@ namespace DivisionEngine.Systems
             if (InputSystem.IsPressed(KeyCode.E) || InputSystem.IsPressed(KeyCode.PageUp))
                 movement = movement.Add(up.Multiply(speed));
 
-            player.movementSpeed += InputSystem.ScrollDelta.Y * player.movementSpeed * 0.05f;
+            player.movementSpeed += InputSystem.ScrollDelta.y * player.movementSpeed * 0.05f;
             position = position.Add(movement);
             transform.position = position;
         }
@@ -63,13 +63,13 @@ namespace DivisionEngine.Systems
             if (InputSystem.IsMousePressed(MouseCode.Right))
             {
                 float2 mouseDelta = InputSystem.MouseUVDelta;
-                if (mouseDelta.X == 0f && mouseDelta.Y == 0f) return;
+                if (mouseDelta.x == 0f && mouseDelta.y == 0f) return;
 
                 EngineSettings settings = EngineSettings.Instance;
                 // Positive rotation about +Y turns the view to the left, so yaw is
                 // negated to keep "drag mouse right -> look right".
-                float yaw = -mouseDelta.X * player.mouseSensitivity * settings.MouseSensitivity;
-                float pitch = -mouseDelta.Y * player.mouseSensitivity * settings.MouseSensitivity;
+                float yaw = -mouseDelta.x * player.mouseSensitivity * settings.MouseSensitivity;
+                float pitch = -mouseDelta.y * player.mouseSensitivity * settings.MouseSensitivity;
 
                 float4 currentRot = transform.rotation;
                 float4 yawRot = Quaternion.CreateFromAxisAngle(new float3(0, 1, 0), yaw);

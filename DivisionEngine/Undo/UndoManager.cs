@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -39,14 +39,31 @@ namespace DivisionEngine.Editor.Undo
                 return;
             }
 
+            // Collapse rapid successive edits of the same property (slider drags, colour
+            // pickers) into one undo entry, keeping the value from before the gesture.
+            if (command is ModifyFieldCommand modify && undoStack.Count > 0 &&
+                undoStack.Peek() is ModifyFieldCommand previous && previous.MergeWith(modify))
+            {
+                redoStack.Clear();
+                UndoStackChanged?.Invoke();
+                return;
+            }
+
             IsExecuting = true;
             try
             {
                 command.Do();
                 undoStack.Push(command);
                 redoStack.Clear();
-                if (undoStack.Count > MaxUndoCount) // remove oldest (bottom)
-                    undoStack = new Stack<IUndoCommand>(undoStack.Reverse().Take(MaxUndoCount).Reverse());
+                if (undoStack.Count > MaxUndoCount)
+                {
+                    // Keep the newest MaxUndoCount commands with the most recent on top.
+                    // A Stack enumerates newest->oldest, so it has to be reversed before it
+                    // is pushed back in (pushing in reverse leaves the oldest on top).
+                    List<IUndoCommand> kept = undoStack.Take(MaxUndoCount).ToList();
+                    kept.Reverse();
+                    undoStack = new Stack<IUndoCommand>(kept);
+                }
                 UndoStackChanged?.Invoke();
             }
             finally

@@ -67,10 +67,10 @@ namespace DivisionEngine.Editor
         /// <param name="color">Float4 color vector to apply to brush</param>
         /// <returns>New SolidColorBrush with selected RGBA values</returns>
         public static SolidColorBrush FromColor(float4 color) => new SolidColorBrush(Color.FromArgb(
-            Convert.ToByte(color.W * 255f),
-            Convert.ToByte(color.X * 255f),
-            Convert.ToByte(color.Y * 255f),
-            Convert.ToByte(color.Z * 255f)));
+            Convert.ToByte(color.w * 255f),
+            Convert.ToByte(color.x * 255f),
+            Convert.ToByte(color.y * 255f),
+            Convert.ToByte(color.z * 255f)));
 
         /// <summary>
         /// Creates a new color from a float3 color vector.
@@ -78,9 +78,9 @@ namespace DivisionEngine.Editor
         /// <param name="color">Float3 color vector to apply to brush</param>
         /// <returns>New SolidColorBrush with selected RGB values</returns>
         public static SolidColorBrush FromColor(float3 color) => new SolidColorBrush(Color.FromRgb(
-            Convert.ToByte(color.X * 255f),
-            Convert.ToByte(color.Y * 255f),
-            Convert.ToByte(color.Z * 255f)));
+            Convert.ToByte(color.x * 255f),
+            Convert.ToByte(color.y * 255f),
+            Convert.ToByte(color.z * 255f)));
 
         /// <summary>
         /// Converts a hex string starting with '#' to a color.

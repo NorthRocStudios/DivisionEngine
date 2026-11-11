@@ -58,7 +58,7 @@ namespace DivisionEngine.Components.SDFs
         [Tooltip("Texture pixel scale")]
         public float2 uvScale = new float2(1f, 1f);
         [Tooltip("Texture pixel offset")]
-        public float2 uvOffset = float2.Zero;
+        public float2 uvOffset = float2.zero;
         [Tooltip("How smooth the blend is between each side of the texture")]
         public float triplanarBlend = 1f;
 

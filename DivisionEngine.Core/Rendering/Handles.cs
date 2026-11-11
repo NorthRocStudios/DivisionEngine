@@ -25,20 +25,20 @@ namespace DivisionEngine.Rendering
             var edges = new[]
             {
                 // Bottom edges
-                (new float3(min.X, min.Y, min.Z), new float3(max.X, min.Y, min.Z)),
-                (new float3(max.X, min.Y, min.Z), new float3(max.X, min.Y, max.Z)),
-                (new float3(max.X, min.Y, max.Z), new float3(min.X, min.Y, max.Z)),
-                (new float3(min.X, min.Y, max.Z), new float3(min.X, min.Y, min.Z)),
+                (new float3(min.x, min.y, min.z), new float3(max.x, min.y, min.z)),
+                (new float3(max.x, min.y, min.z), new float3(max.x, min.y, max.z)),
+                (new float3(max.x, min.y, max.z), new float3(min.x, min.y, max.z)),
+                (new float3(min.x, min.y, max.z), new float3(min.x, min.y, min.z)),
                 // Top edges
-                (new float3(min.X, max.Y, min.Z), new float3(max.X, max.Y, min.Z)),
-                (new float3(max.X, max.Y, min.Z), new float3(max.X, max.Y, max.Z)),
-                (new float3(max.X, max.Y, max.Z), new float3(min.X, max.Y, max.Z)),
-                (new float3(min.X, max.Y, max.Z), new float3(min.X, max.Y, min.Z)),
+                (new float3(min.x, max.y, min.z), new float3(max.x, max.y, min.z)),
+                (new float3(max.x, max.y, min.z), new float3(max.x, max.y, max.z)),
+                (new float3(max.x, max.y, max.z), new float3(min.x, max.y, max.z)),
+                (new float3(min.x, max.y, max.z), new float3(min.x, max.y, min.z)),
                 // Vertical edges
-                (new float3(min.X, min.Y, min.Z), new float3(min.X, max.Y, min.Z)),
-                (new float3(max.X, min.Y, min.Z), new float3(max.X, max.Y, min.Z)),
-                (new float3(max.X, min.Y, max.Z), new float3(max.X, max.Y, max.Z)),
-                (new float3(min.X, min.Y, max.Z), new float3(min.X, max.Y, max.Z))
+                (new float3(min.x, min.y, min.z), new float3(min.x, max.y, min.z)),
+                (new float3(max.x, min.y, min.z), new float3(max.x, max.y, min.z)),
+                (new float3(max.x, min.y, max.z), new float3(max.x, max.y, max.z)),
+                (new float3(min.x, min.y, max.z), new float3(min.x, max.y, max.z))
             };
 
             uint shapeId = nextShapeId++;

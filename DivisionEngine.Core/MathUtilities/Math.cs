@@ -281,12 +281,12 @@ namespace DivisionEngine.MathUtilities
         public static float3 QuaternionToEuler(this float4 q)
         {
             // Roll (x-axis rotation)
-            float sinr_cosp = 2 * (q.W * q.X + q.Y * q.Z);
-            float cosr_cosp = 1 - 2 * (q.X * q.X + q.Y * q.Y);
+            float sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
+            float cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
             float roll = Atan2(sinr_cosp, cosr_cosp);
 
             // Pitch (y-axis rotation)
-            float sinp = 2 * (q.W * q.Y - q.Z * q.X);
+            float sinp = 2 * (q.w * q.y - q.z * q.x);
             float pitch;
             if (Abs(sinp) >= 1)
                 pitch = PI / 2 * Sign(sinp); // use 90 degrees if out of range
@@ -294,8 +294,8 @@ namespace DivisionEngine.MathUtilities
                 pitch = Asin(sinp);
 
             // Yaw (z-axis rotation)
-            float siny_cosp = 2 * (q.W * q.Z + q.X * q.Y);
-            float cosy_cosp = 1 - 2 * (q.Y * q.Y + q.Z * q.Z);
+            float siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+            float cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
             float yaw = Atan2(siny_cosp, cosy_cosp);
             return new float3(roll, pitch, yaw);
         }
@@ -308,12 +308,12 @@ namespace DivisionEngine.MathUtilities
         public static float4 EulerToQuaternion(this float3 euler)
         {
             // Abbreviations for the various angular functions
-            double cy = Cos(euler.Z * 0.5f);
-            double sy = Sin(euler.Z * 0.5f);
-            double cr = Cos(euler.X * 0.5f);
-            double sr = Sin(euler.X * 0.5f);
-            double cp = Cos(euler.Y * 0.5f);
-            double sp = Sin(euler.Y * 0.5f);
+            double cy = Cos(euler.z * 0.5f);
+            double sy = Sin(euler.z * 0.5f);
+            double cr = Cos(euler.x * 0.5f);
+            double sr = Sin(euler.x * 0.5f);
+            double cp = Cos(euler.y * 0.5f);
+            double sp = Sin(euler.y * 0.5f);
             float w = (float)(cy * cr * cp + sy * sr * sp);
             float x = (float)(cy * sr * cp - sy * cr * sp);
             float y = (float)(cy * cr * sp + sy * sr * cp);

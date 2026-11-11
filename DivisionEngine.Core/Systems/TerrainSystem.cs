@@ -5,7 +5,8 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 using DivisionEngine.Components.SDFs;
 using DivisionEngine.Rendering;
 using DivisionEngine.Rendering.Terrain;
@@ -85,28 +86,28 @@ namespace DivisionEngine.Systems
 
         private static readonly Dictionary<uint, float[]> bakedCache = [];
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
+        // Compiled once: the bake shader is stateless between dispatches.
+        private static DivisionShader? bakeShader;
+
         private static float[] BakeTerrain(SDFTerrain terrain)
         {
-            using ReadWriteBuffer<float> gpuOutput = RenderPipeline.Instance!.Device!
-                .AllocateReadWriteBuffer<float>(terrain.heightmapSize * terrain.heightmapSize);
+            DivisionComputeContext context = RenderPipeline.Instance!.Context!;
+            using RWBuffer<float> gpuOutput = context.CreateRWBuffer<float>(terrain.heightmapSize * terrain.heightmapSize);
 
-            TerrainBakeShader shader = new TerrainBakeShader(
-                new int2(terrain.heightmapSize, terrain.heightmapSize),
-                terrain.scale,
-                terrain.height,
-                terrain.frequency,
-                terrain.octaves,
-                terrain.lacunarity,
-                terrain.persistence,
-                terrain.ridgeBlend,
-                terrain.ridgeWeight,
-                gpuOutput);
-            RenderPipeline.Instance.Device?.For(terrain.heightmapSize, terrain.heightmapSize, shader);
+            bakeShader ??= context.CompileShader(typeof(TerrainBakeShader));
+            bakeShader.SetVector("resolution", new int2(terrain.heightmapSize, terrain.heightmapSize));
+            bakeShader.SetFloat("size", terrain.scale);
+            bakeShader.SetFloat("heightScale", terrain.height);
+            bakeShader.SetFloat("frequency", terrain.frequency);
+            bakeShader.SetInt("octaves", terrain.octaves);
+            bakeShader.SetFloat("lacunarity", terrain.lacunarity);
+            bakeShader.SetFloat("persistence", terrain.persistence);
+            bakeShader.SetFloat("ridgeBlend", terrain.ridgeBlend);
+            bakeShader.SetFloat("ridgeWeight", terrain.ridgeWeight);
+            bakeShader.SetRWBuffer("output", gpuOutput);
+            bakeShader.Dispatch2D(bakeShader.FindKernel("Execute"), terrain.heightmapSize, terrain.heightmapSize);
 
-            float[] result = new float[terrain.heightmapSize * terrain.heightmapSize];
-            if (gpuOutput.Length == result.Length) gpuOutput.CopyTo(result);
-            return result;
+            return gpuOutput.GetData(context.Context);
         }
 
         /// <summary>

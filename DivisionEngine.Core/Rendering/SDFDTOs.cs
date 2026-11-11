@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -115,7 +115,9 @@ namespace DivisionEngine.Rendering
         // Effect Properties
         public int shadowType; // 4b
         public float3 shadowDistances; // 12b
-        public bool2 shadowEffects; // 8b
+        public int2 shadowEffects; // 8b - (x = caster, y = receiver), 0/1 values
+                                   // bool2 was 2 bytes in C# but 8 in HLSL, so DivisionCompute
+                                   // rejects it as a structured-buffer element.
         public float4 absorptionColor; // 16b
         public int hasReflection; // 4b - must use integer type when in DTO
         public int hasRefraction; // 4b

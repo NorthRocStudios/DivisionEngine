@@ -1,10 +1,11 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
+using DivisionEngine.MathLib;
 using System.Numerics;
 
 namespace DivisionEngine.MathUtilities
@@ -73,7 +74,7 @@ namespace DivisionEngine.MathUtilities
         /// </summary>
         /// <param name="matrix">Matrix to calculate the determinant of</param>
         /// <returns>Determinant of <param name="matrix"></returns>
-        public static float Determinant(this float2x2 matrix) => matrix.M11 * matrix.M22 - matrix.M12 * matrix.M21;
+        public static float Determinant(this float2x2 matrix) => matrix[0,0] * matrix[1,1] - matrix[0,1] * matrix[1,0];
 
         /// <summary>
         /// Calculates the determinant of a 3x3 matrix.
@@ -81,9 +82,9 @@ namespace DivisionEngine.MathUtilities
         /// <param name="matrix">Matrix to calculate the determinant of</param>
         /// <returns>Determinant of <param name="matrix"></returns>
         public static float Determinant(this float3x3 matrix) =>
-            matrix.M11 * (matrix.M22 * matrix.M33 - matrix.M23 * matrix.M32) -
-            matrix.M12 * (matrix.M21 * matrix.M33 - matrix.M23 * matrix.M31) +
-            matrix.M13 * (matrix.M21 * matrix.M32 - matrix.M22 * matrix.M31);
+            matrix[0,0] * (matrix[1,1] * matrix[2,2] - matrix[1,2] * matrix[2,1]) -
+            matrix[0,1] * (matrix[1,0] * matrix[2,2] - matrix[1,2] * matrix[2,0]) +
+            matrix[0,2] * (matrix[1,0] * matrix[2,1] - matrix[1,1] * matrix[2,0]);
 
         /// <summary>
         /// Calculates the determinant of a 4x4 matrix.
@@ -91,18 +92,18 @@ namespace DivisionEngine.MathUtilities
         /// <param name="matrix">Matrix to calculate the determinant of</param>
         /// <returns>Determinant of <param name="matrix"></returns>
         public static float Determinant(this float4x4 matrix) =>
-            matrix.M11 * (matrix.M22 * (matrix.M33 * matrix.M44 - matrix.M34 * matrix.M43) -
-                    matrix.M23 * (matrix.M32 * matrix.M44 - matrix.M34 * matrix.M42) +
-                    matrix.M24 * (matrix.M32 * matrix.M43 - matrix.M33 * matrix.M42)) -
-            matrix.M12 * (matrix.M21 * (matrix.M33 * matrix.M44 - matrix.M34 * matrix.M43) -
-                    matrix.M23 * (matrix.M31 * matrix.M44 - matrix.M34 * matrix.M41) +
-                    matrix.M24 * (matrix.M31 * matrix.M43 - matrix.M33 * matrix.M41)) +
-            matrix.M13 * (matrix.M21 * (matrix.M32 * matrix.M44 - matrix.M34 * matrix.M42) -
-                    matrix.M22 * (matrix.M31 * matrix.M44 - matrix.M34 * matrix.M41) +
-                    matrix.M24 * (matrix.M31 * matrix.M42 - matrix.M32 * matrix.M41)) -
-            matrix.M14 * (matrix.M21 * (matrix.M32 * matrix.M43 - matrix.M33 * matrix.M42) -
-                    matrix.M22 * (matrix.M31 * matrix.M43 - matrix.M33 * matrix.M41) +
-                    matrix.M23 * (matrix.M31 * matrix.M42 - matrix.M32 * matrix.M41));
+            matrix[0,0] * (matrix[1,1] * (matrix[2,2] * matrix[3,3] - matrix[2,3] * matrix[3,2]) -
+                    matrix[1,2] * (matrix[2,1] * matrix[3,3] - matrix[2,3] * matrix[3,1]) +
+                    matrix[1,3] * (matrix[2,1] * matrix[3,2] - matrix[2,2] * matrix[3,1])) -
+            matrix[0,1] * (matrix[1,0] * (matrix[2,2] * matrix[3,3] - matrix[2,3] * matrix[3,2]) -
+                    matrix[1,2] * (matrix[2,0] * matrix[3,3] - matrix[2,3] * matrix[3,0]) +
+                    matrix[1,3] * (matrix[2,0] * matrix[3,2] - matrix[2,2] * matrix[3,0])) +
+            matrix[0,2] * (matrix[1,0] * (matrix[2,1] * matrix[3,3] - matrix[2,3] * matrix[3,1]) -
+                    matrix[1,1] * (matrix[2,0] * matrix[3,3] - matrix[2,3] * matrix[3,0]) +
+                    matrix[1,3] * (matrix[2,0] * matrix[3,1] - matrix[2,1] * matrix[3,0])) -
+            matrix[0,3] * (matrix[1,0] * (matrix[2,1] * matrix[3,2] - matrix[2,2] * matrix[3,1]) -
+                    matrix[1,1] * (matrix[2,0] * matrix[3,2] - matrix[2,2] * matrix[3,0]) +
+                    matrix[1,2] * (matrix[2,0] * matrix[3,1] - matrix[2,1] * matrix[3,0]));
 
         /// <summary>
         /// Converts a float4x4 matrix to a System.Numerics.Matrix4x4.
@@ -110,10 +111,10 @@ namespace DivisionEngine.MathUtilities
         /// <param name="matrix">Matrix to convert</param>
         /// <returns>Converted matrix</returns>
         public static Matrix4x4 ToMatrix4x4(this float4x4 matrix) => new Matrix4x4(
-            matrix.M11, matrix.M12, matrix.M13, matrix.M14,
-            matrix.M21, matrix.M22, matrix.M23, matrix.M24,
-            matrix.M31, matrix.M32, matrix.M33, matrix.M34,
-            matrix.M41, matrix.M42, matrix.M43, matrix.M44
+            matrix[0,0], matrix[0,1], matrix[0,2], matrix[0,3],
+            matrix[1,0], matrix[1,1], matrix[1,2], matrix[1,3],
+            matrix[2,0], matrix[2,1], matrix[2,2], matrix[2,3],
+            matrix[3,0], matrix[3,1], matrix[3,2], matrix[3,3]
         );
 
         /// <summary>
@@ -122,10 +123,10 @@ namespace DivisionEngine.MathUtilities
         /// <param name="matrix">Matrix to convert</param>
         /// <returns>Converted matrix</returns>
         public static float4x4 ToFloat4x4(this Matrix4x4 matrix) => new float4x4(
-            matrix.M11, matrix.M12, matrix.M13, matrix.M14,
-            matrix.M21, matrix.M22, matrix.M23, matrix.M24,
-            matrix.M31, matrix.M32, matrix.M33, matrix.M34,
-            matrix.M41, matrix.M42, matrix.M43, matrix.M44
+            matrix[0,0], matrix[0,1], matrix[0,2], matrix[0,3],
+            matrix[1,0], matrix[1,1], matrix[1,2], matrix[1,3],
+            matrix[2,0], matrix[2,1], matrix[2,2], matrix[2,3],
+            matrix[3,0], matrix[3,1], matrix[3,2], matrix[3,3]
         );
 
         /// <summary>
@@ -139,14 +140,9 @@ namespace DivisionEngine.MathUtilities
         /// (non-invertible), the returned matrix will be the identity matrix.</returns>
         public static float2x2 Inverse(this float2x2 matrix)
         {
-            float det = matrix.Determinant();
-            if (det == 0)
+            if (matrix.determinant() == 0)
                 return Identity2x2; // Return identity if not invertible
-            float invDet = 1.0f / det;
-            return new float2x2(
-                matrix.M22 * invDet, -matrix.M12 * invDet,
-                -matrix.M21 * invDet, matrix.M11 * invDet
-            );
+            return matrix.inverse();
         }
 
         /// <summary>
@@ -160,9 +156,9 @@ namespace DivisionEngine.MathUtilities
         /// (non-invertible), the returned matrix will be the identity matrix.</returns>
         public static float4x4 Inverse(this float4x4 matrix)
         {
-            if (Matrix4x4.Invert(matrix.ToMatrix4x4(), out Matrix4x4 m))
-                return m.ToFloat4x4();
-            return Identity4x4;
+            if (matrix.determinant() == 0)
+                return Identity4x4;
+            return matrix.inverse();
         }
 
         /// <summary>
@@ -170,43 +166,31 @@ namespace DivisionEngine.MathUtilities
         /// </summary>
         /// <param name="matrix">Matrix to transpose</param>
         /// <returns>Transposed matrix</returns>
-        public static float2x2 Transpose(this float2x2 matrix) => new float2x2(
-            matrix.M11, matrix.M21,
-            matrix.M12, matrix.M22
-        );
+        public static float2x2 Transpose(this float2x2 matrix) => matrix.transpose();
 
         /// <summary>
         /// Transposes the specified float3x3 matrix.
         /// </summary>
         /// <param name="matrix">Matrix to transpose</param>
         /// <returns>Transposed matrix</returns>
-        public static float3x3 Transpose(this float3x3 matrix) => new float3x3(
-            matrix.M11, matrix.M21, matrix.M31,
-            matrix.M12, matrix.M22, matrix.M32,
-            matrix.M13, matrix.M23, matrix.M33
-        );
+        public static float3x3 Transpose(this float3x3 matrix) => matrix.transpose();
 
         /// <summary>
         /// Transposes the specified float4x4 matrix.
         /// </summary>
         /// <param name="matrix">Matrix to transpose</param>
         /// <returns>Transposed matrix</returns>
-        public static float4x4 Transpose(this float4x4 matrix) => new float4x4(
-            matrix.M11, matrix.M21, matrix.M31, matrix.M41,
-            matrix.M12, matrix.M22, matrix.M32, matrix.M42,
-            matrix.M13, matrix.M23, matrix.M33, matrix.M43,
-            matrix.M14, matrix.M24, matrix.M34, matrix.M44
-        );
+        public static float4x4 Transpose(this float4x4 matrix) => matrix.transpose();
 
-        public static float4 Row0(this float4x4 m) => new float4(m.M11, m.M12, m.M13, m.M14);
-        public static float4 Row1(this float4x4 m) => new float4(m.M21, m.M22, m.M23, m.M24);
-        public static float4 Row2(this float4x4 m) => new float4(m.M31, m.M32, m.M33, m.M34);
-        public static float4 Row3(this float4x4 m) => new float4(m.M41, m.M42, m.M43, m.M44);
+        public static float4 Row0(this float4x4 m) => m[0];
+        public static float4 Row1(this float4x4 m) => m[1];
+        public static float4 Row2(this float4x4 m) => m[2];
+        public static float4 Row3(this float4x4 m) => m[3];
 
-        public static float4 Column0(this float4x4 m) => new float4(m.M11, m.M21, m.M31, m.M41);
-        public static float4 Column1(this float4x4 m) => new float4(m.M12, m.M22, m.M32, m.M42);
-        public static float4 Column2(this float4x4 m) => new float4(m.M13, m.M23, m.M33, m.M43);
-        public static float4 Column3(this float4x4 m) => new float4(m.M14, m.M24, m.M34, m.M44);
+        public static float4 Column0(this float4x4 m) => m.c0;
+        public static float4 Column1(this float4x4 m) => m.c1;
+        public static float4 Column2(this float4x4 m) => m.c2;
+        public static float4 Column3(this float4x4 m) => m.c3;
 
         /// <summary>
         /// Gets the value of this matrix at r, c (correctly on the CPU).
@@ -216,33 +200,8 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 3)</param>
         /// <returns>0.0 of 0 < r < 4 or 0 < c < 4, or value of matrix</returns>
         /// <remarks>This is made to work on the CPU, doing float4x4[r][c] will NOT work unless in compute shader</remarks>
-        public static float GetVal(this float4x4 m, int r, int c)
-        {
-            if (r < 0 || r > 4 || c < 0 || c > 4) return 0f;
-            else return (r, c) switch
-            {
-                (0, 0) => m.M11,
-                (0, 1) => m.M12,
-                (0, 2) => m.M13,
-                (0, 3) => m.M14,
-
-                (1, 0) => m.M21,
-                (1, 1) => m.M22,
-                (1, 2) => m.M23,
-                (1, 3) => m.M24,
-
-                (2, 0) => m.M31,
-                (2, 1) => m.M32,
-                (2, 2) => m.M33,
-                (2, 3) => m.M34,
-
-                (3, 0) => m.M41,
-                (3, 1) => m.M42,
-                (3, 2) => m.M43,
-                (3, 3) => m.M44,
-                _ => 0f,
-            };
-        }
+        public static float GetVal(this float4x4 m, int r, int c) =>
+            r >= 0 && r < 4 && c >= 0 && c < 4 ? m[r, c] : 0f;
 
         /// <summary>
         /// Sets the value of this matrix at r, c (correctly on the CPU).
@@ -252,32 +211,13 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 3)</param>
         /// <returns>Successful or not</returns>
         /// <remarks>This is made to work on the CPU, doing float4x4[r][c] will NOT work unless in compute shader</remarks>
-        public static bool SetVal(this float4x4 m, int r, int c, float val)
+        public static bool SetVal(this ref float4x4 m, int r, int c, float val)
         {
-            if (r < 0 || r > 4 || c < 0 || c > 4) return false;
-            else switch (r, c)
-            {
-                case (0, 0): m.M11 = val; break;
-                case (0, 1): m.M12 = val; break;
-                case (0, 2): m.M13 = val; break;
-                case (0, 3): m.M14 = val; break;
+            if (r < 0 || r >= 4 || c < 0 || c >= 4) return false;
 
-                case (1, 0): m.M21 = val; break;
-                case (1, 1): m.M22 = val; break;
-                case (1, 2): m.M23 = val; break;
-                case (1, 3): m.M24 = val; break;
-
-                case (2, 0): m.M31 = val; break;
-                case (2, 1): m.M32 = val; break;
-                case (2, 2): m.M33 = val; break;
-                case (2, 3): m.M34 = val; break;
-
-                case (3, 0): m.M41 = val; break;
-                case (3, 1): m.M42 = val; break;
-                case (3, 2): m.M43 = val; break;
-                case (3, 3): m.M44 = val; break;
-                default: break;
-            };
+            // DivisionMath's indexer has a setter, and `m` is passed by reference, so this
+            // actually updates the caller's matrix (the old by-value copy silently did nothing).
+            m[r, c] = val;
             return true;
         }
 
@@ -289,25 +229,8 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 2)</param>
         /// <returns>0.0 of 0 < r < 3 or 0 < c < 3, or value of matrix</returns>
         /// <remarks>This is made to work on the CPU, doing float3x3[r][c] will NOT work unless in compute shader</remarks>
-        public static float GetVal(this float3x3 m, int r, int c)
-        {
-            if (r < 0 || r > 3 || c < 0 || c > 3) return 0f;
-            else return (r, c) switch
-            {
-                (0, 0) => m.M11,
-                (0, 1) => m.M12,
-                (0, 2) => m.M13,
-
-                (1, 0) => m.M21,
-                (1, 1) => m.M22,
-                (1, 2) => m.M23,
-
-                (2, 0) => m.M31,
-                (2, 1) => m.M32,
-                (2, 2) => m.M33,
-                _ => 0f,
-            };
-        }
+        public static float GetVal(this float3x3 m, int r, int c) =>
+            r >= 0 && r < 3 && c >= 0 && c < 3 ? m[r, c] : 0f;
 
         /// <summary>
         /// Sets the value of this matrix at r, c (correctly on the CPU).
@@ -317,24 +240,11 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 2)</param>
         /// <returns>Successful or not</returns>
         /// <remarks>This is made to work on the CPU, doing float3x3[r][c] will NOT work unless in compute shader</remarks>
-        public static bool SetVal(this float3x3 m, int r, int c, float val)
+        public static bool SetVal(this ref float3x3 m, int r, int c, float val)
         {
-            if (r < 0 || r > 3 || c < 0 || c > 3) return false;
-            else switch (r, c)
-            {
-                case (0, 0): m.M11 = val; break;
-                case (0, 1): m.M12 = val; break;
-                case (0, 2): m.M13 = val; break;
+            if (r < 0 || r >= 3 || c < 0 || c >= 3) return false;
 
-                case (1, 0): m.M21 = val; break;
-                case (1, 1): m.M22 = val; break;
-                case (1, 2): m.M23 = val; break;
-
-                case (2, 0): m.M31 = val; break;
-                case (2, 1): m.M32 = val; break;
-                case (2, 2): m.M33 = val; break;
-                default: break;
-            };
+            m[r, c] = val;
             return true;
         }
 
@@ -346,18 +256,8 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 1)</param>
         /// <returns>0.0 of 0 < r < 2 or 0 < c < 2, or value of matrix</returns>
         /// <remarks>This is made to work on the CPU, doing float2x2[r][c] will NOT work unless in compute shader</remarks>
-        public static float GetVal(this float2x2 m, int r, int c)
-        {
-            if (r < 0 || r > 2 || c < 0 || c > 2) return 0f;
-            else return (r, c) switch
-            {
-                (0, 0) => m.M11,
-                (0, 1) => m.M12,
-                (1, 0) => m.M21,
-                (1, 1) => m.M22,
-                _ => 0f,
-            };
-        }
+        public static float GetVal(this float2x2 m, int r, int c) =>
+            r >= 0 && r < 2 && c >= 0 && c < 2 ? m[r, c] : 0f;
 
         /// <summary>
         /// Sets the value of this matrix at r, c (correctly on the CPU).
@@ -367,17 +267,11 @@ namespace DivisionEngine.MathUtilities
         /// <param name="c">Column value (0 - 2)</param>
         /// <returns>Successful or not</returns>
         /// <remarks>This is made to work on the CPU, doing float2x2[r][c] will NOT work unless in compute shader</remarks>
-        public static bool SetVal(this float2x2 m, int r, int c, float val)
+        public static bool SetVal(this ref float2x2 m, int r, int c, float val)
         {
-            if (r < 0 || r > 2 || c < 0 || c > 2) return false;
-            else switch (r, c)
-            {
-                case (0, 0): m.M11 = val; break;
-                case (0, 1): m.M12 = val; break;
-                case (1, 0): m.M21 = val; break;
-                case (1, 1): m.M22 = val; break;
-                default: break;
-            };
+            if (r < 0 || r >= 2 || c < 0 || c >= 2) return false;
+
+            m[r, c] = val;
             return true;
         }
 
@@ -387,34 +281,7 @@ namespace DivisionEngine.MathUtilities
         /// <param name="left">Left matrix to multiply</param>
         /// <param name="right">Right matrix to multiply</param>
         /// <returns>Multiplied matrices</returns>
-        public static float4x4 Multiply(float4x4 left, float4x4 right)
-        {
-            return new float4x4(
-                // Row 0
-                left.Row0().Dot(right.Column0()),
-                left.Row0().Dot(right.Column1()),
-                left.Row0().Dot(right.Column2()),
-                left.Row0().Dot(right.Column3()),
-
-                // Row 1
-                left.Row1().Dot(right.Column0()),
-                left.Row1().Dot(right.Column1()),
-                left.Row1().Dot(right.Column2()),
-                left.Row1().Dot(right.Column3()),
-
-                // Row 2
-                left.Row2().Dot(right.Column0()),
-                left.Row2().Dot(right.Column1()),
-                left.Row2().Dot(right.Column2()),
-                left.Row2().Dot(right.Column3()),
-
-                // Row 3
-                left.Row3().Dot(right.Column0()),
-                left.Row3().Dot(right.Column1()),
-                left.Row3().Dot(right.Column2()),
-                left.Row3().Dot(right.Column3())
-            );
-        }
+        public static float4x4 Multiply(float4x4 left, float4x4 right) => math.mul(left, right);
 
         /// <summary>
         /// Creates a 4x4 matrix from a rotation.
@@ -439,10 +306,10 @@ namespace DivisionEngine.MathUtilities
         /*public static float4x4 Invert(this float4x4 matrix)
         {
             float[] m = [
-                matrix.M11, matrix.M12, matrix.M13, matrix.M14,
-                matrix.M21, matrix.M22, matrix.M23, matrix.M24,
-                matrix.M31, matrix.M32, matrix.M33, matrix.M34,
-                matrix.M41, matrix.M42, matrix.M43, matrix.M44
+                matrix[0,0], matrix[0,1], matrix[0,2], matrix[0,3],
+                matrix[1,0], matrix[1,1], matrix[1,2], matrix[1,3],
+                matrix[2,0], matrix[2,1], matrix[2,2], matrix[2,3],
+                matrix[3,0], matrix[3,1], matrix[3,2], matrix[3,3]
             ];
             double[] inv = [16];
             double det;

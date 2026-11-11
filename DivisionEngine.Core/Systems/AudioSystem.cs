@@ -39,14 +39,10 @@ namespace DivisionEngine.Systems
         /// </summary>
         public override int Priority => 100;
 
-        public override void AppStart()
-        {
-            Instance = this;
-            AudioEngine.Initialize();
-        }
-
         public override void Awake()
         {
+            // World start: this world's audio system is the one editor tooling should query.
+            Instance = this;
             if (!AudioEngine.IsInitialized) AudioEngine.Initialize();
         }
 
@@ -174,7 +170,7 @@ namespace DivisionEngine.Systems
             }
             warnedNoListener = false;
 
-            float3 velocity = float3.Zero;
+            float3 velocity = float3.zero;
             if (hasListenerHistory && TimeSystem.DeltaTimeF > 0f)
                 velocity = (listenerTransform.position - lastListenerPosition).Divide(TimeSystem.DeltaTimeF);
 
@@ -257,7 +253,7 @@ namespace DivisionEngine.Systems
             if (lastPositions.TryGetValue(entityId, out float3 previous) && deltaTime > 0f)
                 voice.Velocity = (transform.position - previous).Divide(deltaTime);
             else
-                voice.Velocity = float3.Zero;
+                voice.Velocity = float3.zero;
 
             lastPositions[entityId] = transform.position;
 

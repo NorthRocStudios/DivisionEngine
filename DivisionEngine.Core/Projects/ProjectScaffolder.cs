@@ -285,7 +285,7 @@ namespace DivisionEngine.Projects
         /// </summary>
         /// <remarks>
         /// This ensures scripts can resolve types from any NuGet
-        /// package the editor has loaded (ComputeSharp, NorthRoc.DivisionMath, etc.)
+        /// package the editor has loaded (NorthRoc.DivisionMath, DivisionCompute, etc.)
         /// </remarks>
         private static void AddLoadedAssemblyReferences(XElement itemGroup, Assembly engineAssembly)
         {

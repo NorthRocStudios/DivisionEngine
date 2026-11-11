@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -40,7 +40,9 @@ namespace DivisionEngine.Editor
         /// <summary>
         /// Shortcut to get selected entity, or null if none exists.
         /// </summary>
-        public static uint Entity { get; private set; }
+        /// <remarks>Defaults to <see cref="uint.MaxValue"/>: 0 is a real entity ID, so a
+        /// zero default would silently act on the first entity before anything is selected.</remarks>
+        public static uint Entity { get; private set; } = uint.MaxValue;
 
         /// <summary>
         /// Shortcut to get selected asset, or null if none exists.

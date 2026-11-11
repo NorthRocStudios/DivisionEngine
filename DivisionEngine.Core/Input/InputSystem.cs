@@ -172,10 +172,10 @@ namespace DivisionEngine.Input
             pressedKeys = [];
             pressedMouseKeys = [];
 
-            mousePos = float2.Zero;
-            mouseUV = float2.Zero;
-            mouseDelta = float2.Zero;
-            mouseUVDelta = float2.Zero;
+            mousePos = float2.zero;
+            mouseUV = float2.zero;
+            mouseDelta = float2.zero;
+            mouseUVDelta = float2.zero;
             Instance = this;
         }
 
@@ -184,9 +184,9 @@ namespace DivisionEngine.Input
         /// </summary>
         public void InvokeInputUpdate()
         {
-            if (mouseDelta.X != 0 || mouseDelta.Y != 0) mouseDelta = float2.Zero;
-            if (mouseUVDelta.X != 0 || mouseUVDelta.Y != 0) mouseUVDelta = float2.Zero;
-            if (scrollDelta.X != 0 || scrollDelta.Y != 0) scrollDelta = float2.Zero;
+            if (mouseDelta.x != 0 || mouseDelta.y != 0) mouseDelta = float2.zero;
+            if (mouseUVDelta.x != 0 || mouseUVDelta.y != 0) mouseUVDelta = float2.zero;
+            if (scrollDelta.x != 0 || scrollDelta.y != 0) scrollDelta = float2.zero;
         }
 
         public void SetKeyDown(KeyCode key)
@@ -227,7 +227,7 @@ namespace DivisionEngine.Input
         {
             lock (syncLock)
             {
-                if (screenSize.X > 0f && screenSize.Y > 0f)
+                if (screenSize.x > 0f && screenSize.y > 0f)
                 {
                     float2 relMousePos = newMousePos.Divide(screenSize);
                     mouseUVDelta = relMousePos.Subtract(mouseUV);

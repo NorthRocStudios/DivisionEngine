@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -54,6 +54,11 @@ namespace DivisionEngine.Projects
 		// world data and reload it once the first compile succeeds.
 		private static WorldData? pendingWorldReload = null;
 		private static bool firstCompileHandled = false;
+
+		// True while the live world is known to be missing components that only exist in
+		// script assemblies which have not been loaded yet. Saving in that window would
+		// overwrite the on-disk world with a stripped copy, so saves are refused instead.
+		private static bool pendingReloadBlocksSave = false;
 
 		/// <summary>
 		/// Searches project directory to find the project file (ex. NewProject.divp).
@@ -133,6 +138,7 @@ namespace DivisionEngine.Projects
 				ScriptCompilationPipeline.Initialize();
 				ScriptCompilationPipeline.CompilationStarted += OnCompilationStarted;
 				ScriptCompilationPipeline.ScriptsLoaded += OnScriptsLoaded;
+				ScriptCompilationPipeline.CompilationCompleted += OnCompilationCompleted;
 				_ = ScriptCompilationPipeline.RefreshAndCompileAsync();
 
 				// Load project file
@@ -163,7 +169,11 @@ namespace DivisionEngine.Projects
 
 					// Stash the raw data so OnScriptsLoaded can replay it if the initial
 					// deserialize couldn't resolve custom component types
-					if (!firstCompileHandled) pendingWorldReload = tempWorldData;
+					if (!firstCompileHandled)
+					{
+						pendingWorldReload = tempWorldData;
+						pendingReloadBlocksSave = true;
+					}
 
 					LoadWorldDataIntoCurrent(tempWorldData);
 					ResolveAssetReferencesInWorld(WorldManager.CurrentWorld);
@@ -196,7 +206,21 @@ namespace DivisionEngine.Projects
 		private static void OnCompilationStarted()
 		{
 			if (firstCompileHandled && WorldManager.CurrentWorld != null)
+			{
 				pendingWorldReload = WorldData.Current;
+				pendingReloadBlocksSave = false;
+			}
+		}
+
+		/// <summary>
+		/// Drops a live-world snapshot taken for a recompile that failed. Without this a
+		/// failed recompile would leave the snapshot pending (and, on the first load, block
+		/// saving forever), even though the live world itself is complete.
+		/// </summary>
+		private static void OnCompilationCompleted(ScriptCompileResult result)
+		{
+			if (!result.Success && !pendingReloadBlocksSave)
+				pendingWorldReload = null;
 		}
 
 		/// <summary>
@@ -230,6 +254,7 @@ namespace DivisionEngine.Projects
             }
 
             firstCompileHandled = true;
+            pendingReloadBlocksSave = false;
         }
 
 		/// <summary>
@@ -303,6 +328,7 @@ namespace DivisionEngine.Projects
 			ScriptCompilationPipeline.Initialize();
 			ScriptCompilationPipeline.CompilationStarted += OnCompilationStarted;
 			ScriptCompilationPipeline.ScriptsLoaded += OnScriptsLoaded;
+			ScriptCompilationPipeline.CompilationCompleted += OnCompilationCompleted;
 			_ = ScriptCompilationPipeline.RefreshAndCompileAsync();
 
 			ProjectLoaded?.Invoke();
@@ -321,7 +347,20 @@ namespace DivisionEngine.Projects
 
         private static bool SaveProject(string projName, string projDir)
         {
-            if (WorldManager.CurrentWorld != null)
+            if (WorldManager.CurrentWorld == null) return false;
+
+            // Refuse to overwrite the on-disk world while it is known to be missing components
+            // whose script assemblies have not loaded yet: writing now would permanently delete
+            // every script-defined component from the project file.
+            if (pendingReloadBlocksSave)
+            {
+                Debug.Warning("Project Manager: save skipped - the world is still waiting for its scripts " +
+                              "to compile, saving now would drop script components. Fix any script errors and " +
+                              "compile again before saving.");
+                return false;
+            }
+
+            try
             {
                 // Force project validation
                 bool validationStep = ForceValidateProjectDirectory(projName, projDir);
@@ -343,14 +382,34 @@ namespace DivisionEngine.Projects
                 string serializedWorld = Serialize.Default(worldData);
                 string serializedProjectData = Serialize.Default(CurrentProjectData);
 
-                File.WriteAllText(GetProjectPath(projDir, projName), serializedProjectData); // Write project file
-                File.WriteAllText(GetWorldPath(projDir, worldData), serializedWorld); // Write single world file
+                // Write through temp files and swap them in, so a crash mid-write cannot leave
+                // a truncated project/world file behind (there is only one of each).
+                WriteFileAtomic(GetProjectPath(projDir, projName), serializedProjectData); // Project file
+                WriteFileAtomic(GetWorldPath(projDir, worldData), serializedWorld); // Single world file
 
                 // Asset database doesn't need saving, it's auto-saved via .divmeta files
 
                 return true;
             }
-            return false;
+            catch (Exception ex)
+            {
+                Debug.Error($"Project Manager: failed to save project '{projName}'", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Writes a text file by writing a sibling temp file and moving it over the target,
+        /// so an interrupted write cannot destroy the previous contents.
+        /// </summary>
+        private static void WriteFileAtomic(string path, string contents)
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+
+            string tempPath = path + ".tmp";
+            File.WriteAllText(tempPath, contents);
+            File.Move(tempPath, path, overwrite: true);
         }
 
         /// <summary>
@@ -419,6 +478,7 @@ namespace DivisionEngine.Projects
 
             ScriptCompilationPipeline.CompilationStarted -= OnCompilationStarted;
             ScriptCompilationPipeline.ScriptsLoaded -= OnScriptsLoaded;
+            ScriptCompilationPipeline.CompilationCompleted -= OnCompilationCompleted;
             ScriptCompilationPipeline.Shutdown();
 
             AssetDatabase.StopFileWatcher();
@@ -430,6 +490,7 @@ namespace DivisionEngine.Projects
 
             pendingWorldReload = null;
             firstCompileHandled = false;
+            pendingReloadBlocksSave = false;
 
             AssetManager = null;
             CurrentProjectName = null;

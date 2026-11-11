@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -12,6 +12,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.Input;
 using DivisionEngine.Editor.Settings;
+using DivisionEngine.Editor.Systems;
 using DivisionEngine.Editor.Tasks;
 using DivisionEngine.Editor.Undo;
 using DivisionEngine.Projects;
@@ -129,6 +130,25 @@ namespace DivisionEngine.Editor.ViewModels
             UndoManager.UndoStackChanged += OnUndoStackChanged;
             ProjectManager.ProjectLoaded += ProjectStateChanged;
             ProjectManager.ProjectClosed += ProjectStateChanged;
+            EngineCore.PlayModeChanged += OnPlayModeChanged;
+        }
+
+        /// <summary>
+        /// Drops undo history and selection when the world is replaced (play mode restores a
+        /// snapshot on stop, project transitions create a new world). Entity IDs are world
+        /// local, so commands and selections from the previous world must not carry over.
+        /// </summary>
+        private static void ResetEditorStateForNewWorld()
+        {
+            UndoManager.Clear();
+            Selection.Clear();
+        }
+
+        private static void OnPlayModeChanged(bool inPlayMode)
+        {
+            // Entering play mode leaves the edited world intact; leaving it restores the
+            // pre-play snapshot, which replaces every component instance.
+            if (!inPlayMode) ResetEditorStateForNewWorld();
         }
 
         private void ProjectStateChanged() => this.RaisePropertyChanged(nameof(LayoutsEnabled));
@@ -283,6 +303,7 @@ namespace DivisionEngine.Editor.ViewModels
                 {
                     ProjectManager.CloseProject();
                     WorldManager.CreateDefaultWorld(true);
+                    ResetEditorStateForNewWorld();
                 }
             }
             catch (Exception ex)
@@ -376,6 +397,9 @@ namespace DivisionEngine.Editor.ViewModels
                 bool success = ProjectManager.LoadProject(projectPath);
                 if (success) // Check if loaded project
                 {
+                    // The new project has its own world and entity IDs: drop the previous
+                    // project's undo history and selection before anything can act on them.
+                    ResetEditorStateForNewWorld();
                     AddToRecentProjects(projectPath);
                     AssetsWindow.LoadAssetsForCurrentProject();
                 }
@@ -493,6 +517,9 @@ namespace DivisionEngine.Editor.ViewModels
 
         [RelayCommand]
         private static void ReloadTextures() => TextureSystem.MarkDirty();
+
+        [RelayCommand]
+        private static void ReloadAllShaders() => ShaderReload.Run();
 
         [RelayCommand]
         private static void About()

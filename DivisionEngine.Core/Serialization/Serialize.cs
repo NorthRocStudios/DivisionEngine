@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Projects.Assets;
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 
@@ -77,17 +78,19 @@ namespace DivisionEngine.Serialization
                     else if (fieldType == typeof(float2))
                     {
                         float2 vec = (float2)fieldVal;
-                        serializedField = $"({vec.X},{vec.Y})";
+                        // Invariant culture: ',' is the field separator, so a comma-decimal
+                        // locale would otherwise corrupt the value on the way in and out.
+                        serializedField = FormattableString.Invariant($"({vec.x},{vec.y})");
                     }
                     else if (fieldType == typeof(float3))
                     {
                         float3 vec = (float3)fieldVal;
-                        serializedField = $"({vec.X},{vec.Y},{vec.Z})";
+                        serializedField = FormattableString.Invariant($"({vec.x},{vec.y},{vec.z})");
                     }
                     else if (fieldType == typeof(float4))
                     {
                         float4 vec = (float4)fieldVal;
-                        serializedField = $"({vec.X},{vec.Y},{vec.Z},{vec.W})";
+                        serializedField = FormattableString.Invariant($"({vec.x},{vec.y},{vec.z},{vec.w})");
                     }
                     else if (fieldType == typeof(float4x4))
                     {
@@ -101,10 +104,20 @@ namespace DivisionEngine.Serialization
             return serialized;
         }
 
-        private static string Serialize4x4Matrix(float4x4 matrix) => 
-            $"({matrix.M11},{matrix.M12},{matrix.M13},{matrix.M14}," +
-            $"{matrix.M21},{matrix.M22},{matrix.M23},{matrix.M24}," +
-            $"{matrix.M31},{matrix.M32},{matrix.M33},{matrix.M34}," +
-            $"{matrix.M41},{matrix.M42},{matrix.M43},{matrix.M44})";
+        /// <summary>
+        /// Formats a matrix with the invariant culture (see <see cref="Component"/>: the ',' is
+        /// the field separator, so the culture must never be allowed to introduce extra commas).
+        /// </summary>
+        private static string Serialize4x4Matrix(float4x4 matrix)
+        {
+            CultureInfo culture = CultureInfo.InvariantCulture;
+            string values = string.Join(",",
+                matrix[0,0].ToString(culture), matrix[0,1].ToString(culture), matrix[0,2].ToString(culture), matrix[0,3].ToString(culture),
+                matrix[1,0].ToString(culture), matrix[1,1].ToString(culture), matrix[1,2].ToString(culture), matrix[1,3].ToString(culture),
+                matrix[2,0].ToString(culture), matrix[2,1].ToString(culture), matrix[2,2].ToString(culture), matrix[2,3].ToString(culture),
+                matrix[3,0].ToString(culture), matrix[3,1].ToString(culture), matrix[3,2].ToString(culture), matrix[3,3].ToString(culture)
+            );
+            return $"({values})";
+        }
     }
 }

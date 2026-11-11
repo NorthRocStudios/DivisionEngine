@@ -61,6 +61,40 @@ namespace DivisionEngine.Editor
         /// </summary>
         public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
+        /// <summary>
+        /// Forwards a DivisionCompute shader-compilation message into the engine log.
+        /// </summary>
+        /// <remarks>
+        /// Compilation can run on the render thread or the background preload task, so
+        /// the message is marshalled onto the UI thread before it reaches the console.
+        /// </remarks>
+        private static void ForwardShaderCompileLog(ShaderLogLevel level, string message)
+        {
+            void Write()
+            {
+                // Attribute the entry to the compiler rather than to this forwarder.
+                LogLevel logLevel = level switch
+                {
+                    ShaderLogLevel.Error => LogLevel.Error,
+                    ShaderLogLevel.Warning => LogLevel.Warning,
+                    _ => LogLevel.Info,
+                };
+                Debug.Log(message, logLevel, "DivisionShaderCompiler.cs", "CompileHLSL", 0);
+            }
+
+            if (Dispatcher.UIThread.CheckAccess()) Write();
+            else Dispatcher.UIThread.Post(Write);
+        }
+
+        /// <summary>
+        /// Applies the editor's shader-cache preference to DivisionCompute. Called at
+        /// startup and whenever the setting is toggled in the settings window.
+        /// </summary>
+        public static void ApplyShaderCacheSetting()
+            => DivisionShaderCompiler.CacheDirectory = EditorSettings.Instance.ShaderCacheEnabled
+                ? DivisionShaderCompiler.DefaultCacheDirectory
+                : null;
+
         public static void StartRenderer()
         {
             if (Renderer != null) return;
@@ -84,8 +118,13 @@ namespace DivisionEngine.Editor
                 // engine core free of a Roslyn dependency.
                 ScriptCompilationPipeline.SetCompiler(new RoslynScriptCompiler());
 
+                // DivisionCompute shader compilation messages go to the editor console
+                // next to the rest of the engine's logs.
+                DivisionShaderCompiler.Log += ForwardShaderCompileLog;
+
                 // Settings are automatically loaded when Instance is first accessed
                 EditorSettings settings = EditorSettings.Instance;
+                ApplyShaderCacheSetting();
 
                 desktop.MainWindow = new MainWindow();
                 MainWindowViewModel vm = new MainWindowViewModel(desktop.MainWindow);
@@ -95,6 +134,9 @@ namespace DivisionEngine.Editor
                 // Startup editor
                 WorldManager.CreateDefaultWorld(true);
                 WorldManager.CurrentWorld?.CallAppStart();
+                // AppStart is app-lifetime; per-world wiring (audio instance, texture/asset
+                // listeners, autosave timer) happens in Awake, so start the first world too.
+                WorldManager.CurrentWorld?.CallAwake();
                 StartEditorEngineLoop();
                 UserInput = new InputSystem();
                 StartRenderer(); // Start the SDFRenderer in a separate thread

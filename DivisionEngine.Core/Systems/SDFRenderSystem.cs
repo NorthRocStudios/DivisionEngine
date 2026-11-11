@@ -1,11 +1,11 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
 using DivisionEngine.Components;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.Components.SDFs;
@@ -46,7 +46,7 @@ namespace DivisionEngine.Systems
         /// <summary>
         /// Helper used to quickly get the world data in an allocated compute buffer.
         /// </summary>
-        public static ReadOnlyBuffer<SDFWorldDTO>? WorldDataBuffer { get; private set; }
+        public static StructuredBuffer<SDFWorldDTO>? WorldDataBuffer { get; private set; }
 
         /// <summary>
         /// Called right before the world is rendered to screen.
@@ -214,15 +214,15 @@ namespace DivisionEngine.Systems
                     position = transform.position,
                     rotation = transform.rotation,
                     scaling = new float3(
-                        math.max(1f / transform.scaling.X, EPSILON),
-                        math.max(1f / transform.scaling.Y, EPSILON),
-                        math.max(1f / transform.scaling.Z, EPSILON)),
+                        math.max(1f / transform.scaling.x, EPSILON),
+                        math.max(1f / transform.scaling.y, EPSILON),
+                        math.max(1f / transform.scaling.z, EPSILON)),
                     color = new float4(1f, 0f, 1f, 1f), // Default render color if no material active
                     stepBias = 1f,
 
                     // Shadows
                     shadowType = 1,
-                    shadowEffects = new bool2(true, true),
+                    shadowEffects = new int2(1, 1),
                     shadowDistances = new float3(0f, 100f, 40f),
                 };
 
@@ -231,7 +231,9 @@ namespace DivisionEngine.Systems
                 {
                     Shadows shadows = W.GetComponent<Shadows>(id)!;
                     curSDF.shadowType = (int)shadows.shadowStyle;
-                    curSDF.shadowEffects = new bool2(shadows.shadowCaster, shadows.shadowReceiver);
+                    curSDF.shadowEffects = new int2(
+                        shadows.shadowCaster ? 1 : 0,
+                        shadows.shadowReceiver ? 1 : 0);
                     curSDF.shadowDistances = new float3(shadows.minDistance, shadows.maxDistance, shadows.penumbraDistance);
                 }
                 if (W.HasComponent<Reflections>(id))
@@ -268,7 +270,7 @@ namespace DivisionEngine.Systems
                     curSDF.roughTexMetaID = mat.roughnessMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.roughnessMap.ID) : -1;
                     curSDF.metalTexMetaID = mat.metallicMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.metallicMap.ID) : -1;
                     curSDF.emissionTexMetaID = mat.emissiveMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.emissiveMap.ID) : -1;
-                    curSDF.texTilingOffset = new float4(mat.uvScale.X, mat.uvScale.Y, mat.uvOffset.X, mat.uvOffset.Y);
+                    curSDF.texTilingOffset = new float4(mat.uvScale.x, mat.uvScale.y, mat.uvOffset.x, mat.uvOffset.y);
                     curSDF.triplanarBlend = mat.triplanarBlend;
 
                     // Material properties
@@ -285,9 +287,9 @@ namespace DivisionEngine.Systems
                     float s2016 = 0.16f * mat.specular * mat.specular;
                     float3 f0 = new float3(s2016, s2016, s2016);
                     curSDF.f0_reflectance = new float3(
-                        math.lerp(f0.X, mat.albedoColor.X, mat.metallic),
-                        math.lerp(f0.Y, mat.albedoColor.Y, mat.metallic),
-                        math.lerp(f0.Z, mat.albedoColor.Z, mat.metallic));
+                        math.lerp(f0.x, mat.albedoColor.x, mat.metallic),
+                        math.lerp(f0.y, mat.albedoColor.y, mat.metallic),
+                        math.lerp(f0.z, mat.albedoColor.z, mat.metallic));
                     if (curSDF.hasRefraction == 1) curSDF.f0_dielectric = math.pow((mat.ior - 1.0f) / (mat.ior + 1.0f), 2.0f);
                 }
 
@@ -304,16 +306,16 @@ namespace DivisionEngine.Systems
                 {
                     SDFBox box = W.GetComponent<SDFBox>(id)!;
                     curSDF.type = 1; // Box type
-                    curSDF.parameters = new float4(box.size.X, box.size.Y, box.size.Z, 0f);
-                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(box.size.X * box.size.X + box.size.Y * box.size.Y + box.size.Z * box.size.Z), transform.scaling);
+                    curSDF.parameters = new float4(box.size.x, box.size.y, box.size.z, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(box.size.x * box.size.x + box.size.y * box.size.y + box.size.z * box.size.z), transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFRoundedBox>(id)) // Check rounded box primitive
                 {
                     SDFRoundedBox roundedBox = W.GetComponent<SDFRoundedBox>(id)!;
                     curSDF.type = 2; // Rounded box type
-                    curSDF.parameters = new float4(roundedBox.size.X, roundedBox.size.Y, roundedBox.size.Z, roundedBox.bevel);
-                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(roundedBox.size.X * roundedBox.size.X + roundedBox.size.Y * roundedBox.size.Y + roundedBox.size.Z * roundedBox.size.Z) + roundedBox.bevel, transform.scaling);
+                    curSDF.parameters = new float4(roundedBox.size.x, roundedBox.size.y, roundedBox.size.z, roundedBox.bevel);
+                    curSDF.bounds = Bounds(curSDF.position, math.sqrt(roundedBox.size.x * roundedBox.size.x + roundedBox.size.y * roundedBox.size.y + roundedBox.size.z * roundedBox.size.z) + roundedBox.bevel, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
                 if (W.HasComponent<SDFTorus>(id)) // Check torus primitive
@@ -336,7 +338,7 @@ namespace DivisionEngine.Systems
                 {
                     SDFPlane plane = W.GetComponent<SDFPlane>(id)!;
                     curSDF.type = 5; // Plane type
-                    curSDF.parameters = new float4(plane.normal.X, plane.normal.Y, plane.normal.Z, plane.height);
+                    curSDF.parameters = new float4(plane.normal.x, plane.normal.y, plane.normal.z, plane.height);
                     curSDF.bounds = Bounds(curSDF.position, 1e9f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
@@ -360,8 +362,8 @@ namespace DivisionEngine.Systems
                 {
                     SDFCone cone = W.GetComponent<SDFCone>(id)!;
                     curSDF.type = 8; // Cone type
-                    curSDF.parameters = new float4(cone.cone.X, cone.cone.Y, cone.height, 0f);
-                    curSDF.bounds = Bounds(curSDF.position, math.max(cone.height, cone.cone.X) * 1.5f, transform.scaling);
+                    curSDF.parameters = new float4(cone.cone.x, cone.cone.y, cone.height, 0f);
+                    curSDF.bounds = Bounds(curSDF.position, math.max(cone.height, cone.cone.x) * 1.5f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }
 
@@ -413,17 +415,16 @@ namespace DivisionEngine.Systems
         /// </summary>
         private static float4 Bounds(float3 position, float radius, float3 scaling)
         {
-            float maxScale = math.max(scaling.X, math.max(scaling.Y, scaling.Z));
-            return new float4(position.X, position.Y, position.Z, radius * maxScale * 1.05f + 0.01f);
+            float maxScale = math.max(scaling.x, math.max(scaling.y, scaling.z));
+            return new float4(position.x, position.y, position.z, radius * maxScale * 1.05f + 0.01f);
         }
         private static int GetTexMetaID(AssetRef<TextureAsset> assetRef) =>
             assetRef.IsLoaded ? TextureSystem.GetTextureMetadataIndex(assetRef.ID) : -1;
 
-        [SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
-        public static void UploadWorldData(GraphicsDevice device)
+        public static void UploadWorldData(DivisionComputeContext context)
         {
             WorldDataBuffer?.Dispose();
-            WorldDataBuffer = device.AllocateReadOnlyBuffer([PreparedWorldDTO]);
+            WorldDataBuffer = context.CreateStructuredBuffer([PreparedWorldDTO]);
         }
     }
 }

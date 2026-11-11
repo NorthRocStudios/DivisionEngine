@@ -24,9 +24,9 @@ namespace DivisionEngine.MathUtilities
         /// <returns>Normalized quaternion</returns>
         public static float4 Normalize(this float4 q)
         {
-            float length = Math.Sqrt(q.X * q.X + q.Y * q.Y + q.Z * q.Z + q.W * q.W);
+            float length = Math.Sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
             if (length < 0.0001f) return Identity;
-            return new float4(q.X / length, q.Y / length, q.Z / length, q.W / length);
+            return new float4(q.x / length, q.y / length, q.z / length, q.w / length);
         }
 
         /// <summary>
@@ -62,7 +62,7 @@ namespace DivisionEngine.MathUtilities
         /// <param name="quaternion">Quaternion to invert</param>
         /// <returns>Inverted quaternion</returns>
         public static float4 InvertQuaternion(this float4 quaternion) =>
-            new float4(-quaternion.X, -quaternion.Y, -quaternion.Z, quaternion.W);
+            new float4(-quaternion.x, -quaternion.y, -quaternion.z, quaternion.w);
 
         /// <summary>
         /// Linear interpolation between two quaternions by amount t.
@@ -100,10 +100,10 @@ namespace DivisionEngine.MathUtilities
         {
             // Formula: q1 * q2 = (w1*w2 - dot(v1,v2), w1*v2 + w2*v1 + cross(v1,v2))
 
-            float3 v1 = new float3(a.X, a.Y, a.Z);
-            float3 v2 = new float3(b.X, b.Y, b.Z);
-            float w1 = a.W;
-            float w2 = b.W;
+            float3 v1 = new float3(a.x, a.y, a.z);
+            float3 v2 = new float3(b.x, b.y, b.z);
+            float w1 = a.w;
+            float w2 = b.w;
 
             float3 crossVec = v1.Cross(v2);
             float dotVec = v1.Dot(v2);
@@ -111,7 +111,7 @@ namespace DivisionEngine.MathUtilities
             float3 resultVec = v2.Multiply(w1).Add(v1.Multiply(w2)).Add(crossVec);
             float resultW = w1 * w2 - dotVec;
 
-            return new float4(resultVec.X, resultVec.Y, resultVec.Z, resultW);
+            return new float4(resultVec.x, resultVec.y, resultVec.z, resultW);
         }
 
         /// <summary>
@@ -129,7 +129,7 @@ namespace DivisionEngine.MathUtilities
         /// <param name="quaternion">Float4 vector to convert</param>
         /// <returns>System quaternion object</returns>
         public static System.Numerics.Quaternion ToQuaternion(this float4 quaternion) =>
-            new System.Numerics.Quaternion(quaternion.X, quaternion.Y, quaternion.Z, quaternion.W);
+            new System.Numerics.Quaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
 
         /// <summary>
         /// Converts a system quaternion to a float4 quaternion.
@@ -151,9 +151,9 @@ namespace DivisionEngine.MathUtilities
             // This must match ShaderMath.RotateVector exactly - the previous version
             // negated the vector part, which made the CPU compute the conjugate
             // (inverse) rotation while the shader computed the forward one.
-            float3 qVec = new float3(quaternion.X, quaternion.Y, quaternion.Z);
+            float3 qVec = new float3(quaternion.x, quaternion.y, quaternion.z);
             float3 t = qVec.Cross(vector).Multiply(2.0f);
-            return vector.Add(t.Multiply(quaternion.W)).Add(qVec.Cross(t));
+            return vector.Add(t.Multiply(quaternion.w)).Add(qVec.Cross(t));
         }
 
         /// <summary>
@@ -163,7 +163,7 @@ namespace DivisionEngine.MathUtilities
         /// <param name="vector">Vector to rotate</param>
         /// <returns>Float3 rotated by the conjugate rotation</returns>
         public static float3 InverseRotateVector(this float4 quaternion, float3 vector) =>
-            new float4(-quaternion.X, -quaternion.Y, -quaternion.Z, quaternion.W).RotateVector(vector);
+            new float4(-quaternion.x, -quaternion.y, -quaternion.z, quaternion.w).RotateVector(vector);
 
         /*/// <summary>
         /// Converts a quaternion to Euler angles (roll, pitch, yaw) in radians.

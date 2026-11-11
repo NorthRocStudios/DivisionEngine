@@ -43,8 +43,8 @@ namespace DivisionEngine.Editor.Systems
             {
                 int width = RenderPipeline.Instance.EmbeddedWidth;
                 int height = RenderPipeline.Instance.EmbeddedHeight;
-                int pixelX = (int)InputSystem.MousePosition.X;
-                int pixelY = (int)InputSystem.MousePosition.Y;
+                int pixelX = (int)InputSystem.MousePosition.x;
+                int pixelY = (int)InputSystem.MousePosition.y;
 
                 if (pixelX < 0 || pixelX >= width || pixelY < 0 || pixelY >= height) return;
 
@@ -57,7 +57,7 @@ namespace DivisionEngine.Editor.Systems
                 }
 
                 int bufferIndex = pixelX + (height - 1 - pixelY) * width;
-                uint entitySelected = RenderPipeline.Instance.ObjectIDs[bufferIndex].Y;
+                uint entitySelected = RenderPipeline.Instance.ObjectIDs[bufferIndex].y;
                 if (entitySelected != uint.MaxValue)
                 {
                     if (W.HasComponent<Transform>(entitySelected))

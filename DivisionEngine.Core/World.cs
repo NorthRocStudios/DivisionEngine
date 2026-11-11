@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -828,22 +828,21 @@ namespace DivisionEngine
         /// <returns>A new world with cloned entities and components</returns>
         public World Clone()
         {
-            // Make sure editor camera is not cloned
-            if (EntityExists(EditorCamera.EditorCameraId)) DestroyEntity(EditorCamera.EditorCameraId);
-
+            // The editor camera belongs to the editor, not to the world snapshot. Skip it
+            // instead of destroying it in the live world - Clone() must not mutate this world.
             World newWorld = new World($"{Name}_Copy")
             {
-                NextEntityId = 0
+                NextEntityId = NextEntityId
             };
 
-            // Create a mapping from old entity IDs to new entity IDs
-            Dictionary<uint, uint> entityIdMap = [];
-
-            // Create all entities in the new world
+            // Copy all entities, keeping their original IDs. Restoring a snapshot then cannot
+            // permute IDs (which used to invalidate undo history, selection and per-entity caches).
             foreach (uint oldEntityId in entities)
             {
-                uint newEntityId = newWorld.CreateEntity();
-                entityIdMap[oldEntityId] = newEntityId;
+                if (oldEntityId == EditorCamera.EditorCameraId) continue;
+
+                uint newEntityId = oldEntityId;
+                newWorld.AddEntityWithId(newEntityId);
                 
                 if (HasComponent<Name>(oldEntityId)) // Copy name component if it exists
                 {
@@ -860,13 +859,11 @@ namespace DivisionEngine
                 foreach (var kvp in components[componentType])
                 {
                     uint oldEntityId = kvp.Key;
-                    IComponent oldComponent = kvp.Value;
+                    if (oldEntityId == EditorCamera.EditorCameraId) continue;
 
-                    if (entityIdMap.TryGetValue(oldEntityId, out uint newEntityId))
-                    {
-                        IComponent clonedComponent = oldComponent.Clone();
-                        newWorld.AddComponent(newEntityId, clonedComponent);
-                    }
+                    IComponent oldComponent = kvp.Value;
+                    IComponent clonedComponent = oldComponent.Clone();
+                    newWorld.AddComponent(oldEntityId, clonedComponent);
                 }
             }
 
@@ -880,8 +877,11 @@ namespace DivisionEngine
         /// <param name="sourceWorld">The source world to restore from</param>
         public void RestoreFrom(World sourceWorld)
         {
-            // Delete editor camera before restoring
-            if (EntityExists(EditorCamera.EditorCameraId)) DestroyEntity(EditorCamera.EditorCameraId);
+            // The editor camera is editor state, not saved world state: preserve it (and its
+            // transform) across the restore instead of deleting it.
+            Dictionary<Type, IComponent>? editorCameraComponents = null;
+            if (EntityExists(EditorCamera.EditorCameraId))
+                editorCameraComponents = GetClonedComponents(EditorCamera.EditorCameraId);
 
             // Clear current world state
             entities.Clear();
@@ -891,6 +891,8 @@ namespace DivisionEngine
             // Copy all entities
             foreach (uint entityId in sourceWorld.entities)
             {
+                if (entityId == EditorCamera.EditorCameraId) continue;
+
                 entities.Add(entityId);
 
                 // Copy name component if it exists
@@ -909,10 +911,20 @@ namespace DivisionEngine
                 foreach (var kvp in sourceWorld.components[componentType])
                 {
                     uint entityId = kvp.Key;
+                    if (entityId == EditorCamera.EditorCameraId) continue;
+
                     IComponent sourceComponent = kvp.Value;
                     IComponent clonedComponent = sourceComponent.Clone();
                     AddComponent(entityId, clonedComponent);
                 }
+            }
+
+            // Re-attach the editor camera that was preserved above
+            if (editorCameraComponents != null)
+            {
+                entities.Add(EditorCamera.EditorCameraId);
+                foreach (var kv in editorCameraComponents)
+                    AddComponent(EditorCamera.EditorCameraId, kv.Value);
             }
         }
 

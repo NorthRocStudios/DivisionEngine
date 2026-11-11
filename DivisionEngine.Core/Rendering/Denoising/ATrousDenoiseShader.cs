@@ -1,13 +1,14 @@
-﻿//
+﻿
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-#pragma warning disable CA1416 // Validate platform compatibility
 
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 
 namespace DivisionEngine.Rendering.Denoising
 {
@@ -22,24 +23,42 @@ namespace DivisionEngine.Rendering.Denoising
     /// <param name="depthNormals">Depth normal texture</param>
     /// <param name="sdfObjects">SDF objects list</param>
     /// <param name="objectIdBuffer">Object ID Buffer</param>
-    [GeneratedComputeShaderDescriptor]
-    [ThreadGroupSize(DefaultThreadGroupSizes.XY)]
-    public readonly partial struct ATrousDenoiseShader(
-        float width,
-        float height,
-        int stepSize,
-        ReadWriteTexture2D<float4> inputTexture,
-        ReadWriteTexture2D<float4> outputTexture,
-        ReadWriteTexture2D<float4> depthNormals,
-        ReadOnlyBuffer<SDFObjectDTO> sdfObjects,
-        ReadWriteBuffer<uint2> objectIdBuffer,
-        ReadOnlyBuffer<float> kernelBuffer) : IComputeShader
+    [Shader]
+    public struct ATrousDenoiseShader
     {
+        /// <summary>Width of the image.</summary>
+        public float width;
 
-        public void Execute()
+        /// <summary>Height of the image.</summary>
+        public float height;
+
+        /// <summary>Step size for the denoiser.</summary>
+        public int stepSize;
+
+        /// <summary>Input render.</summary>
+        [ShaderResource] public RWTexture2D<float4> inputTexture;
+
+        /// <summary>Output denoised render.</summary>
+        [ShaderResource] public RWTexture2D<float4> outputTexture;
+
+        /// <summary>Depth normal texture.</summary>
+        [ShaderResource] public RWTexture2D<float4> depthNormals;
+
+        /// <summary>SDF objects list.</summary>
+        [ShaderResource] public StructuredBuffer<SDFObjectDTO> sdfObjects;
+
+        /// <summary>Object ID buffer.</summary>
+        [ShaderResource] public RWBuffer<uint2> objectIdBuffer;
+
+        /// <summary>A-Trous kernel weights.</summary>
+        [ShaderResource] public Buffer<float> kernelBuffer;
+
+        /// <summary>Denoises one texel per thread.</summary>
+        [Kernel(8, 8, 1)]
+        public void Execute(uint3 id)
         {
-            int2 pixel = ThreadIds.XY;
-            int centerObjId = (int)objectIdBuffer[pixel.X + pixel.Y * (int)width].X;
+            int2 pixel = new int2((int)id.x, (int)id.y);
+            int centerObjId = (int)objectIdBuffer[pixel.x + pixel.y * (int)width].x;
             if (centerObjId < 0)
             {
                 outputTexture[pixel] = inputTexture[pixel];
@@ -56,10 +75,10 @@ namespace DivisionEngine.Rendering.Denoising
 
             float4 centerColor = inputTexture[pixel];
             float4 centerDepthNormal = depthNormals[pixel];
-            float centerDepth = centerDepthNormal.X;
-            float3 centerNormal = centerDepthNormal.YZW;
+            float centerDepth = centerDepthNormal.x;
+            float3 centerNormal = centerDepthNormal.yzw;
 
-            float3 sumColor = float3.Zero;
+            float3 sumColor = new float3(0f);
             float sumWeight = 0f;
 
             // A-trous 5x5 filter with adaptive step size
@@ -69,31 +88,29 @@ namespace DivisionEngine.Rendering.Denoising
                 {
                     int2 offset = new int2(xx * stepSize, yy * stepSize);
                     int2 samplePixel = pixel + offset;
-                    if (samplePixel.X < 0 || samplePixel.X >= (int)width ||
-                        samplePixel.Y < 0 || samplePixel.Y >= (int)height)
+                    if (samplePixel.x < 0 || samplePixel.x >= (int)width ||
+                        samplePixel.y < 0 || samplePixel.y >= (int)height)
                         continue;
 
                     float4 sampleDepthNormal = depthNormals[samplePixel];
 
                     // Edge-stopping functions
-                    float depthDiff = Hlsl.Abs(centerDepth - sampleDepthNormal.X);
-                    float normalDiff = Hlsl.Max(0.0f, Hlsl.Dot(centerNormal, sampleDepthNormal.YZW));
+                    float depthDiff = math.abs(centerDepth - sampleDepthNormal.x);
+                    float normalDiff = math.max(0.0f, math.dot(centerNormal, sampleDepthNormal.yzw));
 
                     // Weights
                     float spatialWeight = kernelBuffer[xx + 2] * kernelBuffer[yy + 2];
-                    float depthWeight = Hlsl.Exp(-depthDiff * depthDiff / (2f * 0.1f * 0.1f));
-                    float normalWeight = Hlsl.Pow(normalDiff, 32.0f / roughness);
+                    float depthWeight = math.exp(-depthDiff * depthDiff / (2f * 0.1f * 0.1f));
+                    float normalWeight = math.pow(normalDiff, 32.0f / roughness);
                     float weight = spatialWeight * depthWeight * normalWeight;
 
-                    sumColor += inputTexture[samplePixel].XYZ * weight;
+                    sumColor += inputTexture[samplePixel].xyz * weight;
                     sumWeight += weight;
                 }
             }
 
-            float3 finalColor = sumWeight > 0f ? sumColor / sumWeight : centerColor.XYZ;
+            float3 finalColor = sumWeight > 0f ? sumColor / sumWeight : centerColor.xyz;
             outputTexture[pixel] = new float4(finalColor, 1f);
         }
     }
 }
-
-#pragma warning restore CA1416 // Validate platform compatibility

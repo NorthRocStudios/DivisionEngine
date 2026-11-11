@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Projects.Assets;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -66,6 +67,14 @@ namespace DivisionEngine.Serialization
         }
 
         /// <summary>
+        /// Parses a serialized float with the invariant culture, matching
+        /// <see cref="Serialize"/>. Culture-sensitive parsing here would misread saved
+        /// vectors on machines whose decimal separator is not '.'.
+        /// </summary>
+        private static float ParseFloat(string value) =>
+            float.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+        /// <summary>
         /// Parses a property value stored for a component type.
         /// </summary>
         /// <param name="value">Serialized property value</param>
@@ -119,8 +128,8 @@ namespace DivisionEngine.Serialization
                 if (parts.Length == 2)
                 {
                     return new float2(
-                        float.Parse(parts[0]),
-                        float.Parse(parts[1])
+                        ParseFloat(parts[0]),
+                        ParseFloat(parts[1])
                     );
                 }
             }
@@ -132,9 +141,9 @@ namespace DivisionEngine.Serialization
                 if (parts.Length == 3)
                 {
                     return new float3(
-                        float.Parse(parts[0]),
-                        float.Parse(parts[1]),
-                        float.Parse(parts[2])
+                        ParseFloat(parts[0]),
+                        ParseFloat(parts[1]),
+                        ParseFloat(parts[2])
                     );
                 }
             }
@@ -146,10 +155,10 @@ namespace DivisionEngine.Serialization
                 if (parts.Length == 4)
                 {
                     return new float4(
-                        float.Parse(parts[0]),
-                        float.Parse(parts[1]),
-                        float.Parse(parts[2]),
-                        float.Parse(parts[3])
+                        ParseFloat(parts[0]),
+                        ParseFloat(parts[1]),
+                        ParseFloat(parts[2]),
+                        ParseFloat(parts[3])
                     );
                 }
             }
@@ -161,10 +170,10 @@ namespace DivisionEngine.Serialization
                 if (parts.Length == 16)
                 {
                     return new float4x4(
-                        float.Parse(parts[0]), float.Parse(parts[1]), float.Parse(parts[2]), float.Parse(parts[3]),
-                        float.Parse(parts[4]), float.Parse(parts[5]), float.Parse(parts[6]), float.Parse(parts[7]),
-                        float.Parse(parts[8]), float.Parse(parts[9]), float.Parse(parts[10]), float.Parse(parts[11]),
-                        float.Parse(parts[12]), float.Parse(parts[13]), float.Parse(parts[14]), float.Parse(parts[15])
+                        ParseFloat(parts[0]), ParseFloat(parts[1]), ParseFloat(parts[2]), ParseFloat(parts[3]),
+                        ParseFloat(parts[4]), ParseFloat(parts[5]), ParseFloat(parts[6]), ParseFloat(parts[7]),
+                        ParseFloat(parts[8]), ParseFloat(parts[9]), ParseFloat(parts[10]), ParseFloat(parts[11]),
+                        ParseFloat(parts[12]), ParseFloat(parts[13]), ParseFloat(parts[14]), ParseFloat(parts[15])
                     );
                 }
             }

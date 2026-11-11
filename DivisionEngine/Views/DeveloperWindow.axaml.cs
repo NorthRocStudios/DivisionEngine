@@ -300,9 +300,9 @@ public partial class DeveloperWindow : EditorWindow
             Height = 30,
             CornerRadius = new CornerRadius(4),
             Background = new SolidColorBrush(Color.FromRgb(
-                (byte)(color.X * 255),
-                (byte)(color.Y * 255),
-                (byte)(color.Z * 255))),
+                (byte)(color.x * 255),
+                (byte)(color.y * 255),
+                (byte)(color.z * 255))),
             BorderThickness = new Thickness(1),
             BorderBrush = EditorColor.FromRGB(100, 100, 100),
             Margin = new Thickness(0, 0, 12, 0),
@@ -317,7 +317,7 @@ public partial class DeveloperWindow : EditorWindow
         };
         TextBlock rgbText = new TextBlock // RGB values
         {
-            Text = $"RGBA({(byte)(color.X * 255)}, {(byte)(color.Y * 255)}, {(byte)(color.Z * 255)}, {(byte)(color.W * 255)})",
+            Text = $"RGBA({(byte)(color.x * 255)}, {(byte)(color.y * 255)}, {(byte)(color.z * 255)}, {(byte)(color.w * 255)})",
             Foreground = EditorColor.FromRGB(180, 180, 180),
             FontSize = 14,
             VerticalAlignment = VerticalAlignment.Center,

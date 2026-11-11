@@ -5,7 +5,8 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.ShaderUtilities;
 
 namespace DivisionEngine.Rendering.Terrain
@@ -22,19 +23,19 @@ namespace DivisionEngine.Rendering.Terrain
         private static float2 Hash(float2 x)
         {
             float2 k = new float2(0.3183099f, 0.3678794f);
-            x = x * k + new float2(k.Y, k.X);
-            return -1.0f + 2.0f * Hlsl.Frac(16.0f * k * Hlsl.Frac(x.X * x.Y * (x.X + x.Y)));
+            x = x * k + new float2(k.y, k.x);
+            return -1.0f + 2.0f * math.frac(16.0f * k * math.frac(x.x * x.y * (x.x + x.y)));
         }
 
         public static float PowInv(float t, float power)
         {
             // Flip, raise to the specified power, and flip back
-            return 1.0f - Hlsl.Pow(1.0f - Hlsl.Saturate(t), power);
+            return 1.0f - math.pow(1.0f - math.saturate(t), power);
         }
 
         public static float EaseOut(float t)
         {
-            float v = 1.0f - Hlsl.Saturate(t);
+            float v = 1.0f - math.saturate(t);
             return 1.0f - v * v;
         }
 
@@ -47,19 +48,19 @@ namespace DivisionEngine.Rendering.Terrain
 
         public static float2 SafeNormalize(float2 n)
         {
-            float l = Hlsl.Length(n);
-            return (Hlsl.Abs(l) > 1e-10f) ? (n / l) : n;
+            float l = math.length(n);
+            return (math.abs(l) > 1e-10f) ? (n / l) : n;
         }
 
         // Phacelle Noise function - produces stripe patterns aligned with input vector
         public static float4 PhacelleNoise(float2 p, float2 normDir, float freq, float offset, float normalization)
         {
-            float2 sideDir = new float2(-normDir.Y, normDir.X) * freq * TAU;
+            float2 sideDir = new float2(-normDir.y, normDir.x) * freq * TAU;
             offset *= TAU;
 
-            float2 pInt = Hlsl.Floor(p);
-            float2 pFrac = Hlsl.Frac(p);
-            float2 phaseDir = float2.Zero;
+            float2 pInt = math.floor(p);
+            float2 pFrac = math.frac(p);
+            float2 phaseDir = new float2(0f);
             float weightSum = 0.0f;
 
             for (int i = -1; i <= 2; i++)
@@ -72,25 +73,25 @@ namespace DivisionEngine.Rendering.Terrain
 
                     float2 vectorFromCellPoint = pFrac - gridOffset - randomOffset;
 
-                    float sqrDist = Hlsl.Dot(vectorFromCellPoint, vectorFromCellPoint);
-                    float weight = Hlsl.Exp(-sqrDist * 2.0f);
-                    weight = Hlsl.Max(0.0f, weight - 0.01111f);
+                    float sqrDist = math.dot(vectorFromCellPoint, vectorFromCellPoint);
+                    float weight = math.exp(-sqrDist * 2.0f);
+                    weight = math.max(0.0f, weight - 0.01111f);
                     weightSum += weight;
 
-                    float waveInput = Hlsl.Dot(vectorFromCellPoint, sideDir) + offset;
-                    phaseDir += new float2(Hlsl.Cos(waveInput), Hlsl.Sin(waveInput)) * weight;
+                    float waveInput = math.dot(vectorFromCellPoint, sideDir) + offset;
+                    phaseDir += new float2(math.cos(waveInput), math.sin(waveInput)) * weight;
                 }
             }
 
             float2 interpolated = phaseDir / weightSum;
-            float magnitude = Hlsl.Sqrt(Hlsl.Dot(interpolated, interpolated));
-            magnitude = Hlsl.Max(1.0f - normalization, magnitude);
+            float magnitude = math.sqrt(math.dot(interpolated, interpolated));
+            magnitude = math.max(1.0f - normalization, magnitude);
             return new float4(interpolated / magnitude, sideDir);
         }
 
         public static float3 FractalNoiseWithDerivatives(float2 p, float freq, int octaves, float lacunarity, float gain)
         {
-            float3 n = float3.Zero;
+            float3 n = new float3(0f);
             float nf = freq;
             float na = 1.0f;
 
@@ -125,24 +126,24 @@ namespace DivisionEngine.Rendering.Terrain
             out float debug)
         {
             strength *= scale;
-            fadeTarget = Hlsl.Clamp(fadeTarget, -1.0f, 1.0f);
+            fadeTarget = math.clamp(fadeTarget, -1.0f, 1.0f);
 
             float3 inputHeightAndSlope = heightAndSlope;
             float freq = 1.0f / (scale * cellScale);
-            float slopeLength = Hlsl.Max(Hlsl.Length(new float2(heightAndSlope.Y, heightAndSlope.Z)), 1e-10f);
+            float slopeLength = math.max(math.length(new float2(heightAndSlope.y, heightAndSlope.z)), 1e-10f);
             float magnitude = 0.0f;
             float roundingMult = 1.0f;
 
-            float roundingForInput = Hlsl.Lerp(rounding.Y, rounding.X, Hlsl.Saturate(fadeTarget + 0.5f)) * rounding.Z;
-            float combiMask = EaseOut(SmoothStart(slopeLength * onset.X, roundingForInput * onset.X));
+            float roundingForInput = math.lerp(rounding.y, rounding.x, math.saturate(fadeTarget + 0.5f)) * rounding.z;
+            float combiMask = EaseOut(SmoothStart(slopeLength * onset.x, roundingForInput * onset.x));
 
-            float ridgeMapCombiMask = EaseOut(slopeLength * onset.Z);
+            float ridgeMapCombiMask = EaseOut(slopeLength * onset.z);
             float ridgeMapFadeTarget = fadeTarget;
 
             // Determine gully direction based on slope mix
-            float2 gullySlope = Hlsl.Lerp(new float2(heightAndSlope.Y, heightAndSlope.Z),
-                                           new float2(heightAndSlope.Y, heightAndSlope.Z) / slopeLength * assumedSlope.X,
-                                           assumedSlope.Y);
+            float2 gullySlope = math.lerp(new float2(heightAndSlope.y, heightAndSlope.z),
+                                           new float2(heightAndSlope.y, heightAndSlope.z) / slopeLength * assumedSlope.x,
+                                           assumedSlope.y);
 
             for (int i = 0; i < octaves; i++)
             {
@@ -151,38 +152,38 @@ namespace DivisionEngine.Rendering.Terrain
                 // Matches GLSL's `phacelle.zw *= -freq` - p was scaled by freq, and slope
                 // directions point down, hence the negation. Everything below this line
                 // must use the transformed derivative, not the raw PhacelleNoise output.
-                float2 phacelleDeriv = new float2(phacelle.Z, phacelle.W) * -freq;
+                float2 phacelleDeriv = new float2(phacelle.z, phacelle.w) * -freq;
 
                 // Fix: Update gullySlope correctly
-                float sloping = Hlsl.Abs(phacelle.Y);
-                gullySlope += Hlsl.Sign(phacelle.Y) * phacelleDeriv * strength * gullyWeight;
+                float sloping = math.abs(phacelle.y);
+                gullySlope += math.sign(phacelle.y) * phacelleDeriv * strength * gullyWeight;
 
                 // Fix: Create proper derivatives for gullies
-                float2 gulliesDerivative = phacelle.Y * phacelleDeriv;
-                float3 gullies = new float3(phacelle.X, gulliesDerivative.X, gulliesDerivative.Y);
+                float2 gulliesDerivative = phacelle.y * phacelleDeriv;
+                float3 gullies = new float3(phacelle.x, gulliesDerivative.x, gulliesDerivative.y);
 
-                float3 fadedGullies = Hlsl.Lerp(new float3(fadeTarget, 0.0f, 0.0f), gullies * gullyWeight, combiMask);
+                float3 fadedGullies = math.lerp(new float3(fadeTarget, 0.0f, 0.0f), gullies * gullyWeight, combiMask);
 
                 heightAndSlope += fadedGullies * strength;
                 magnitude += strength;
 
                 // Update fadeTarget
-                fadeTarget = fadedGullies.X;
+                fadeTarget = fadedGullies.x;
 
                 // Update mask
-                float roundingForOctave = Hlsl.Lerp(rounding.Y, rounding.X, Hlsl.Saturate(phacelle.X + 0.5f)) * roundingMult;
-                float newMask = EaseOut(SmoothStart(sloping * onset.Y, roundingForOctave * onset.Y));
+                float roundingForOctave = math.lerp(rounding.y, rounding.x, math.saturate(phacelle.x + 0.5f)) * roundingMult;
+                float newMask = EaseOut(SmoothStart(sloping * onset.y, roundingForOctave * onset.y));
                 combiMask = PowInv(combiMask, detail) * newMask;
 
                 // Update ridgeMap
-                ridgeMapFadeTarget = Hlsl.Lerp(ridgeMapFadeTarget, gullies.X, ridgeMapCombiMask);
-                float newRidgeMapMask = EaseOut(sloping * onset.W);
+                ridgeMapFadeTarget = math.lerp(ridgeMapFadeTarget, gullies.x, ridgeMapCombiMask);
+                float newRidgeMapMask = EaseOut(sloping * onset.w);
                 ridgeMapCombiMask *= newRidgeMapMask;
 
                 // Prepare next octave
                 strength *= gain;
                 freq *= lacunarity;
-                roundingMult *= rounding.W;
+                roundingMult *= rounding.w;
             }
 
             ridgeMap = ridgeMapFadeTarget * (1.0f - ridgeMapCombiMask);

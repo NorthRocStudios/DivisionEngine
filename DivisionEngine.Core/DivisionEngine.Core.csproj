@@ -10,16 +10,34 @@
     <AssemblyOriginatorKeyFile>$(SolutionDir)DivisionKey.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
+  <!--
+    DivisionCompute is under active development alongside the engine. Prefer the
+    sibling checkout when it exists so shader compiler/runtime changes can be
+    tested immediately; otherwise fall back to the published NuGet package.
+    Override explicitly with: -p:DivisionComputeProject=<path to csproj>
+  -->
+  <PropertyGroup>
+    <DivisionComputeProject Condition="'$(DivisionComputeProject)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj')">$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj</DivisionComputeProject>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(DivisionComputeProject)' != ''">
+    <ProjectReference Include="$(DivisionComputeProject)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(DivisionComputeProject)' == ''">
+    <PackageReference Include="NorthRoc.DivisionCompute" Version="0.4.0" />
+  </ItemGroup>
+
   <ItemGroup>
-    <PackageReference Include="ComputeSharp" Version="3.2.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageReference Include="NorthRoc.DivisionMath" Version="0.3.0" />
     <PackageReference Include="NVorbis" Version="0.10.5" />
     <PackageReference Include="Silk.NET" Version="2.23.0" />
     <PackageReference Include="Silk.NET.OpenAL" Version="2.23.0" />
     <PackageReference Include="SkiaSharp" Version="4.155.0" />
-    <PackageReference Include="System.Management" Version="10.0.14" />
+    <PackageReference Include="System.Management" Version="11.0.0" />
   </ItemGroup>
+
 
   <ItemGroup>
     <Folder Include="Components\SDFs\Domains\" />

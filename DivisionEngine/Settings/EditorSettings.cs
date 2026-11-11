@@ -80,6 +80,28 @@ namespace DivisionEngine.Editor.Settings
             set => Set(nameof(MaxRecentProjects), value);
         }
 
+        /// <summary>
+        /// Cache compiled shader bytecode on disk so shaders only have to be compiled
+        /// once. Disabling it makes every launch pay the full compile again.
+        /// </summary>
+        [JsonIgnore]
+        public bool ShaderCacheEnabled
+        {
+            get => Get(nameof(ShaderCacheEnabled), true);
+            set => Set(nameof(ShaderCacheEnabled), value);
+        }
+
+        /// <summary>
+        /// Precompile every shader into the cache on a background thread after the
+        /// first frame, so later launches start without compiling anything.
+        /// </summary>
+        [JsonIgnore]
+        public bool PrecompileShadersInBackground
+        {
+            get => Get(nameof(PrecompileShadersInBackground), true);
+            set => Set(nameof(PrecompileShadersInBackground), value);
+        }
+
         // Implement for editor later:
 
         //[JsonIgnore]

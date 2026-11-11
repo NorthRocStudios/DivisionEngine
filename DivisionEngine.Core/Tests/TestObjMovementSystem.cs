@@ -23,8 +23,8 @@ namespace DivisionEngine.Tests
             foreach (var (_, transform, box) in W.QueryData<Transform, SDFBox>())
             {
                 float3 curPos = transform.position;
-                transform.position = new float3(curPos.X - TimeSystem.DeltaTimeF * 0.5f, curPos.Y, curPos.Z);
-                box.size = new float3(box.size.X + TimeSystem.DeltaTimeF * 0.1f, box.size.Y, box.size.Z);
+                transform.position = new float3(curPos.x - TimeSystem.DeltaTimeF * 0.5f, curPos.y, curPos.z);
+                box.size = new float3(box.size.x + TimeSystem.DeltaTimeF * 0.1f, box.size.y, box.size.z);
             }
         }
     }

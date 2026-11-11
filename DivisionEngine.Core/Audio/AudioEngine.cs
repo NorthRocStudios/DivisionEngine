@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -134,7 +134,16 @@ namespace DivisionEngine.Audio
                         voice.Stop();
                     }
 
-                    if (voice.IsFinished) voices.RemoveAt(i);
+                    if (voice.IsFinished)
+                    {
+                        voices.RemoveAt(i);
+
+                        // The engine owns voices it created: a finished voice must release its
+                        // native OpenAL source/buffers here, or one-shots exhaust the AL source
+                        // pool and audio goes permanently silent.
+                        try { voice.Dispose(); }
+                        catch (Exception ex) { Debug.Warning("Audio: failed to dispose finished voice", ex); }
+                    }
                 }
 
                 backend.Update();

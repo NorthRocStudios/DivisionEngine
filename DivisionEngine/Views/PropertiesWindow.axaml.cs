@@ -1033,6 +1033,21 @@ public partial class PropertiesWindow : EditorWindow
     #endregion
     #region fieldEditors
 
+    /// <summary>
+    /// Applies a property-panel edit and records it on the undo stack, so Ctrl+Z restores the
+    /// previous value instead of undoing an older structural action.
+    /// </summary>
+    private static void ApplyFieldEdit(uint entityId, IComponent component, FieldInfo field, object? newValue)
+    {
+        object? oldValue = field.GetValue(component);
+        if (Equals(oldValue, newValue)) return;
+
+        // Update the panel's instance first so its bound editors stay in sync, then record the
+        // change; ModifyFieldCommand.Do() re-applies the same value to the live component.
+        field.SetValue(component, newValue);
+        UndoManager.Execute(new ModifyFieldCommand(entityId, component.GetType(), field.Name, oldValue, newValue));
+    }
+
     private static StackPanel? CreateFieldEditor(FieldInfo field, IComponent component, uint entityId, Action onReset)
     {
         Type fieldType = field.FieldType;
@@ -1070,7 +1085,7 @@ public partial class PropertiesWindow : EditorWindow
         resetMenuItem.Click += (_, _) =>
         {
             if (defaultValue == null) return;
-            field.SetValue(component, defaultValue);
+            ApplyFieldEdit(entityId, component, field, defaultValue);
             onReset();
         };
         fieldContextMenu.Items.Add(resetMenuItem);
@@ -1125,15 +1140,15 @@ public partial class PropertiesWindow : EditorWindow
             float lo = minAttr?.Min ?? -2000000000f, hi = maxAttr?.Max ?? 2000000000f;
             if (rangeAttr != null)
             {
-                NumericUpDown box = CreateFloatNumericBox(value, f => { field.SetValue(component, f); }, false, lo, hi);
+                NumericUpDown box = CreateFloatNumericBox(value, f => ApplyFieldEdit(entityId, component, field, f), false, lo, hi);
                 editorControl = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
                     Children = { CreateFloatSlider(value, rangeAttr.Min, rangeAttr.Max, f =>
-                    { field.SetValue(component, f); box.Value = (decimal)f; }), box }
+                    { ApplyFieldEdit(entityId, component, field, f); box.Value = (decimal)f; }), box }
                 };
             }
-            else editorControl = CreateFloatNumericBox(value, f => { field.SetValue(component, f); }, true, lo, hi);
+            else editorControl = CreateFloatNumericBox(value, f => ApplyFieldEdit(entityId, component, field, f), true, lo, hi);
         }
         else if (fieldValue != null && fieldType == typeof(int)) // Integer fields and sliders
         {
@@ -1141,34 +1156,34 @@ public partial class PropertiesWindow : EditorWindow
             int lo = minAttr != null ? (int)minAttr.Min : int.MinValue, hi = maxAttr != null ? (int)maxAttr.Max : int.MaxValue;
             if (rangeAttr != null)
             {
-                NumericUpDown box = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); }, false, lo, hi);
+                NumericUpDown box = CreateIntegerNumericBox(value, f => ApplyFieldEdit(entityId, component, field, f), false, lo, hi);
                 editorControl = new StackPanel { Orientation = Orientation.Horizontal, 
                     Children = { CreateIntegerSlider(value, (int)rangeAttr.Min, (int)rangeAttr.Max, i => 
-                    { field.SetValue(component, i); box.Value = i; }), box } };
+                    { ApplyFieldEdit(entityId, component, field, i); box.Value = i; }), box } };
             }
-            else editorControl = CreateIntegerNumericBox(value, f => { field.SetValue(component, f); }, true, lo, hi);
+            else editorControl = CreateIntegerNumericBox(value, f => ApplyFieldEdit(entityId, component, field, f), true, lo, hi);
         }
         else if (fieldValue != null && fieldType == typeof(string)) // Text fields
         {
             TextBox textBox = new() { Classes = { "field-editor" }, Text = (string)fieldValue, 
                 AcceptsReturn = field.GetCustomAttribute<MultilineAttribute>() != null };
             textBox.PropertyChanged += (_, e) => { if (e.Property == TextBox.TextProperty) 
-                { field.SetValue(component, textBox.Text); } };
+                { ApplyFieldEdit(entityId, component, field, textBox.Text); } };
             editorControl = textBox;
         }
         else if (fieldValue != null && fieldType == typeof(bool)) // Toggle fields
         {
             CheckBox checkBox = new() { Classes = { "field-editor" }, IsChecked = (bool)fieldValue, IsDefault = false };
-            checkBox.IsCheckedChanged += (_, _) => { field.SetValue(component, checkBox.IsChecked); };
+            checkBox.IsCheckedChanged += (_, _) => { ApplyFieldEdit(entityId, component, field, checkBox.IsChecked); };
             editorControl = checkBox;
         }
         else if (fieldValue != null && fieldType == typeof(float2)) // 2D vector fields
         {
             float2 state = (float2)fieldValue;
-            editorControl = BuildAxisRow(["X", "Y"], [state.X, state.Y], (axis, v) =>
+            editorControl = BuildAxisRow(["X", "Y"], [state.x, state.y], (axis, v) =>
             {
-                if (axis == 0) state.X = v; else state.Y = v;
-                field.SetValue(component, state);
+                if (axis == 0) state.x = v; else state.y = v;
+                ApplyFieldEdit(entityId, component, field, state);
             }, out _);
         }
         else if (fieldValue != null && fieldType == typeof(float3)) // 3D vector fields and colors (no alpha)
@@ -1180,10 +1195,10 @@ public partial class PropertiesWindow : EditorWindow
             if (colorAttr != null) editorControl = CreateColorFieldEditorF3(field, component, entityId) ?? editorControl;
             else
             {
-                editorControl = BuildAxisRow(["X", "Y", "Z"], [state.X, state.Y, state.Z], (axis, v) =>
+                editorControl = BuildAxisRow(["X", "Y", "Z"], [state.x, state.y, state.z], (axis, v) =>
                 {
-                    if (axis == 0) state.X = v; else if (axis == 1) state.Y = v; else state.Z = v;
-                    field.SetValue(component, state);
+                    if (axis == 0) state.x = v; else if (axis == 1) state.y = v; else state.z = v;
+                    ApplyFieldEdit(entityId, component, field, state);
                 }, out _);
             }
         }
@@ -1198,10 +1213,10 @@ public partial class PropertiesWindow : EditorWindow
             else if (rotAttr != null) editorControl = CreateRotationFieldEditor(field, component, rotAttr, entityId) ?? editorControl;
             else
             {
-                editorControl = BuildAxisRow(["X", "Y", "Z", "W"], [state.X, state.Y, state.Z, state.W], (axis, v) =>
+                editorControl = BuildAxisRow(["X", "Y", "Z", "W"], [state.x, state.y, state.z, state.w], (axis, v) =>
                 {
-                    switch (axis) { case 0: state.X = v; break; case 1: state.Y = v; break; case 2: state.Z = v; break; default: state.W = v; break; }
-                    field.SetValue(component, state);
+                    switch (axis) { case 0: state.x = v; break; case 1: state.y = v; break; case 2: state.z = v; break; default: state.w = v; break; }
+                    ApplyFieldEdit(entityId, component, field, state);
                 }, out _);
             }
         }
@@ -1218,7 +1233,7 @@ public partial class PropertiesWindow : EditorWindow
                 VerticalAlignment = VerticalAlignment.Center,
                 VerticalContentAlignment = VerticalAlignment.Center,
             };
-            picker.SelectedDateChanged += (_, _) => { field.SetValue(component, picker.SelectedDate); };
+            picker.SelectedDateChanged += (_, _) => { ApplyFieldEdit(entityId, component, field, picker.SelectedDate); };
             editorControl = picker;
         }
         else if (fieldValue != null && fieldType == typeof(float4x4)) // 4D matrix fields
@@ -1226,7 +1241,7 @@ public partial class PropertiesWindow : EditorWindow
         else if (fieldType.IsEnum) // Dropdown enum fields
             editorControl = CreateEnumEditor(field, component, fieldType, fieldValue, entityId);
         else if (fieldType == typeof(AssetRef) || (fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() == typeof(AssetRef<>))) // Asset fields
-            editorControl = CreateAssetRefEditor(field, component);
+            editorControl = CreateAssetRefEditor(field, component, entityId);
 
         ApplyTooltip(editorControl, field);
         fieldPanel.Children.Add(editorControl);
@@ -1290,7 +1305,7 @@ public partial class PropertiesWindow : EditorWindow
         comboBox.SelectionChanged += (_, _) =>
         {
             if (comboBox.SelectedItem is not EnumItem selected) return;
-            try { field.SetValue(component, selected.Value); PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName); }
+            try { ApplyFieldEdit(entityId, component, field, selected.Value); PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName); }
             catch (Exception ex) { Debug.Error($"Failed to set enum value for {field.Name}", ex); }
         };
         return new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Spacing = 4, Children = { comboBox } };
@@ -1319,7 +1334,7 @@ public partial class PropertiesWindow : EditorWindow
     #endregion
     #region matrixEditor
 
-    private static Button CreateMatrixEditor(float4x4 initialValue, FieldInfo field, object component, uint entityId)
+    private static Button CreateMatrixEditor(float4x4 initialValue, FieldInfo field, IComponent component, uint entityId)
     {
         Button matrixButton = new()
         {
@@ -1378,11 +1393,12 @@ public partial class PropertiesWindow : EditorWindow
             for (int col = 0; col < 4; col++)
             {
                 int r = row, c = col;
-                NumericUpDown numBox = CreateFloatNumericBox(initialValue.GetVal(r, c), val =>
+                NumericUpDown numBox = CreateFloatNumericBox(initialValue[r, c], val =>
                 {
                     float4x4 current = (float4x4)field.GetValue(component)!;
-                    current.SetVal(r, c, val);
-                    field.SetValue(component, current);
+                    // DivisionMath's indexer has a setter, so no home-grown SetVal is needed.
+                    current[r, c] = val;
+                    ApplyFieldEdit(entityId, component, field, current);
                     PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
                 });
                 numBox.Width = 24; numBox.Height = 20; numBox.Margin = new Thickness(2);
@@ -1448,7 +1464,7 @@ public partial class PropertiesWindow : EditorWindow
         colorPicker.ColorChanged += (_, _) =>
         {
             Color c = colorPicker.Color;
-            field.SetValue(component, new float4(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f));
+            ApplyFieldEdit(entityId, component, field, new float4(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f));
             PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
         };
         return new StackPanel { Orientation = Orientation.Horizontal, MinHeight = 10, 
@@ -1482,7 +1498,7 @@ public partial class PropertiesWindow : EditorWindow
         colorPicker.ColorChanged += (_, _) =>
         {
             Color c = colorPicker.Color;
-            field.SetValue(component, new float3(c.R / 255f, c.G / 255f, c.B / 255f));
+            ApplyFieldEdit(entityId, component, field, new float3(c.R / 255f, c.G / 255f, c.B / 255f));
             PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().FullName);
         };
         return new StackPanel
@@ -1499,14 +1515,14 @@ public partial class PropertiesWindow : EditorWindow
         if (field.GetValue(component) is not float4 quatValue) return null;
 
         float3 eulerState = MathUtilities.Math.QuaternionToEuler(quatValue);
-        if (rotAttr.Degrees) eulerState = new float3(eulerState.X * math.Rad2Deg, eulerState.Y * math.Rad2Deg, eulerState.Z * math.Rad2Deg);
+        if (rotAttr.Degrees) eulerState = new float3(eulerState.x * math.Rad2Deg, eulerState.y * math.Rad2Deg, eulerState.z * math.Rad2Deg);
 
-        StackPanel panel = BuildAxisRow(["X", "Y", "Z"], [eulerState.X, eulerState.Y, eulerState.Z], (axis, v) =>
+        StackPanel panel = BuildAxisRow(["X", "Y", "Z"], [eulerState.x, eulerState.y, eulerState.z], (axis, v) =>
         {
-            switch (axis) { case 0: eulerState.X = v; break; case 1: eulerState.Y = v; break; default: eulerState.Z = v; break; }
-            float3 radians = rotAttr.Degrees ? new float3(eulerState.X * math.Deg2Rad, 
-                eulerState.Y * math.Deg2Rad, eulerState.Z * math.Deg2Rad) : eulerState;
-            field.SetValue(component, MathUtilities.Math.EulerToQuaternion(radians));
+            switch (axis) { case 0: eulerState.x = v; break; case 1: eulerState.y = v; break; default: eulerState.z = v; break; }
+            float3 radians = rotAttr.Degrees ? new float3(eulerState.x * math.Deg2Rad, 
+                eulerState.y * math.Deg2Rad, eulerState.z * math.Deg2Rad) : eulerState;
+            ApplyFieldEdit(entityId, component, field, MathUtilities.Math.EulerToQuaternion(radians));
             PropertiesRefreshSystem.OnFieldChanged(entityId, component.GetType().Name);
         }, out NumericUpDown[] boxes);
 
@@ -1603,7 +1619,7 @@ public partial class PropertiesWindow : EditorWindow
     #endregion
     #region assetReferences
 
-    private static Control CreateAssetRefEditor(FieldInfo field, IComponent component)
+    private static Control CreateAssetRefEditor(FieldInfo field, IComponent component, uint entityId)
     {
         object? fieldValue = field.GetValue(component);
         if (fieldValue == null) return new TextBlock { Text = "Error" };
@@ -1631,7 +1647,7 @@ public partial class PropertiesWindow : EditorWindow
             StackPanel panel = new() { MinWidth = 200 };
             panel.Children.Add(BuildAssetOptionButton("None", () => 
             {
-                SetAssetValue(field, component, null); assetRefButtonText.Text = "None"; flyout.Hide();
+                SetAssetValue(field, component, null, entityId); assetRefButtonText.Text = "None"; flyout.Hide();
             }));
             foreach (AssetMetadata? asset in AssetDatabase.GetAssetsByType(expectedType))
             {
@@ -1639,7 +1655,7 @@ public partial class PropertiesWindow : EditorWindow
                 string label = Path.GetFileNameWithoutExtension(asset.FileName);
                 panel.Children.Add(BuildAssetOptionButton(label, () => 
                 {
-                    SetAssetValue(field, component, asset.ID); assetRefButtonText.Text = label; flyout.Hide();
+                    SetAssetValue(field, component, asset.ID, entityId); assetRefButtonText.Text = label; flyout.Hide();
                 }));
             }
             flyout.Content = panel;
@@ -1679,16 +1695,16 @@ public partial class PropertiesWindow : EditorWindow
 
     private static string GetAssetId(object fieldValue) => fieldValue.GetType().GetProperty("ID")?.GetValue(fieldValue) as string ?? "";
 
-    private static void SetAssetValue(FieldInfo field, IComponent component, string? assetId)
+    private static void SetAssetValue(FieldInfo field, IComponent component, string? assetId, uint entityId)
     {
         Type fieldType = field.FieldType;
         if (fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() == typeof(AssetRef<>))
-            field.SetValue(component, Activator.CreateInstance(fieldType, assetId ?? string.Empty));
+            ApplyFieldEdit(entityId, component, field, Activator.CreateInstance(fieldType, assetId ?? string.Empty));
         else if (fieldType == typeof(AssetRef))
         {
             object? current = field.GetValue(component);
             AssetType expectedType = current != null ? (AssetType)(fieldType.GetProperty("ExpectedType")?.GetValue(current) ?? AssetType.None) : AssetType.None;
-            field.SetValue(component, Activator.CreateInstance(fieldType, assetId ?? string.Empty, expectedType));
+            ApplyFieldEdit(entityId, component, field, Activator.CreateInstance(fieldType, assetId ?? string.Empty, expectedType));
         }
     }
 

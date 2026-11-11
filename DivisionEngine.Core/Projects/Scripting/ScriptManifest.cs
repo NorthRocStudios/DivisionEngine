@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -59,6 +59,14 @@ namespace DivisionEngine.Projects.Scripting
 
             foreach (AssetMetadata meta in AssetDatabase.GetAssetsByType(AssetType.Script))
             {
+                // Defensive: only C# sources can be compiled. Anything else in the Script
+                // bucket would make every compile pass fail and block script components.
+                if (!meta.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.Warning($"Script Pipeline: skipping non-C# script asset '{meta.FileName}'");
+                    continue;
+                }
+
                 // Skip tooling artifacts hidden in dot-folders
                 if (meta.RelativePath.Contains("\\.") || meta.RelativePath.Contains("/."))
                     continue;

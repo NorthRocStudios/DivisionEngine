@@ -5,7 +5,7 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
 using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Effects;
 using DivisionEngine.MathLib;
@@ -20,12 +20,12 @@ using Silk.NET.Windowing;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using M4 = DivisionEngine.MathLib.float4;
 using Window = Silk.NET.Windowing.Window;
 
 namespace DivisionEngine.Rendering
 {
 
-    [SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
     /// <summary>
     /// SDF Render pipeline for Division Engine.
     /// </summary>
@@ -72,9 +72,10 @@ namespace DivisionEngine.Rendering
         public IWindow? RendererWindow { get; private set; }
 
         /// <summary>
-        /// Reference to the renderer's graphics device handle.
+        /// Reference to the renderer's DivisionCompute device and context. Every
+        /// compute pass, copy and readback in the frame goes through it.
         /// </summary>
-        public GraphicsDevice? Device { get; private set; }
+        public DivisionComputeContext? Context { get; private set; }
 
         /// <summary>
         /// Whether the renderer is ready to process input or not.
@@ -132,29 +133,30 @@ namespace DivisionEngine.Rendering
         private int embeddedBufferHeight = 0;
 
         // Rendering storage
-        private ReadWriteTexture2D<float>? lowResDepthTex;
-        private ReadWriteTexture2D<float4>? lowResRenderTex; // Optional, for debugging
-        private ReadWriteTexture2D<float4>? renderTex;
-        private ReadWriteTexture2D<float4>? depthNormalsTex;
-        private ReadWriteBuffer<uint2>? objectIdBuffer;
-        private ReadWriteBuffer<uint>? handleIdBuffer;
+        private RWTexture2D<float>? lowResDepthTex;
+        private RWTexture2D<float4>? lowResRenderTex; // Optional, for debugging
+        private RWTexture2D<float4>? renderTex;
+        private RWTexture2D<float4>? depthNormalsTex;
+        private RWBuffer<uint2>? objectIdBuffer;
+        private RWBuffer<uint>? handleIdBuffer;
 
         // Buffer storage
-        private ReadOnlyBuffer<SDFObjectDTO>? sdfObjBuffer;
-        private ReadOnlyBuffer<SDFLightDTO>? lightsBuffer;
-        private ReadOnlyBuffer<uint>? textureBuffer;
-        private ReadOnlyBuffer<TextureMetadata>? textureMetaBuffer;
+        private StructuredBuffer<SDFObjectDTO>? sdfObjBuffer;
+        private StructuredBuffer<SDFLightDTO>? lightsBuffer;
+        private Buffer<uint>? textureBuffer;
+        private StructuredBuffer<TextureMetadata>? textureMetaBuffer;
 
         // Terrain storage
-        private ReadOnlyBuffer<float>? terrainHeightBuffer;
-        private ReadOnlyBuffer<TerrainDTO>? terrainMetadataBuffer;
+        private Buffer<float>? terrainHeightBuffer;
+        private StructuredBuffer<TerrainDTO>? terrainMetadataBuffer;
         private bool rebuildTerrainBuffer = true;
 
         // Post-processing storage
-        private ReadWriteTexture2D<float4>? fxaaInputTex;
-        private ReadWriteTexture2D<float4>? blurTempTex;
-        private ReadWriteTexture2D<float4>? bloomBrightTex;
-        private ReadWriteTexture2D<float4>? bloomBlurTempTex;
+        private RWTexture2D<float4>? fxaaInputTex;
+
+        // Compiled kernels, cached per shader type: compilation is expensive and the
+        // shader objects are stateless between dispatches.
+        private readonly Dictionary<Type, DivisionShader> shaders = [];
 
         /// <summary>
         /// Rendered pixels buffer.
@@ -167,9 +169,23 @@ namespace DivisionEngine.Rendering
         public float4[]? DepthNormalPixels { get; private set; }
 
         /// <summary>
+        /// When set, renders are reproducible: the checkerboard (temporal) path is
+        /// disabled and the caller drives a fixed number of frames at a fixed time
+        /// step. Set by <c>--cli shot --fixed-frame</c> before rendering.
+        /// </summary>
+        public static bool DeterministicCapture { get; set; }
+
+        /// <summary>
         /// Is checkerboard rendering enabled (renders half the pixels each frame).
         /// </summary>
-        public static bool CheckerboardRenderingEnabled => EngineSettings.Instance?.CheckerboardRendering ?? false;
+        public static bool CheckerboardRenderingEnabled => !DeterministicCapture && (EngineSettings.Instance?.CheckerboardRendering ?? false);
+
+        /// <summary>
+        /// Number of frames that finished rendering. Used by the editor to defer
+        /// background shader preloading until the renderer has compiled what it needs
+        /// for the first frame, so the two never duplicate expensive compiles.
+        /// </summary>
+        public static long FramesRendered { get; private set; }
 
         // Time measurement
 
@@ -190,15 +206,27 @@ namespace DivisionEngine.Rendering
 
         // Icons
         private readonly Dictionary<uint, (float3 position, IconType iconType, float3 direction)> iconsToRender = [];
-        private ReadWriteBuffer<uint>? iconIdBuffer;
+        private RWBuffer<uint>? iconIdBuffer;
 
         // Custom Shapes
         private readonly Dictionary<uint, HandleShape> customShapes = [];
-        private ReadWriteBuffer<uint>? customShapeIdBuffer;        
+        private RWBuffer<uint>? customShapeIdBuffer;
+        // One-element structured buffer used to hand a single HandleShape to the
+        // shape shader (struct uniforms are not supported by the packed cbuffer).
+        private StructuredBuffer<HandleShape>? customShapeBuffer;
 
         // Denoising
-        private ReadOnlyBuffer<float>? kernelBuffer; // Reconstruction kernel
-        private ReadWriteTexture2D<float4>? postProcessTex;
+        private Buffer<float>? kernelBuffer; // Reconstruction kernel
+        private RWTexture2D<float4>? postProcessTex;
+        // Second A-Trous target: the ping/pong pair must never alias, otherwise the
+        // 3x3 wavelet reads texels its own dispatch is still writing (a UAV race that
+        // made renders differ run to run).
+        private RWTexture2D<float4>? aTrousPongTex;
+
+        // DivisionCompute post-processing. It shares the pipeline device, so the
+        // effect chain runs GPU-to-GPU with no upload or readback.
+        private DivisionPostProcess? divisionPostProcess;
+        private bool divisionPostUnavailable;
 
         // Input context
         private IInputContext? inputContext;
@@ -292,7 +320,7 @@ namespace DivisionEngine.Rendering
                 screenX >= RendererWindow?.Size.X || screenY >= RendererWindow?.Size.Y) return 0;
 
             int width = RendererWindow!.Size.X;
-            flippedY = RendererWindow.Size.Y - screenY;
+            flippedY = RendererWindow.Size.Y - 1 - screenY;
             index = screenX + flippedY * width;
 
             if (index < 0 || index >= HandleIds.Length) return 0;
@@ -458,9 +486,10 @@ namespace DivisionEngine.Rendering
         public void RunEmbedded(double targetFps)
         {
             Mode = RunMode.Embedded;
-            Device = GraphicsDevice.GetDefault();
-            Debug.Info($"Renderer: Using device: {Device.Name}");
-            Device.DeviceLost += Device_DeviceLost;
+            deviceLost = false;
+            Context = EnsureContext();
+            Debug.Info("Renderer: Using DivisionCompute D3D11 device");
+            Context.DeviceLost += Device_DeviceLost;
 
             embeddedRunning = true;
             embeddedThread = new Thread(() => EmbeddedLoop(targetFps))
@@ -542,12 +571,81 @@ namespace DivisionEngine.Rendering
         #endregion embeddedRendering
 
         /// <summary>
+        /// Creates the DivisionCompute device on first use.
+        /// </summary>
+        private DivisionComputeContext EnsureContext() => Context ??= new DivisionComputeContext();
+
+        /// <summary>
+        /// Returns the compiled kernel for a shader type, compiling it on first use.
+        /// </summary>
+        private DivisionShader GetShader(Type shaderType)
+        {
+            if (shaders.TryGetValue(shaderType, out DivisionShader? shader))
+                return shader;
+
+            shader = Context!.CompileShader(shaderType);
+            shaders[shaderType] = shader;
+            return shader;
+        }
+
+        /// <summary>
+        /// Drops every compiled shader so the next frame picks up freshly compiled
+        /// bytecode. Call after recompiling shaders (the bytecode cache already holds
+        /// the new entries).
+        /// </summary>
+        public void ReloadShaders()
+        {
+            int dropped;
+            lock (SyncLock)
+            {
+                dropped = shaders.Count;
+                foreach (DivisionShader shader in shaders.Values)
+                    shader.Dispose();
+                shaders.Clear();
+
+                // The post-processing shader may have been the one that failed before.
+                divisionPostUnavailable = false;
+            }
+
+            Debug.Info($"Render pipeline: dropped {dropped} compiled shader(s) for reload");
+        }
+
+        /// <summary>
+        /// Renders an exact number of frames at a fixed time step and leaves the
+        /// colour buffer in <see cref="Pixels"/>.
+        /// </summary>
+        /// <remarks>
+        /// Combined with <see cref="DeterministicCapture"/> and a seeded RNG this
+        /// produces identical output on every run, which is what the golden-image
+        /// gate compares against. Unlike <see cref="RenderSingleFrame"/> the frame
+        /// count is not a warm-up heuristic: frame <c>i</c> always sees the same
+        /// accumulated time, so the render is pinned to a known point in the
+        /// animation.
+        /// </remarks>
+        /// <param name="width">Render width in pixels</param>
+        /// <param name="height">Render height in pixels</param>
+        /// <param name="frameCount">Number of frames to advance the pipeline by</param>
+        /// <param name="fixedDelta">Fixed time step, in seconds, used for every frame</param>
+        public float4[]? RenderFixedFrames(int width, int height, int frameCount, double fixedDelta)
+        {
+            EnsureContext();
+            if (boundWorld == null) BindCurrentWorld();
+            if (boundWorld == null) throw new InvalidOperationException("No world is bound.");
+            if (frameCount < 1) throw new ArgumentOutOfRangeException(nameof(frameCount), "At least one frame must be rendered.");
+            if (width < 1 || height < 1) throw new ArgumentOutOfRangeException(nameof(width), "The render resolution must be positive.");
+
+            for (int i = 0; i < frameCount; i++)
+                RenderFrame(fixedDelta, width, height, presentToGL: false);
+            return Pixels;
+        }
+
+        /// <summary>
         /// Renders one frame offscreen and leaves the colour buffer in <see cref="Pixels"/>.
         /// Used by the Division CLI screenshot command.
         /// </summary>
         public float4[]? RenderSingleFrame(int width, int height)
         {
-            Device ??= GraphicsDevice.GetDefault();
+            EnsureContext();
             if (boundWorld == null) BindCurrentWorld();
             if (boundWorld == null) throw new InvalidOperationException("No world is bound.");
 
@@ -591,7 +689,7 @@ namespace DivisionEngine.Rendering
         /// <param name="warmupFrames">Frames rendered before measuring (shader/JIT warmup)</param>
         public BenchmarkResult Benchmark(int width, int height, int frames, int warmupFrames = 10)
         {
-            Device ??= GraphicsDevice.GetDefault();
+            EnsureContext();
             if (boundWorld == null) BindCurrentWorld();
             if (boundWorld == null) throw new InvalidOperationException("No world is loaded to benchmark.");
 
@@ -628,6 +726,7 @@ namespace DivisionEngine.Rendering
         /// loading and rendering.</remarks>
         public void Run(double defaultFPS, bool editorMode)
         {
+            deviceLost = false;
             try
             {
                 WindowOptions options = WindowOptions.Default;
@@ -718,10 +817,10 @@ namespace DivisionEngine.Rendering
                 gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
                 gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
 
-                // Load graphics device
-                Device = GraphicsDevice.GetDefault();
-                Debug.Info($"Renderer: Using device: {Device.Name}");
-                Device.DeviceLost += Device_DeviceLost;
+                // Load DivisionCompute device
+                Context = EnsureContext();
+                Debug.Info("Renderer: Using DivisionCompute D3D11 device");
+                Context.DeviceLost += Device_DeviceLost;
 
                 Debug.Info("Renderer: Compiling OpenGL Shader Program");
                 glShaderProgram = CompileShaders();
@@ -751,14 +850,42 @@ namespace DivisionEngine.Rendering
         /// <summary>
         /// Debug and attempt to rebuild on device lost.
         /// </summary>
-        private void Device_DeviceLost(object? sender, DeviceLostEventArgs e)
+        private void Device_DeviceLost(string reason)
         {
             deviceLost = true;
-            Debug.Error($"Renderer: Graphics Device Lost!\nCause: {e.Reason}");
+            Debug.Error($"Renderer: Graphics Device Lost!\nCause: {reason}");
             lock (SyncLock)
             {
-                Device = null;
-                CleanupResources();
+                try { Context?.Dispose(); }
+                catch (Exception ex) { Debug.Warning("Renderer: failed to dispose the lost context", ex); }
+                Context = null;
+
+                // The input context belongs to the window, not the device, so keep it alive.
+                CleanupResources(disposeInputContext: false);
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the compute device and every resource that belonged to a lost one.
+        /// </summary>
+        private void RecoverDevice()
+        {
+            lock (SyncLock)
+            {
+                try
+                {
+                    Context?.Dispose();
+                    Context = null;
+                    CleanupResources(disposeInputContext: false);
+                    Context = EnsureContext();
+                    deviceLost = false;
+                    Debug.Info("Renderer: recovered from device loss - device and resources recreated");
+                }
+                catch (Exception ex)
+                {
+                    Debug.Error("Renderer: device recovery failed, will retry on the next frame", ex);
+                    deviceLost = true;
+                }
             }
         }
 
@@ -792,11 +919,16 @@ namespace DivisionEngine.Rendering
             DeltaTime = delta; // Track frame time
             Time += delta;
 
-            if (Device == null || deviceLost)
+            if (deviceLost) RecoverDevice();
+
+            if (Context == null)
             {
-                Debug.Warning("Renderer: Device lost, skipping rendering");
+                Debug.Warning("Renderer: No graphics device available, skipping rendering");
                 return;
             }
+
+            // DivisionCompute exposes device removal as a poll instead of an event.
+            Context.CheckDeviceLost();
 
             if (boundWorld == null) return;
             boundWorld.CallRender();
@@ -822,7 +954,7 @@ namespace DivisionEngine.Rendering
                     if (renderTex == null || renderTex.Width != texWidth || renderTex.Height != texHeight || Pixels == null)
                     {
                         renderTex?.Dispose();
-                        renderTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
+                        renderTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
                         Pixels = new float4[texWidth * texHeight];
                     }
 
@@ -830,28 +962,35 @@ namespace DivisionEngine.Rendering
                     if (lowResDepthTex == null || lowResDepthTex.Width != lowResWidth || lowResDepthTex.Height != lowResHeight)
                     {
                         lowResDepthTex?.Dispose();
-                        lowResDepthTex = Device!.AllocateReadWriteTexture2D<float>(lowResWidth, lowResHeight);
+                        lowResDepthTex = Context!.CreateRWTexture2D<float>(lowResWidth, lowResHeight);
                     }
 
                     // Optional: For debugging the low-res pass
                     if (lowResRenderTex == null || lowResRenderTex.Width != lowResWidth || lowResRenderTex.Height != lowResHeight)
                     {
                         lowResRenderTex?.Dispose();
-                        lowResRenderTex = Device!.AllocateReadWriteTexture2D<float4>(lowResWidth, lowResHeight);
+                        lowResRenderTex = Context!.CreateRWTexture2D<float4>(lowResWidth, lowResHeight);
                     }
 
                     // Build denoised texture (for post-process)
                     if (postProcessTex == null || postProcessTex.Width != texWidth || postProcessTex.Height != texHeight)
                     {
                         postProcessTex?.Dispose();
-                        postProcessTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
+                        postProcessTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
+                    }
+
+                    // Second A-Trous target (kept distinct from postProcessTex)
+                    if (aTrousPongTex == null || aTrousPongTex.Width != texWidth || aTrousPongTex.Height != texHeight)
+                    {
+                        aTrousPongTex?.Dispose();
+                        aTrousPongTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
                     }
 
                     // Build depth and normal texture
                     if (depthNormalsTex == null || depthNormalsTex.Width != texWidth || depthNormalsTex.Height != texHeight || DepthNormalPixels == null)
                     {
                         depthNormalsTex?.Dispose();
-                        depthNormalsTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
+                        depthNormalsTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
                         DepthNormalPixels = new float4[texWidth * texHeight];
                     }
 
@@ -859,7 +998,7 @@ namespace DivisionEngine.Rendering
                     if (objectIdBuffer == null || objectIdBuffer.Length != (texWidth * texHeight) || ObjectIDs == null)
                     {
                         objectIdBuffer?.Dispose();
-                        objectIdBuffer = Device!.AllocateReadWriteBuffer<uint2>(texWidth * texHeight);
+                        objectIdBuffer = Context!.CreateRWBuffer<uint2>(texWidth * texHeight);
                         ObjectIDs = new uint2[texWidth * texHeight];
                     }
 
@@ -867,7 +1006,7 @@ namespace DivisionEngine.Rendering
                     if (handleIdBuffer == null || handleIdBuffer.Length != (texWidth * texHeight) || HandleIds == null)
                     {
                         handleIdBuffer?.Dispose();
-                        handleIdBuffer = Device!.AllocateReadWriteBuffer<uint>(texWidth * texHeight);
+                        handleIdBuffer = Context!.CreateRWBuffer<uint>(texWidth * texHeight);
                         HandleIds = new uint[texWidth * texHeight];
                     }
 
@@ -875,7 +1014,7 @@ namespace DivisionEngine.Rendering
                     if (customShapeIdBuffer == null || customShapeIdBuffer.Length != (texWidth * texHeight))
                     {
                         customShapeIdBuffer?.Dispose();
-                        customShapeIdBuffer = Device!.AllocateReadWriteBuffer<uint>(texWidth * texHeight);
+                        customShapeIdBuffer = Context!.CreateRWBuffer<uint>(texWidth * texHeight);
                         CustomShapeIds = new uint[texWidth * texHeight];
                     }
 
@@ -883,7 +1022,7 @@ namespace DivisionEngine.Rendering
                     if (iconIdBuffer == null || iconIdBuffer.Length != (texWidth * texHeight))
                     {
                         iconIdBuffer?.Dispose();
-                        iconIdBuffer = Device!.AllocateReadWriteBuffer<uint>(texWidth * texHeight);
+                        iconIdBuffer = Context!.CreateRWBuffer<uint>(texWidth * texHeight);
                         IconIds = new uint[texWidth * texHeight];
                     }
 
@@ -891,34 +1030,34 @@ namespace DivisionEngine.Rendering
                     if (kernelBuffer == null || ObjectIDs == null)
                     {
                         kernelBuffer?.Dispose();
-                        kernelBuffer = Device!.AllocateReadOnlyBuffer([1.0f / 16.0f, 1.0f / 4.0f, 3.0f / 8.0f, 1.0f / 4.0f, 1.0f / 16.0f]);
+                        kernelBuffer = Context!.CreateBuffer<float>([1.0f / 16.0f, 1.0f / 4.0f, 3.0f / 8.0f, 1.0f / 4.0f, 1.0f / 16.0f]);
                     }
 
                     // Build and copy buffers
                     if (sdfObjBuffer?.Length != sdfObjDTO.Length)
                     {
                         sdfObjBuffer?.Dispose();
-                        sdfObjBuffer = Device?.AllocateReadOnlyBuffer(sdfObjDTO);
+                        sdfObjBuffer = Context?.CreateStructuredBuffer(sdfObjDTO);
                     }
-                    else sdfObjBuffer.CopyFrom(sdfObjDTO);
+                    else sdfObjBuffer.SetData(Context!.Context, sdfObjDTO);
                     if (sdfObjBuffer == null) return;
 
                     if (lightsBuffer?.Length != sdfLightsDTO.Length)
                     {
                         lightsBuffer?.Dispose();
-                        lightsBuffer = Device?.AllocateReadOnlyBuffer(sdfLightsDTO);
+                        lightsBuffer = Context?.CreateStructuredBuffer(sdfLightsDTO);
                     }
-                    else lightsBuffer.CopyFrom(sdfLightsDTO);
+                    else lightsBuffer.SetData(Context!.Context, sdfLightsDTO);
                     if (lightsBuffer == null) return;
 
                     if (rebuildTextureBuffer && TextureSystem.AllTextureData != null && TextureSystem.AllTextureMetadata != null)
                     {
                         textureBuffer?.Dispose();
-                        textureBuffer = Device?.AllocateReadOnlyBuffer(TextureSystem.AllTextureData);
+                        textureBuffer = Context?.CreateBuffer<uint>(TextureSystem.AllTextureData);
                         if (textureBuffer == null) return;
 
                         textureMetaBuffer?.Dispose();
-                        textureMetaBuffer = Device?.AllocateReadOnlyBuffer(TextureSystem.AllTextureMetadata);
+                        textureMetaBuffer = Context?.CreateStructuredBuffer(TextureSystem.AllTextureMetadata);
                         if (textureMetaBuffer == null) return;
 
                         TextureSystem.FreeCPUTextureData();
@@ -932,9 +1071,9 @@ namespace DivisionEngine.Rendering
                         TerrainDTO[] metas = TerrainSystem.AllTerrainMetadata is { Length: > 0 } m ? m : new TerrainDTO[1];
 
                         terrainHeightBuffer?.Dispose();
-                        terrainHeightBuffer = Device?.AllocateReadOnlyBuffer(heights);
+                        terrainHeightBuffer = Context?.CreateBuffer<float>(heights);
                         terrainMetadataBuffer?.Dispose();
-                        terrainMetadataBuffer = Device?.AllocateReadOnlyBuffer(metas);
+                        terrainMetadataBuffer = Context?.CreateStructuredBuffer(metas);
                         rebuildTerrainBuffer = false;
                     }
 
@@ -957,77 +1096,113 @@ namespace DivisionEngine.Rendering
                     }
 
                     // Quickly update the world data buffer
-                    SDFRenderSystem.UploadWorldData(Device!);
-                    SDFShader3D shader = new SDFShader3D
-                        (texWidth,
-                        texHeight,
-                        texWidth / (float)texHeight,
-                        TimeSystem.FrameCount,
-                        (int)CurrentDebugMode,
-                        checkerboardEnabled,
-                        SDFRenderSystem.WorldDataBuffer!,
-                        renderTex,
-                        depthNormalsTex,
-                        objectIdBuffer,
-                        sdfObjBuffer,
-                        lightsBuffer,
-                        textureBuffer!,
-                        textureMetaBuffer!,
-                        terrainHeightBuffer!,
-                        terrainMetadataBuffer!);
-                    Device?.For(dispatchWidth, dispatchHeight, shader);
+                    SDFRenderSystem.UploadWorldData(Context!);
+                    DivisionShader sdfShader = GetShader(typeof(SDFShader3D));
+                    sdfShader.SetFloat("width", texWidth);
+                    sdfShader.SetFloat("height", texHeight);
+                    sdfShader.SetFloat("aspect", texWidth / (float)texHeight);
+                    sdfShader.SetInt("frameCount", TimeSystem.FrameCount);
+                    sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
+                    sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
+                    sdfShader.SetStructuredBuffer("worldData", SDFRenderSystem.WorldDataBuffer!);
+                    sdfShader.SetRWTexture2D("outputTexture", renderTex!);
+                    sdfShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
+                    sdfShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
+                    sdfShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
+                    sdfShader.SetStructuredBuffer("lights", lightsBuffer);
+                    sdfShader.SetBuffer("textureData", textureBuffer!);
+                    sdfShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
+                    sdfShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
+                    sdfShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
+                    sdfShader.Dispatch2D(sdfShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
                 }
 
-                ReadWriteTexture2D<float4>? currentTexture = renderTex;
+                RWTexture2D<float4>? currentTexture = renderTex;
                 #region postProcessing
 
-                // Denoising
-                foreach (var (_, transform, camera) in boundWorld?.QueryData<Transform, Camera>() ?? [])
+                // Pick the camera the frame is post-processed with: the first one that
+                // carries PostProcessing settings, falling back to any camera.
+                Camera? renderCamera = null;
+                PostProcessing? renderPostProcess = null;
+                foreach (var (_, _, camera, postProcess) in boundWorld?.QueryData<Transform, Camera, PostProcessing>() ?? [])
+                {
+                    renderCamera = camera;
+                    renderPostProcess = postProcess;
+                    break;
+                }
+                if (renderCamera is null)
+                {
+                    foreach (var (_, _, camera) in boundWorld?.QueryData<Transform, Camera>() ?? [])
+                    {
+                        renderCamera = camera;
+                        break;
+                    }
+                }
+
+                // Denoising runs once for the rendered image. It used to run inside a
+                // per-camera loop, which meant every extra camera (the editor adds its
+                // own camera entity) re-ran the chain over the same ping/pong textures.
+                // The second pass then bound one texture as both input and output, which
+                // D3D11 resolves by unbinding the shader-resource view: the pass read
+                // zeros and the whole scene came out black.
+                if (renderCamera is { } postCamera && CurrentDebugMode == DebugMode.None)
                 {
                     // Division Denoising
-                    if (camera.enableDivisionDenoise && CurrentDebugMode == DebugMode.None &&
-                        currentTexture != null && postProcessTex != null && objectIdBuffer != null && depthNormalsTex != null)
+                    if (postCamera.enableDivisionDenoise &&
+                        currentTexture != null && postProcessTex != null && aTrousPongTex != null &&
+                        objectIdBuffer != null && depthNormalsTex != null)
                     {
+                        // Never read and write the same texture in one dispatch.
+                        RWTexture2D<float4> denoiseTarget = ReferenceEquals(currentTexture, postProcessTex)
+                            ? aTrousPongTex
+                            : postProcessTex;
+
                         lock (SyncLock)
                         {
-                            DivisionDenoiseShader denoiseShader = new DivisionDenoiseShader(
-                                texWidth,
-                                texHeight,
-                                camera.divisionDenoiseThreshold,
-                                camera.divisionDenoiseDomain,
-                                currentTexture,
-                                postProcessTex,
-                                depthNormalsTex,
-                                sdfObjBuffer,
-                                objectIdBuffer);
-                            Device?.For(texWidth, texHeight, denoiseShader);
+                            DivisionShader denoiseShader = GetShader(typeof(DivisionDenoiseShader));
+                            denoiseShader.SetFloat("width", texWidth);
+                            denoiseShader.SetFloat("height", texHeight);
+                            denoiseShader.SetFloat("divisionDenoise", postCamera.divisionDenoiseThreshold);
+                            denoiseShader.SetInt("divisionDomain", postCamera.divisionDenoiseDomain);
+                            denoiseShader.SetRWTexture2D("inputTexture", currentTexture);
+                            denoiseShader.SetRWTexture2D("outputTexture", denoiseTarget);
+                            denoiseShader.SetRWTexture2D("depthNormals", depthNormalsTex);
+                            denoiseShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
+                            denoiseShader.SetRWBuffer("objectIdBuffer", objectIdBuffer);
+                            denoiseShader.Dispatch2D(denoiseShader.FindKernel("Execute"), texWidth, texHeight);
                         }
-                        currentTexture = postProcessTex;
+                        currentTexture = denoiseTarget;
                     }
 
                     // A-Trous denoising using wavelets
-                    if (camera.enableATrousDenoise && CurrentDebugMode == DebugMode.None &&
-                        currentTexture != null && postProcessTex != null && kernelBuffer != null && objectIdBuffer != null && depthNormalsTex != null)
+                    if (postCamera.enableATrousDenoise &&
+                        currentTexture != null && postProcessTex != null && aTrousPongTex != null && kernelBuffer != null &&
+                        objectIdBuffer != null && depthNormalsTex != null)
                     {
-                        ReadWriteTexture2D<float4> ping = currentTexture;
-                        ReadWriteTexture2D<float4> pong = postProcessTex;
+                        RWTexture2D<float4> ping = currentTexture;
+                        // Ping/pong must be two different textures: reading texels the same
+                        // dispatch writes is a UAV race. When the built-in denoiser already
+                        // wrote postProcessTex, use the spare target instead.
+                        RWTexture2D<float4> pong = ReferenceEquals(ping, postProcessTex)
+                            ? aTrousPongTex
+                            : postProcessTex;
                         int stepSize = 1;
 
-                        for (int i = 0; i < camera.aTrousStepCount; i++)
+                        for (int i = 0; i < postCamera.aTrousStepCount; i++)
                         {
                             lock (SyncLock)
                             {
-                                ATrousDenoiseShader aTrousShader = new ATrousDenoiseShader(
-                                    texWidth,
-                                    texHeight,
-                                    stepSize,
-                                    ping,
-                                    pong,
-                                    depthNormalsTex,
-                                    sdfObjBuffer,
-                                    objectIdBuffer,
-                                    kernelBuffer);
-                                Device?.For(texWidth, texHeight, aTrousShader);
+                                DivisionShader aTrousShader = GetShader(typeof(ATrousDenoiseShader));
+                                aTrousShader.SetFloat("width", texWidth);
+                                aTrousShader.SetFloat("height", texHeight);
+                                aTrousShader.SetInt("stepSize", stepSize);
+                                aTrousShader.SetRWTexture2D("inputTexture", ping);
+                                aTrousShader.SetRWTexture2D("outputTexture", pong);
+                                aTrousShader.SetRWTexture2D("depthNormals", depthNormalsTex);
+                                aTrousShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
+                                aTrousShader.SetRWBuffer("objectIdBuffer", objectIdBuffer);
+                                aTrousShader.SetBuffer("kernelBuffer", kernelBuffer);
+                                aTrousShader.Dispatch2D(aTrousShader.FindKernel("Execute"), texWidth, texHeight);
                             }
 
                             // Swap buffers for next pass
@@ -1038,171 +1213,12 @@ namespace DivisionEngine.Rendering
                     }
                 }
 
-                // Post-processing effects
-                foreach (var (_, transform, camera, postProcess) in boundWorld?.QueryData<Transform, Camera, PostProcessing>() ?? [])
+                // Post-processing: depth of field, FXAA and the colour effects all run
+                // on DivisionCompute, in the same order the ComputeSharp pipeline used.
+                if (renderCamera is not null && renderPostProcess is not null &&
+                    CurrentDebugMode == DebugMode.None && DivisionPostProcess.HasAnyEffect(renderPostProcess, renderCamera))
                 {
-                    // Depth of field
-                    if (CurrentDebugMode == DebugMode.None && postProcess.enableDepthOfField &&
-                        currentTexture != null && postProcessTex != null && depthNormalsTex != null)
-                    {
-                        currentTexture?.CopyTo(postProcessTex);
-                        lock (SyncLock)
-                        {
-                            FastDepthOfFieldShader dofShader = new FastDepthOfFieldShader(
-                                texWidth,
-                                texHeight,
-                                camera.nearClip,
-                                camera.farClip,
-                                postProcess.focusDistance,
-                                postProcess.focalLength,
-                                postProcessTex,
-                                currentTexture!,
-                                depthNormalsTex);
-                            Device?.For(texWidth, texHeight, dofShader);
-                        }
-                    }
-
-                    if (camera.enableFxaa && CurrentDebugMode == DebugMode.None)
-                    {
-                        // Ensure we have temporary textures for FXAA
-                        if (fxaaInputTex == null || fxaaInputTex.Width != texWidth || fxaaInputTex.Height != texHeight)
-                        {
-                            fxaaInputTex?.Dispose();
-                            fxaaInputTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
-                        }
-
-                        currentTexture?.CopyTo(fxaaInputTex);
-                        lock (SyncLock)
-                        {
-                            FXAAShader fxaaShader = new FXAAShader(
-                                texWidth,
-                                texHeight,
-                                fxaaInputTex,
-                                currentTexture!,
-                                camera.fxaaThreshold,
-                                camera.fxaaStrength,
-                                camera.fxaaKernelSize,
-                                (int)camera.debugFxaa
-                            );
-                            Device?.For(texWidth, texHeight, fxaaShader);
-                        }
-                    }
-
-                    // Blur effect
-                    if (postProcess.enableBlur && currentTexture != null && postProcessTex != null)
-                    {
-                        if (blurTempTex == null || blurTempTex.Width != texWidth || blurTempTex.Height != texHeight)
-                        {
-                            blurTempTex?.Dispose();
-                            blurTempTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
-                        }
-
-                        // Two-pass blur
-                        lock (SyncLock)
-                        {
-                            // Horizontal pass
-                            TwoPassBlurShader blurHorizontal = new TwoPassBlurShader(
-                                texWidth, texHeight, postProcess.blurRadius, 0,
-                                currentTexture, blurTempTex);
-                            Device?.For(texWidth, texHeight, blurHorizontal);
-
-                            // Vertical pass
-                            TwoPassBlurShader blurVertical = new TwoPassBlurShader(
-                                texWidth, texHeight, postProcess.blurRadius, 1,
-                                blurTempTex, postProcessTex);
-                            Device?.For(texWidth, texHeight, blurVertical);
-                        }
-                        currentTexture = postProcessTex;
-                    }
-
-                    // HSL Color Grading effect
-                    if (postProcess.saturation != 1f || postProcess.hueShift != 0f || postProcess.lightness != 1f || postProcess.contrast != 1f)
-                    {
-                        if (currentTexture != null && postProcessTex != null)
-                        {
-                            lock (SyncLock)
-                            {
-                                HSLShader hslShader = new HSLShader(
-                                    texWidth, texHeight,
-                                    postProcess.hueShift,
-                                    postProcess.saturation,
-                                    postProcess.lightness,
-                                    postProcess.contrast,
-                                    currentTexture,
-                                    postProcessTex);
-                                Device?.For(texWidth, texHeight, hslShader);
-                            }
-                            currentTexture = postProcessTex;
-                        }
-                    }
-
-                    // Bloom effect
-                    if (postProcess.enableBloom && currentTexture != null && postProcessTex != null)
-                    {
-                        if (bloomBrightTex == null || bloomBrightTex.Width != texWidth || bloomBrightTex.Height != texHeight)
-                        {
-                            bloomBrightTex?.Dispose();
-                            bloomBrightTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
-                        }
-
-                        if (bloomBlurTempTex == null || bloomBlurTempTex.Width != texWidth || bloomBlurTempTex.Height != texHeight)
-                        {
-                            bloomBlurTempTex?.Dispose();
-                            bloomBlurTempTex = Device!.AllocateReadWriteTexture2D<float4>(texWidth, texHeight);
-                        }
-
-                        lock (SyncLock)
-                        {
-                            BloomShader bloomShader = new BloomShader(
-                                texWidth, texHeight,
-                                postProcess.bloomThreshold,
-                                postProcess.bloomKnee,
-                                postProcess.bloomIntensity,
-                                postProcess.bloomRadius,
-                                math.max(1, postProcess.bloomPasses),
-                                currentTexture,
-                                postProcessTex,
-                                bloomBrightTex,
-                                bloomBlurTempTex);
-                            Device?.For(texWidth, texHeight, bloomShader);
-                        }
-                        currentTexture = postProcessTex;
-                    }
-
-                    // Chromatic aberration effect
-                    if (postProcess.enableChromaticAberration && currentTexture != null && postProcessTex != null)
-                    {
-                        lock (SyncLock)
-                        {
-                            ChromaticAberrationShader caShader = new ChromaticAberrationShader(
-                                texWidth, texHeight,
-                                postProcess.chromaticIntensity,
-                                currentTexture,
-                                postProcessTex);
-                            Device?.For(texWidth, texHeight, caShader);
-                        }
-                        currentTexture = postProcessTex;
-                    }
-
-                    // Vignette effect
-                    if (postProcess.enableVignette && currentTexture != null && postProcessTex != null)
-                    {
-                        lock (SyncLock)
-                        {
-                            VignetteShader vignetteShader = new VignetteShader(
-                                texWidth, texHeight,
-                                postProcess.vignetteIntensity,
-                                postProcess.vignetteSmoothness,
-                                postProcess.vignetteRoundness,
-                                postProcess.vignetteRadius,
-                                postProcess.vignetteColor,
-                                currentTexture,
-                                postProcessTex);
-                            Device?.For(texWidth, texHeight, vignetteShader);
-                        }
-                        currentTexture = postProcessTex;
-                    }
-                    break; // Use first camera
+                    currentTexture = RunDivisionPostProcess(renderPostProcess, renderCamera, texWidth, texHeight, currentTexture, depthNormalsTex);
                 }
 
                 #endregion postProcessing
@@ -1213,20 +1229,21 @@ namespace DivisionEngine.Rendering
                 {
                     lock (SyncLock)
                     {
-                        EditorHandleShader handleShader = new EditorHandleShader(
-                            texWidth, texHeight,
-                            texWidth / (float)texHeight, // aspect ratio
-                            worldDTO.camScreenDist,
-                            worldDTO.cameraOrigin,
-                            worldDTO.camForward,
-                            worldDTO.camRight,
-                            worldDTO.camUp,
-                            currentTexture!,
-                            handleIdBuffer,
-                            editorHandlePosition.Value,
-                            editorHandleScale,
-                            currentHoveredHandle);
-                        Device?.For(texWidth, texHeight, handleShader);
+                        DivisionShader handleShader = GetShader(typeof(EditorHandleShader));
+                        handleShader.SetFloat("width", texWidth);
+                        handleShader.SetFloat("height", texHeight);
+                        handleShader.SetFloat("aspect", texWidth / (float)texHeight);
+                        handleShader.SetFloat("camScreenDist", worldDTO.camScreenDist);
+                        handleShader.SetVector("cameraOrigin", worldDTO.cameraOrigin);
+                        handleShader.SetVector("camForward", worldDTO.camForward);
+                        handleShader.SetVector("camRight", worldDTO.camRight);
+                        handleShader.SetVector("camUp", worldDTO.camUp);
+                        handleShader.SetVector("handlePosition", editorHandlePosition.Value);
+                        handleShader.SetFloat("handleScale", editorHandleScale);
+                        handleShader.SetUInt("hoveredHandle", currentHoveredHandle);
+                        handleShader.SetRWTexture2D("renderTexture", currentTexture!);
+                        handleShader.SetRWBuffer("handleIdBuffer", handleIdBuffer!);
+                        handleShader.Dispatch2D(handleShader.FindKernel("Execute"), texWidth, texHeight);
                     }
                 }
 
@@ -1237,19 +1254,25 @@ namespace DivisionEngine.Rendering
                     {
                         foreach (var (shapeId, shape) in customShapes)
                         {
-                            CustomShapeShader shapeShader = new CustomShapeShader(
-                                texWidth, texHeight,
-                                texWidth / (float)texHeight,
-                                worldDTO.camScreenDist,
-                                worldDTO.cameraOrigin,
-                                worldDTO.camForward,
-                                worldDTO.camRight,
-                                worldDTO.camUp,
-                                currentTexture!,
-                                customShapeIdBuffer,
-                                shape,
-                                shapeId);
-                            Device?.For(texWidth, texHeight, shapeShader);
+                            DivisionShader shapeShader = GetShader(typeof(CustomShapeShader));
+                            shapeShader.SetFloat("width", texWidth);
+                            shapeShader.SetFloat("height", texHeight);
+                            shapeShader.SetFloat("aspect", texWidth / (float)texHeight);
+                            shapeShader.SetFloat("camScreenDist", worldDTO.camScreenDist);
+                            shapeShader.SetVector("cameraOrigin", worldDTO.cameraOrigin);
+                            shapeShader.SetVector("camForward", worldDTO.camForward);
+                            shapeShader.SetVector("camRight", worldDTO.camRight);
+                            shapeShader.SetVector("camUp", worldDTO.camUp);
+                            shapeShader.SetUInt("shapeId", shapeId);
+
+                            // The shape is a struct, which the packed uniform buffer cannot
+                            // carry, so it travels in a one-element structured buffer.
+                            customShapeBuffer ??= Context!.CreateStructuredBuffer([shape]);
+                            customShapeBuffer.SetData(Context!.Context, [shape]);
+                            shapeShader.SetStructuredBuffer("shapeData", customShapeBuffer);
+                            shapeShader.SetRWTexture2D("renderTexture", currentTexture!);
+                            shapeShader.SetRWBuffer("shapeIdBuffer", customShapeIdBuffer!);
+                            shapeShader.Dispatch2D(shapeShader.FindKernel("Execute"), texWidth, texHeight);
                         }
                     }
                 }
@@ -1261,34 +1284,35 @@ namespace DivisionEngine.Rendering
                     {
                         foreach (var (entityId, (position, icon, direction)) in iconsToRender)
                         {
-                            IconShader iconShader = new IconShader(
-                                texWidth, texHeight,
-                                texWidth / (float)texHeight,
-                                worldDTO.camScreenDist,
-                                worldDTO.cameraOrigin,
-                                worldDTO.camForward,
-                                worldDTO.camRight,
-                                worldDTO.camUp,
-                                currentTexture!,
-                                iconIdBuffer,
-                                position,
-                                (uint)icon,
-                                direction, // Cast the IconType enum to uint
-                                entityId);    // Use icon type as ID
-                            Device?.For(texWidth, texHeight, iconShader);
+                            DivisionShader iconShader = GetShader(typeof(IconShader));
+                            iconShader.SetFloat("width", texWidth);
+                            iconShader.SetFloat("height", texHeight);
+                            iconShader.SetFloat("aspect", texWidth / (float)texHeight);
+                            iconShader.SetFloat("camScreenDist", worldDTO.camScreenDist);
+                            iconShader.SetVector("cameraOrigin", worldDTO.cameraOrigin);
+                            iconShader.SetVector("camForward", worldDTO.camForward);
+                            iconShader.SetVector("camRight", worldDTO.camRight);
+                            iconShader.SetVector("camUp", worldDTO.camUp);
+                            iconShader.SetVector("iconPosition", position);
+                            iconShader.SetUInt("iconType", (uint)icon);
+                            iconShader.SetVector("lightDirection", direction);
+                            iconShader.SetUInt("entityId", entityId);
+                            iconShader.SetRWTexture2D("renderTexture", currentTexture!);
+                            iconShader.SetRWBuffer("iconIdBuffer", iconIdBuffer!);
+                            iconShader.Dispatch2D(iconShader.FindKernel("Execute"), texWidth, texHeight);
                         }
                     }
                 }
 
                 #endregion handlesAndIcons
 
-                // Copy final result for OpenGL display
-                depthNormalsTex?.CopyTo(DepthNormalPixels!);
-                objectIdBuffer?.CopyTo(ObjectIDs!);
-                handleIdBuffer?.CopyTo(HandleIds!);
-                iconIdBuffer?.CopyTo(IconIds!);
-                customShapeIdBuffer?.CopyTo(CustomShapeIds!);
-                currentTexture?.CopyTo(Pixels!);
+                // Copy final result for OpenGL display and editor picking
+                depthNormalsTex?.GetData(Context!.Context, DepthNormalPixels!);
+                objectIdBuffer?.GetData(Context!.Context, ObjectIDs!);
+                handleIdBuffer?.GetData(Context!.Context, HandleIds!);
+                iconIdBuffer?.GetData(Context!.Context, IconIds!);
+                customShapeIdBuffer?.GetData(Context!.Context, CustomShapeIds!);
+                currentTexture?.GetData(Context!.Context, Pixels!);
             }
             catch (ObjectDisposedException ex)
             {
@@ -1298,14 +1322,90 @@ namespace DivisionEngine.Rendering
             }
             catch (InvalidOperationException ex)
             {
-                Debug.Error($"Renderer: Invalid operation during ComputeSharp execution", ex);
-                Device = GraphicsDevice.GetDefault();
-                Debug.Info($"Renderer: Reverting to using device: {Device.Name}");
+                Debug.Error($"Renderer: Invalid operation during DivisionCompute execution", ex);
+
+                // Drop everything that belonged to the failing device before swapping it in:
+                // otherwise the next frame re-binds shaders and textures from the dead device
+                // and throws again, which used to create one new device per frame.
+                lock (SyncLock)
+                {
+                    try { Context?.Dispose(); }
+                    catch (Exception disposeEx) { Debug.Warning("Renderer: failed to dispose the failing context", disposeEx); }
+                    Context = null;
+                    CleanupResources(disposeInputContext: false);
+
+                    try
+                    {
+                        Context = EnsureContext();
+                        Debug.Info("Renderer: recreated the DivisionCompute device");
+                    }
+                    catch (Exception createEx)
+                    {
+                        Debug.Error("Renderer: could not recreate the DivisionCompute device", createEx);
+                        deviceLost = true;
+                    }
+                }
                 return;
             }
 
+            FramesRendered++;
+
             // Push final texture to OpenGL
             if (presentToGL) PresentToGL(texWidth, texHeight);
+        }
+
+        /// <summary>
+        /// Runs the DivisionCompute post-processing stage over the current frame and
+        /// returns the GPU texture holding the result, so the editor overlays still
+        /// draw on top of the processed image.
+        /// </summary>
+        /// <remarks>
+        /// The stage shares the pipeline's device, so the frame never leaves the GPU:
+        /// the SDF output texture goes straight in and the processed texture comes
+        /// straight back out.
+        /// </remarks>
+        /// <returns>
+        /// The texture holding the processed frame, or <paramref name="currentTexture"/>
+        /// unchanged when the stage fails (the error is logged once).
+        /// </returns>
+        private RWTexture2D<float4>? RunDivisionPostProcess(
+            PostProcessing postProcess,
+            Camera camera,
+            int texWidth,
+            int texHeight,
+            RWTexture2D<float4>? currentTexture,
+            RWTexture2D<float4>? depthNormals)
+        {
+            if (currentTexture == null) return currentTexture;
+
+            // A failed post stage stays disabled: retrying it every frame would spam
+            // the log and drop the frame anyway.
+            if (divisionPostUnavailable) return currentTexture;
+
+            try
+            {
+                divisionPostProcess ??= new DivisionPostProcess(Context!);
+
+                // Depth is only needed for DOF.
+                bool needDepth = postProcess.enableDepthOfField && depthNormals != null;
+
+                return divisionPostProcess.Process(
+                    currentTexture,
+                    needDepth ? depthNormals : null,
+                    needDepth,
+                    texWidth,
+                    texHeight,
+                    postProcess,
+                    camera);
+            }
+            catch (Exception ex)
+            {
+                Debug.Error("Renderer: DivisionCompute post-processing failed; effects are disabled", ex);
+                divisionPostUnavailable = true;
+                divisionPostProcess?.Dispose();
+                divisionPostProcess = null;
+                return currentTexture;
+            }
         }
 
         private void ConvertPixelsToBgra(int w, int h)
@@ -1328,9 +1428,9 @@ namespace DivisionEngine.Rendering
                     {
                         float4 p = Pixels[srcRowStart + x];
                         int o = (dstRowStart + x) * 4;
-                        embeddedBgraBuffer[o + 0] = (byte)math.clamp(p.Z * 255f, 0, 255);
-                        embeddedBgraBuffer[o + 1] = (byte)math.clamp(p.Y * 255f, 0, 255);
-                        embeddedBgraBuffer[o + 2] = (byte)math.clamp(p.X * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 0] = (byte)math.clamp(p.z * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 1] = (byte)math.clamp(p.y * 255f, 0, 255);
+                        embeddedBgraBuffer[o + 2] = (byte)math.clamp(p.x * 255f, 0, 255);
                         embeddedBgraBuffer[o + 3] = 255;
                     }
                 });
@@ -1495,27 +1595,66 @@ namespace DivisionEngine.Rendering
         /// <summary>
         /// Disposes of all managed memory and sets to null.
         /// </summary>
-        private void CleanupResources()
+        /// <param name="disposeInputContext">
+        /// Whether the window's input context should be disposed too. It belongs to the window,
+        /// not to the compute device, so device recovery must leave it alone.
+        /// </param>
+        private void CleanupResources(bool disposeInputContext = true)
         {
             renderTex?.Dispose();
             postProcessTex?.Dispose();
+            aTrousPongTex?.Dispose();
             depthNormalsTex?.Dispose();
+            lowResDepthTex?.Dispose();
+            lowResRenderTex?.Dispose();
             objectIdBuffer?.Dispose();
+            handleIdBuffer?.Dispose();
+            iconIdBuffer?.Dispose();
+            customShapeIdBuffer?.Dispose();
             sdfObjBuffer?.Dispose();
             lightsBuffer?.Dispose();
             kernelBuffer?.Dispose();
-            inputContext?.Dispose(); // Rare null reference error here
+            textureBuffer?.Dispose();
+            textureMetaBuffer?.Dispose();
+            terrainHeightBuffer?.Dispose();
+            terrainMetadataBuffer?.Dispose();
+            if (disposeInputContext)
+            {
+                inputContext?.Dispose(); // Rare null reference error here
+                inputContext = null;
+            }
             fxaaInputTex?.Dispose();
-            
+            customShapeBuffer?.Dispose();
+            divisionPostProcess?.Dispose();
+
+            foreach (DivisionShader shader in shaders.Values)
+                shader.Dispose();
+            shaders.Clear();
+
             renderTex = null;
             postProcessTex = null;
+            aTrousPongTex = null;
             depthNormalsTex = null;
+            lowResDepthTex = null;
+            lowResRenderTex = null;
             objectIdBuffer = null;
+            handleIdBuffer = null;
+            iconIdBuffer = null;
+            customShapeIdBuffer = null;
             sdfObjBuffer = null;
             lightsBuffer = null;
             kernelBuffer = null;
-            inputContext = null;
+            textureBuffer = null;
+            textureMetaBuffer = null;
+            terrainHeightBuffer = null;
+            terrainMetadataBuffer = null;
             fxaaInputTex = null;
+            customShapeBuffer = null;
+            divisionPostProcess = null;
+
+            // Force the CPU-side upload caches to be rebuilt against the new device.
+            rebuildTextureBuffer = true;
+            rebuildTerrainBuffer = true;
         }
     }
 }

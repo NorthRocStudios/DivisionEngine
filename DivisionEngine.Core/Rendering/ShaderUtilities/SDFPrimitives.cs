@@ -5,7 +5,8 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.Terrain;
 
 namespace DivisionEngine.Rendering.ShaderUtilities
@@ -19,82 +20,89 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         {
             //float3 s = new float3(8, 8, 8);
             //float3 l = new float3(100, 1, 100);
-            //float3 q = pt - s * Hlsl.Clamp(Hlsl.Round(pt / s), -l, l);
-            return Hlsl.Length(pt) - r;
+            //float3 q = pt - s * math.clamp(math.round(pt / s), -l, l);
+            return math.length(pt) - r;
         }
 
         public static float Box(float3 pt, float3 size)
         {
-            float3 q = Hlsl.Abs(pt) - size;
-            return Hlsl.Length(Hlsl.Max(q, 0.0f)) + Hlsl.Min(Hlsl.Max(q.X, Hlsl.Max(q.Y, q.Z)), 0.0f);
+            float3 q = math.abs(pt) - size;
+            return math.length(math.max(q, 0.0f)) + math.min(math.max(q.x, math.max(q.y, q.z)), 0.0f);
 
             //float3 s = new float3(8, 8, 8);
             //float3 l = new float3(10000, 6, 10000);
-            //float3 q = pt - s * Hlsl.Clamp(Hlsl.Round(pt / s), -l, l);
+            //float3 q = pt - s * math.clamp(math.round(pt / s), -l, l);
 
             //float sd1 = TorusSDF(q, size.XY);
             //float sd2 = PyramidSDF(q, size.X);
 
-            //return Hlsl.Lerp(sd1, sd2, Hlsl.Saturate(worldData.fogAnisotropy));
+            //return math.lerp(sd1, sd2, math.saturate(worldData.fogAnisotropy));
         }
 
         public static float RoundedBox(float3 pt, float3 size, float r)
         {
-            float3 q = Hlsl.Abs(pt) - size + r;
-            return Hlsl.Length(Hlsl.Max(q, 0.0f)) + Hlsl.Min(Hlsl.Max(q.X, Hlsl.Max(q.Y, q.Z)), 0.0f) - r;
+            float3 q = math.abs(pt) - size + r;
+            return math.length(math.max(q, 0.0f)) + math.min(math.max(q.x, math.max(q.y, q.z)), 0.0f) - r;
         }
 
         public static float Torus(float3 pt, float2 tr)
         {
-            float2 q = new float2(Hlsl.Length(pt.XZ) - tr.X, pt.Y);
-            return Hlsl.Length(q) - tr.Y;
+            float2 q = new float2(math.length(pt.xz) - tr.x, pt.y);
+            return math.length(q) - tr.y;
         }
 
         public static float Pyramid(float3 pt, float h)
         {
             float m2 = h * h + 0.25f;
 
-            pt.XZ = Hlsl.Abs(pt.XZ);
-            pt.XZ = (pt.Z > pt.X) ? pt.ZX : pt.XZ;
-            pt.XZ -= 0.5f;
+            pt.x = math.abs(pt.x);
+            pt.z = math.abs(pt.z);
+            if (pt.z > pt.x)
+            {
+                float swapXZ = pt.x;
+                pt.x = pt.z;
+                pt.z = swapXZ;
+            }
+            pt.x -= 0.5f;
+            pt.z -= 0.5f;
 
-            float3 q = new float3(pt.Z, h * pt.Y - 0.5f * pt.X, h * pt.X + 0.5f * pt.Y);
+            float3 q = new float3(pt.z, h * pt.y - 0.5f * pt.x, h * pt.x + 0.5f * pt.y);
 
-            float s = Hlsl.Max(-q.X, 0.0f);
-            float t = Hlsl.Saturate((q.Y - 0.5f * pt.Z) / (m2 + 0.25f));
+            float s = math.max(-q.x, 0.0f);
+            float t = math.saturate((q.y - 0.5f * pt.z) / (m2 + 0.25f));
 
-            float a = m2 * (q.X + s) * (q.X + s) + q.Y * q.Y;
-            float b = m2 * (q.X + 0.5f * t) * (q.X + 0.5f * t) + (q.Y - m2 * t) * (q.Y - m2 * t);
+            float a = m2 * (q.x + s) * (q.x + s) + q.y * q.y;
+            float b = m2 * (q.x + 0.5f * t) * (q.x + 0.5f * t) + (q.y - m2 * t) * (q.y - m2 * t);
 
-            float d2 = Hlsl.Min(q.Y, -q.X * m2 - q.Y * 0.5f) > 0.0f ? 0.0f : Hlsl.Min(a, b);
+            float d2 = math.min(q.y, -q.x * m2 - q.y * 0.5f) > 0.0f ? 0.0f : math.min(a, b);
 
-            return Hlsl.Sqrt((d2 + q.Z * q.Z) / m2) * Hlsl.Sign(Hlsl.Max(q.Z, -pt.Y));
+            return math.sqrt((d2 + q.z * q.z) / m2) * math.sign(math.max(q.z, -pt.y));
         }
 
         public static float Plane(float3 pt, float3 n, float h)
         {
-            return Hlsl.Dot(pt, Hlsl.Normalize(n)) + h;
+            return math.dot(pt, math.normalize(n)) + h;
         }
 
         // Bound not exact, for performance
         public static float Cone(float3 pt, float2 c, float h)
         {
-            float q = Hlsl.Length(pt.XZ);
-            return Hlsl.Max(Hlsl.Dot(c.XY, new float2(q, pt.Y)), -h - pt.Y);
+            float q = math.length(pt.xz);
+            return math.max(math.dot(c.xy, new float2(q, pt.y)), -h - pt.y);
         }
 
         // Vertical version, for performance
         public static float Cylinder(float3 pt, float r, float h)
         {
-            float2 d = Hlsl.Abs(new float2(Hlsl.Length(pt.XZ), pt.Y)) - new float2(r, h);
-            return Hlsl.Min(Hlsl.Max(d.X, d.Y), 0.0f) + Hlsl.Length(Hlsl.Max(d, 0.0f));
+            float2 d = math.abs(new float2(math.length(pt.xz), pt.y)) - new float2(r, h);
+            return math.min(math.max(d.x, d.y), 0.0f) + math.length(math.max(d, 0.0f));
         }
 
         // Vertical version, for performance
         public static float Capsule(float3 pt, float r, float h)
         {
-            pt.Y -= Hlsl.Clamp(pt.Y, 0.0f, h);
-            return Hlsl.Length(pt) - r;
+            pt.y -= math.clamp(pt.y, 0.0f, h);
+            return math.length(pt) - r;
         }
 
         #region terrain
@@ -105,34 +113,34 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float TaperedCapsuleBend(float3 pt, float rBottom, float rTop, float height, float bendAmount, float2 bendDirection)
         {
             // Bend the point
-            float bendFactor = Hlsl.Saturate(pt.Y / height);
+            float bendFactor = math.saturate(pt.y / height);
             float bendScale = bendFactor * bendFactor;
             float3 bentPt = pt;
-            bentPt.X += bendScale * bendAmount * bendDirection.X;
-            bentPt.Z += bendScale * bendAmount * bendDirection.Y;
+            bentPt.x += bendScale * bendAmount * bendDirection.x;
+            bentPt.z += bendScale * bendAmount * bendDirection.y;
 
             // Tapered capsule
-            float t = Hlsl.Clamp(bentPt.Y / height, 0.0f, 1.0f);
-            float radius = Hlsl.Lerp(rBottom, rTop, t);
+            float t = math.clamp(bentPt.y / height, 0.0f, 1.0f);
+            float radius = math.lerp(rBottom, rTop, t);
 
             // Get distance to capsule centerline
-            float2 horizontal = new float2(bentPt.X, bentPt.Z);
-            float dist = Hlsl.Length(horizontal) - radius;
+            float2 horizontal = new float2(bentPt.x, bentPt.z);
+            float dist = math.length(horizontal) - radius;
 
             // Add vertical clipping
-            float vertical = Hlsl.Abs(bentPt.Y - height * 0.5f) - height * 0.5f;
+            float vertical = math.abs(bentPt.y - height * 0.5f) - height * 0.5f;
 
-            return Hlsl.Max(dist, vertical);
+            return math.max(dist, vertical);
         }
 
         public static float Terrain(float3 pt, float size, float heightScale, float persistence, float lacunarity, int octaves)
         {
-            float height = GradientNoise.FBMNoised(pt.XZ / size, octaves, persistence, lacunarity, out float2 deriv);
+            float height = GradientNoise.FBMNoised(pt.xz / size, octaves, persistence, lacunarity, out float2 deriv);
             float terrainHeight = height * heightScale - (heightScale / 2f);
 
-            //float slope = Hlsl.Length(deriv) * heightScale / size;
+            //float slope = math.length(deriv) * heightScale / size;
 
-            float terrain = pt.Y - terrainHeight;
+            float terrain = pt.y - terrainHeight;
             return terrain;
         }
 
@@ -141,20 +149,20 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float erosionLacunarity, float erosionGain, float cellScale, float normalization, int baseOctaves, float4 rounding)
         {
             // Base terrain using FBM
-            float2 uv = pt.XZ / size;
+            float2 uv = pt.xz / size;
 
             // Calculate base height using the noised function
             float3 baseTerrain = TerrainRendering.FractalNoiseWithDerivatives(uv, 3.0f, baseOctaves, lacunarity, baseGain);
-            float baseHeightNorm = baseTerrain.X * 0.5f + 0.5f;
-            float2 slope = new float2(baseTerrain.Y, baseTerrain.Z);
+            float baseHeightNorm = baseTerrain.x * 0.5f + 0.5f;
+            float2 slope = new float2(baseTerrain.y, baseTerrain.z);
 
             // Erosion filter
-            float fadeTarget = Hlsl.Clamp(baseTerrain.X / 0.6f, -1.0f, 1.0f);
+            float fadeTarget = math.clamp(baseTerrain.x / 0.6f, -1.0f, 1.0f);
             float4 onset = new float4(1.25f, 1.25f, 2.8f, 1.5f);
             float2 assumedSlope = new float2(0.7f, 1.0f);
 
             float ridgeMap, debug;
-            float3 heightSlope = new float3(baseHeightNorm, slope.X, slope.Y);
+            float3 heightSlope = new float3(baseHeightNorm, slope.x, slope.y);
             float4 erosionResult = TerrainRendering.ErosionFilter(
                 uv, heightSlope, fadeTarget,
                 erosionStrength, gullyWeight, erosionDetail,
@@ -165,11 +173,11 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
             // Apply height offset
             float heightOffset = -0.65f;
-            float offset = heightOffset * erosionResult.W;
-            float erodedHeightNorm = baseHeightNorm + erosionResult.X + offset;
+            float offset = heightOffset * erosionResult.w;
+            float erodedHeightNorm = baseHeightNorm + erosionResult.x + offset;
             float erodedHeight = (erodedHeightNorm - 0.5f) * heightScale;
 
-            return pt.Y - erodedHeight;
+            return pt.y - erodedHeight;
         }
 
         /// <summary>
@@ -179,14 +187,14 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float grassDensity, float grassHeight, float grassRadius, float bendAmount,
             int terrainIndex, float time, float2 windDirection, float windStrength)
         {
-            float terrainDist = pt.Y - terrainHeight;
+            float terrainDist = pt.y - terrainHeight;
 
             float margin = grassHeight * 0.6f + grassRadius * 2f;
             if (terrainDist > margin) return terrainDist;
 
-            float2 worldXZ = pt.XZ;
+            float2 worldXZ = pt.xz;
             float cellSize = 1.0f / grassDensity;
-            float2 baseCellIndex = Hlsl.Floor(worldXZ / cellSize);
+            float2 baseCellIndex = math.floor(worldXZ / cellSize);
 
             float grassDist = 1e8f;
 
@@ -215,22 +223,22 @@ namespace DivisionEngine.Rendering.ShaderUtilities
                     float bladeGroundHeight = terrainHeight; // Simplified
 
                     float2 offsetXZ = worldXZ - cellCenterWorld;
-                    float s = Hlsl.Sin(randomRotation);
-                    float c = Hlsl.Cos(randomRotation);
+                    float s = math.sin(randomRotation);
+                    float c = math.cos(randomRotation);
                     float2 rotatedXZ = new float2(
-                        offsetXZ.X * c - offsetXZ.Y * s,
-                        offsetXZ.X * s + offsetXZ.Y * c
+                        offsetXZ.x * c - offsetXZ.y * s,
+                        offsetXZ.x * s + offsetXZ.y * c
                     );
 
-                    float3 grassLocal = new float3(rotatedXZ.X, pt.Y - bladeGroundHeight, rotatedXZ.Y);
+                    float3 grassLocal = new float3(rotatedXZ.x, pt.y - bladeGroundHeight, rotatedXZ.y);
 
                     // Wind animation
                     float windPhase = SimplexNoise.Noise2D(cellIndex * 3.3f + new float2(0.7f, 0.3f)) * 6.28318530718f;
-                    float windBend = Hlsl.Sin(time * 1.6f + windPhase) * windStrength * 0.3f;
+                    float windBend = math.sin(time * 1.6f + windPhase) * windStrength * 0.3f;
 
                     // Wind direction influence
-                    float windDot = Hlsl.Dot(windDirection, new float2(rotatedXZ.X, rotatedXZ.Y));
-                    float windInfluence = Hlsl.Saturate(windDot * 0.5f + 0.5f);
+                    float windDot = math.dot(windDirection, new float2(rotatedXZ.x, rotatedXZ.y));
+                    float windInfluence = math.saturate(windDot * 0.5f + 0.5f);
 
                     float rBottom = grassRadius * (0.8f + randomRadius * 0.4f);
                     float rTop = grassRadius * 0.05f * randomRadius;
@@ -239,11 +247,11 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
                     // Use the fixed tapered capsule
                     float bladeDist = TaperedCapsuleBend(grassLocal, rBottom, rTop, h, bend, windDirection);
-                    grassDist = Hlsl.Min(grassDist, bladeDist);
+                    grassDist = math.min(grassDist, bladeDist);
                 }
             }
 
-            return Hlsl.Min(terrainDist, grassDist);
+            return math.min(terrainDist, grassDist);
         }
 
 
@@ -257,7 +265,10 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// <param name="x">Input vector</param>
         /// <param name="period">Wrap period</param>
         /// <returns>Wrapped vector</returns>
-        public static float3 Mod(float3 x, float period) => x - period * Hlsl.Floor(x / period);
+        public static float3 Mod(float3 x, float period)
+        {
+            return x - period * math.floor(x / period);
+        }
 
         /// <summary>
         /// Distance estimator for the Mandelbulb, the 3D analogue of the Mandelbrot set.
@@ -273,29 +284,29 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float3 z = pt;
             float dr = 1f;
             float r = 0f;
-            float escape = Hlsl.Max(bailout, 1.1f);
+            float escape = math.max(bailout, 1.1f);
             int steps = iterations < 1 ? 1 : iterations;
 
             for (int i = 0; i < steps; i++)
             {
-                r = Hlsl.Length(z);
+                r = math.length(z);
                 if (r > escape) break;
 
-                float safeR = Hlsl.Max(r, 1e-6f);
-                float theta = Hlsl.Acos(Hlsl.Max(-1f, Hlsl.Min(1f, z.Z / safeR)));
-                float phi = Hlsl.Atan2(z.Y, z.X);
+                float safeR = math.max(r, 1e-6f);
+                float theta = math.acos(math.max(-1f, math.min(1f, z.z / safeR)));
+                float phi = math.atan2(z.y, z.x);
 
-                float radius = Hlsl.Pow(safeR, power);
-                dr = Hlsl.Pow(safeR, power - 1f) * power * dr + 1f;
+                float radius = math.pow(safeR, power);
+                dr = math.pow(safeR, power - 1f) * power * dr + 1f;
 
                 theta *= power;
                 phi *= power;
 
-                float sinTheta = Hlsl.Sin(theta);
-                z = radius * new float3(sinTheta * Hlsl.Cos(phi), sinTheta * Hlsl.Sin(phi), Hlsl.Cos(theta)) + pt;
+                float sinTheta = math.sin(theta);
+                z = radius * new float3(sinTheta * math.cos(phi), sinTheta * math.sin(phi), math.cos(theta)) + pt;
             }
 
-            return 0.5f * Hlsl.Log(Hlsl.Max(r, 1e-6f)) * r / Hlsl.Max(dr, 1e-6f);
+            return 0.5f * math.log(math.max(r, 1e-6f)) * r / math.max(dr, 1e-6f);
         }
 
         /// <summary>
@@ -309,26 +320,26 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// <returns>Conservative distance to the fractal surface</returns>
         public static float MengerSponge(float3 pt, float size, float holeScale, int iterations)
         {
-            float half = Hlsl.Max(size, 0.05f);
-            float3 q = pt / half;
+            float halfExtent = math.max(size, 0.05f);
+            float3 q = pt / halfExtent;
             float d = Box(q, new float3(1f, 1f, 1f));
             float s = 1f;
-            float scale = Hlsl.Max(holeScale, 2f);
+            float scale = math.max(holeScale, 2f);
             int steps = iterations < 0 ? 0 : iterations;
 
             for (int i = 0; i < steps; i++)
             {
                 float3 a = Mod(q * s, 2f) - 1f;
                 s *= scale;
-                float3 fold = Hlsl.Abs(1f - 3f * Hlsl.Abs(a));
-                float da = Hlsl.Max(fold.X, fold.Y);
-                float db = Hlsl.Max(fold.Y, fold.Z);
-                float dc = Hlsl.Max(fold.Z, fold.X);
-                float c = (Hlsl.Min(da, Hlsl.Min(db, dc)) - 1f) / s;
-                d = Hlsl.Max(d, c);
+                float3 fold = math.abs(1f - 3f * math.abs(a));
+                float da = math.max(fold.x, fold.y);
+                float db = math.max(fold.y, fold.z);
+                float dc = math.max(fold.z, fold.x);
+                float c = (math.min(da, math.min(db, dc)) - 1f) / s;
+                d = math.max(d, c);
             }
 
-            return d * half;
+            return d * halfExtent;
         }
 
         /// <summary>
@@ -342,10 +353,10 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// <returns>Conservative distance to the fractal surface</returns>
         public static float Mandelbox(float3 pt, float scale, float minRadius, float foldLimit, int iterations)
         {
-            float limit = Hlsl.Max(foldLimit, 0.1f);
+            float limit = math.max(foldLimit, 0.1f);
             // A fold scale near +/-1 collapses the estimator; fall back to the classic value.
-            float safeScale = Hlsl.Abs(scale) < 1.1f ? -1.5f : scale;
-            float minR = Hlsl.Min(Hlsl.Max(minRadius, 1e-3f), limit);
+            float safeScale = math.abs(scale) < 1.1f ? -1.5f : scale;
+            float minR = math.min(math.max(minRadius, 1e-3f), limit);
             float minR2 = minR * minR;
             float limit2 = limit * limit;
             float3 bound = new float3(limit, limit, limit);
@@ -356,10 +367,10 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             for (int i = 0; i < steps; i++)
             {
                 // Box fold
-                z = Hlsl.Max(Hlsl.Min(z, bound), -bound) * 2f - z;
+                z = math.max(math.min(z, bound), -bound) * 2f - z;
 
                 // Sphere fold
-                float r2 = Hlsl.Dot(z, z);
+                float r2 = math.dot(z, z);
                 if (r2 < minR2)
                 {
                     float t = limit2 / minR2;
@@ -368,16 +379,16 @@ namespace DivisionEngine.Rendering.ShaderUtilities
                 }
                 else if (r2 < limit2)
                 {
-                    float t = limit2 / Hlsl.Max(r2, 1e-9f);
+                    float t = limit2 / math.max(r2, 1e-9f);
                     z = z * t;
                     dr = dr * t;
                 }
 
                 z = z * safeScale + pt;
-                dr = dr * Hlsl.Abs(safeScale) + 1f;
+                dr = dr * math.abs(safeScale) + 1f;
             }
 
-            return Hlsl.Length(z) / Hlsl.Max(Hlsl.Abs(dr), 1e-6f);
+            return math.length(z) / math.max(math.abs(dr), 1e-6f);
         }
 
         #endregion fractals

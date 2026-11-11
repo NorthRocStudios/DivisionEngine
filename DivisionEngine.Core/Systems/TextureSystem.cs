@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -94,8 +94,10 @@ namespace DivisionEngine.Systems
             }
         }
 
-        public override void AppStart()
+        public override void Awake()
         {
+            // World start: (re)attach the asset/project listeners. AppStart is app-lifetime only,
+            // and world-start is where per-world wiring belongs - Unload removes these again.
             loadingTextures = false;
             AssetDatabase.AssetsUpdated += OnAssetsUpdated;
             ProjectManager.ProjectLoaded += OnProjectLoaded;

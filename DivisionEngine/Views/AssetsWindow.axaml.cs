@@ -506,12 +506,31 @@ public partial class AssetsWindow : EditorWindow
                 return;
             }
 
-            if (isFolder) Directory.CreateDirectory(Path.Combine(targetPath, name));
+            if (isFolder)
+            {
+                string folderPath = Path.Combine(targetPath, name);
+                if (Directory.Exists(folderPath))
+                {
+                    Debug.Warning($"Cannot create folder '{name}': it already exists");
+                    return;
+                }
+                Directory.CreateDirectory(folderPath);
+            }
             else
             {
                 string fileName = extension == "cs" ? name : $"{name}.{extension}";
                 if (!fileName.EndsWith($".{extension}")) fileName += $".{extension}";
-                await File.WriteAllTextAsync(Path.Combine(targetPath, fileName), defaultContent);
+
+                string filePath = Path.Combine(targetPath, fileName);
+                // Never replace an existing file with the template - that silently destroys
+                // whatever the user had in it.
+                if (File.Exists(filePath))
+                {
+                    Debug.Warning($"Cannot create '{fileName}': a file with that name already exists");
+                    return;
+                }
+
+                await File.WriteAllTextAsync(filePath, defaultContent);
             }
             Debug.Info($"Created {(isFolder ? "folder" : "file")}: {name}");
 
@@ -581,16 +600,19 @@ public partial class AssetsWindow : EditorWindow
         "using DivisionEngine.MathUtilities;\n\n" +
         "// Add your code here.\n";
 
+    // DivisionCompute shaders: plain fields become uniforms, [ShaderResource] fields
+    // become GPU resources, and the [Kernel] method runs once per thread.
     private const string ComputeShaderTemplate =
-        "using ComputeSharp;\n\n" +
-        "[ThreadGroupSize(DefaultThreadGroupSizes.XY)]\n" +
-        "[GeneratedComputeShaderDescriptor]\n" +
-        "public readonly partial struct NewShader : IComputeShader\n" +
+        "using DivisionEngine.Graphics;\n" +
+        "using U3 = DivisionEngine.MathLib.uint3;\n\n" +
+        "[Shader]\n" +
+        "public struct NewShader\n" +
         "{\n" +
-        "    public readonly ReadWriteBuffer<float> Buffer;\n\n" +
-        "    public void Execute()\n" +
+        "    [ShaderResource] public RWBuffer<float> Buffer;\n\n" +
+        "    [Kernel(8, 8, 1)]\n" +
+        "    public void Execute(U3 id)\n" +
         "    {\n" +
-        "        Buffer[ThreadIds.X] = ThreadIds.X;\n" +
+        "        Buffer[id.x] = id.x;\n" +
         "    }\n" +
         "}\n";
 

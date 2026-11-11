@@ -1,11 +1,12 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 
 namespace DivisionEngine.Rendering.ShaderUtilities
 {
@@ -17,8 +18,8 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float2 hash(float2 x)
         {
             float2 k = new float2(0.3183099f, 0.3678794f);
-            x = x * k + new float2(k.Y, k.X);
-            return -1.0f + 2.0f * Hlsl.Frac(16.0f * k * Hlsl.Frac(x.X * x.Y * (x.X + x.Y)));
+            x = x * k + new float2(k.y, k.x);
+            return -1.0f + 2.0f * math.frac(16.0f * k * math.frac(x.x * x.y * (x.x + x.y)));
         }
 
         // Noise function with derivatives
@@ -29,14 +30,14 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
             if (method == 0)
             {
-                int2 i_int = new int2((int)Hlsl.Floor(x.X), (int)Hlsl.Floor(x.Y));
-                i = new float2(i_int.X, i_int.Y);
-                f = Hlsl.Frac(x);
+                int2 i_int = new int2((int)math.floor(x.x), (int)math.floor(x.y));
+                i = new float2(i_int.x, i_int.y);
+                f = math.frac(x);
             }
             else
             {
-                i = Hlsl.Floor(x);
-                f = Hlsl.Frac(x);
+                i = math.floor(x);
+                f = math.frac(x);
             }
 
             // Interpolation weights
@@ -73,19 +74,19 @@ namespace DivisionEngine.Rendering.ShaderUtilities
                 gd = hash(i + new float2(1.0f, 1.0f));
             }
 
-            float va = Hlsl.Dot(ga, f - new float2(0.0f, 0.0f));
-            float vb = Hlsl.Dot(gb, f - new float2(1.0f, 0.0f));
-            float vc = Hlsl.Dot(gc, f - new float2(0.0f, 1.0f));
-            float vd = Hlsl.Dot(gd, f - new float2(1.0f, 1.0f));
+            float va = math.dot(ga, f - new float2(0.0f, 0.0f));
+            float vb = math.dot(gb, f - new float2(1.0f, 0.0f));
+            float vc = math.dot(gc, f - new float2(0.0f, 1.0f));
+            float vd = math.dot(gd, f - new float2(1.0f, 1.0f));
 
             // Value
-            float value = va + u.X * (vb - va) + u.Y * (vc - va) + u.X * u.Y * (va - vb - vc + vd);
+            float value = va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd);
 
             // Derivatives
-            float2 derivatives = ga + u.X * (gb - ga) + u.Y * (gc - ga) + u.X * u.Y * (ga - gb - gc + gd) +
-                                 du * (new float2(u.Y, u.X) * (va - vb - vc + vd) + new float2(vb, vc) - va);
+            float2 derivatives = ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd) +
+                                 du * (new float2(u.y, u.x) * (va - vb - vc + vd) + new float2(vb, vc) - va);
 
-            return new float3(value, derivatives.X, derivatives.Y);
+            return new float3(value, derivatives.x, derivatives.y);
         }
 
         // Convenience wrapper with default parameters (method=1 for vec2, interpolant=1 for quintic)
@@ -98,7 +99,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float FBMNoised(float2 x, int octaves, float persistence, float lacunarity, out float2 derivatives)
         {
             float value = 0.0f;
-            derivatives = float2.Zero;
+            derivatives = new float2(0f);
             float amplitude = 1.0f;
             float frequency = 1.0f;
             float maxAmp = 0.0f;
@@ -106,8 +107,8 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             for (int i = 0; i < octaves; i++)
             {
                 float3 n = noised(x * frequency);
-                value += amplitude * n.X;
-                derivatives += amplitude * frequency * new float2(n.Y, n.Z);
+                value += amplitude * n.x;
+                derivatives += amplitude * frequency * new float2(n.y, n.z);
                 maxAmp += amplitude;
                 amplitude *= persistence;
                 frequency *= lacunarity;
@@ -154,21 +155,21 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         private static float3 Grad3(uint hash)
         {
             uint g = hash & 15;
-            float3 grad = float3.Zero;
+            float3 grad = new float3(0f);
 
             // x component
-            if (g < 8) grad.X = 1.0f;
-            else grad.X = -1.0f;
+            if (g < 8) grad.x = 1.0f;
+            else grad.x = -1.0f;
 
             // y component
-            if (g < 4) grad.Y = 1.0f;
-            else if (g < 12) grad.Y = -1.0f;
-            else grad.Y = 0.0f;
+            if (g < 4) grad.y = 1.0f;
+            else if (g < 12) grad.y = -1.0f;
+            else grad.y = 0.0f;
 
             // z component
-            if ((g & 1) != 0) grad.Z = 1.0f;
-            else if ((g & 2) != 0) grad.Z = -1.0f;
-            else grad.Z = 0.0f;
+            if ((g & 1) != 0) grad.z = 1.0f;
+            else if ((g & 2) != 0) grad.z = -1.0f;
+            else grad.z = 0.0f;
 
             return grad;
         }
@@ -191,7 +192,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// </summary>
         private static uint Hash2(int2 p)
         {
-            return Hash(Hash((uint)p.X) ^ Hash((uint)p.Y));
+            return Hash(Hash((uint)p.x) ^ Hash((uint)p.y));
         }
 
         /// <summary>
@@ -199,7 +200,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// </summary>
         private static uint Hash3(int3 p)
         {
-            return Hash(Hash(Hash((uint)p.X) ^ Hash((uint)p.Y)) ^ Hash((uint)p.Z));
+            return Hash(Hash(Hash((uint)p.x) ^ Hash((uint)p.y)) ^ Hash((uint)p.z));
         }
 
         /// <summary>
@@ -222,29 +223,29 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float Noise2D(float2 p)
         {
             // Step 1: Skew to triangular grid
-            float s = (p.X + p.Y) * F2;
+            float s = (p.x + p.y) * F2;
             float2 skew = p + s;
 
             // Step 2: Find cell coordinates
-            int2 i = (int2)Hlsl.Floor(skew);
-            float2 f = skew - i;
+            int2 i = new int2((int)math.floor(skew).x, (int)math.floor(skew).y);
+            float2 f = skew - new float2(i.x, i.y);
 
             // Step 3: Determine which triangle we're in (lower or upper)
             int2 ijk;
-            if (f.X > f.Y)
+            if (f.x > f.y)
                 ijk = new int2(1, 0);
             else
                 ijk = new int2(0, 1);
 
             // Step 4: Get vertices (unskewed)
-            float t = (i.X + i.Y) * G2;
-            float2 p0 = (float2)i - t;
+            float t = (i.x + i.y) * G2;
+            float2 p0 = new float2(i.x, i.y) - t;
 
-            t = (i.X + ijk.X + i.Y + ijk.Y) * G2;
-            float2 p1 = (float2)(i + ijk) - t;
+            t = (i.x + ijk.x + i.y + ijk.y) * G2;
+            float2 p1 = new float2((i + ijk).x, (i + ijk).y) - t;
 
-            t = (i.X + 1 + i.Y + 1) * G2;
-            float2 p2 = (float2)(i + 1) - t;
+            t = (i.x + 1 + i.y + 1) * G2;
+            float2 p2 = new float2((i + 1).x, (i + 1).y) - t;
 
             // Step 5: Vectors from vertices to point
             float2 d0 = p - p0;
@@ -261,16 +262,19 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float2 grad2 = Grad2(hash2 % 12);
 
             // Step 7: Calculate contributions
-            float t0 = Falloff(0.6f - Hlsl.Dot(d0, d0));
-            float t1 = Falloff(0.6f - Hlsl.Dot(d1, d1));
-            float t2 = Falloff(0.6f - Hlsl.Dot(d2, d2));
+            float t0 = Falloff(0.6f - math.dot(d0, d0));
+            float t1 = Falloff(0.6f - math.dot(d1, d1));
+            float t2 = Falloff(0.6f - math.dot(d2, d2));
 
-            float n0 = t0 * Hlsl.Dot(grad0, d0);
-            float n1 = t1 * Hlsl.Dot(grad1, d1);
-            float n2 = t2 * Hlsl.Dot(grad2, d2);
+            float n0 = t0 * math.dot(grad0, d0);
+            float n1 = t1 * math.dot(grad1, d1);
+            float n2 = t2 * math.dot(grad2, d2);
 
-            // Step 8: Sum and map to [0,1]
-            return (n0 + n1 + n2) * 0.5f + 0.5f;
+            // Step 8: Sum and map to [0,1].
+            // The raw simplex sum with this falloff radius is roughly +/-0.04, so it needs the
+            // same kind of gain the 3D version uses (16.0 there); 0.5 left the result pinned at
+            // 0.5, which made every heightmap (and all grass jitter) constant.
+            return (n0 + n1 + n2) * 12.4f + 0.5f;
         }
 
         // ============================================================
@@ -283,53 +287,53 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float Noise3D(float3 p)
         {
             // Step 1: Skew to tetrahedral grid
-            float s = (p.X + p.Y + p.Z) * F3;
+            float s = (p.x + p.y + p.z) * F3;
             float3 skew = p + s;
 
             // Step 2: Find cell coordinates
-            int3 i = (int3)Hlsl.Floor(skew);
-            float3 f = skew - i;
+            int3 i = new int3((int)math.floor(skew).x, (int)math.floor(skew).y, (int)math.floor(skew).z);
+            float3 f = skew - new float3(i.x, i.y, i.z);
 
             // Step 3: Determine which tetrahedron we're in
             // Compare fractional parts to determine the ordering
             int3 ijk;
-            if (f.X >= f.Y)
+            if (f.x >= f.y)
             {
-                if (f.Y >= f.Z)
+                if (f.y >= f.z)
                     ijk = new int3(1, 0, 0);
-                else if (f.X >= f.Z)
+                else if (f.x >= f.z)
                     ijk = new int3(1, 0, 1);
                 else
                     ijk = new int3(0, 0, 1);
             }
             else
             {
-                if (f.Y < f.Z)
+                if (f.y < f.z)
                     ijk = new int3(0, 1, 0);
-                else if (f.X < f.Z)
+                else if (f.x < f.z)
                     ijk = new int3(0, 1, 1);
                 else
                     ijk = new int3(1, 1, 0);
             }
 
             // Step 4: Get all 4 vertices of the tetrahedron
-            float unskew = (i.X + i.Y + i.Z) * G3;
-            float3 p0 = (float3)i - unskew;
+            float unskew = (i.x + i.y + i.z) * G3;
+            float3 p0 = new float3(i.x, i.y, i.z) - unskew;
 
-            unskew = (i.X + ijk.X + i.Y + ijk.Y + i.Z + ijk.Z) * G3;
-            float3 p1 = (float3)(i + ijk) - unskew;
+            unskew = (i.x + ijk.x + i.y + ijk.y + i.z + ijk.z) * G3;
+            float3 p1 = new float3((i + ijk).x, (i + ijk).y, (i + ijk).z) - unskew;
 
             int3 i2 = i + new int3(
-                ijk.X == 0 ? 1 : 0,
-                ijk.Y == 0 ? 1 : 0,
-                ijk.Z == 0 ? 1 : 0
+                ijk.x == 0 ? 1 : 0,
+                ijk.y == 0 ? 1 : 0,
+                ijk.z == 0 ? 1 : 0
             );
-            unskew = (i2.X + i2.Y + i2.Z) * G3;
-            float3 p2 = (float3)i2 - unskew;
+            unskew = (i2.x + i2.y + i2.z) * G3;
+            float3 p2 = new float3(i2.x, i2.y, i2.z) - unskew;
 
             int3 i3 = i + new int3(1, 1, 1);
-            unskew = (i3.X + i3.Y + i3.Z) * G3;
-            float3 p3 = (float3)i3 - unskew;
+            unskew = (i3.x + i3.y + i3.z) * G3;
+            float3 p3 = new float3(i3.x, i3.y, i3.z) - unskew;
 
             // Step 5: Vectors from vertices to point
             float3 d0 = p - p0;
@@ -349,15 +353,15 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float3 grad3 = Grad3(hash3 % 16);
 
             // Step 7: Calculate contributions with falloff
-            float t0 = Falloff(0.6f - Hlsl.Dot(d0, d0));
-            float t1 = Falloff(0.6f - Hlsl.Dot(d1, d1));
-            float t2 = Falloff(0.6f - Hlsl.Dot(d2, d2));
-            float t3 = Falloff(0.6f - Hlsl.Dot(d3, d3));
+            float t0 = Falloff(0.6f - math.dot(d0, d0));
+            float t1 = Falloff(0.6f - math.dot(d1, d1));
+            float t2 = Falloff(0.6f - math.dot(d2, d2));
+            float t3 = Falloff(0.6f - math.dot(d3, d3));
 
-            float n0 = t0 * Hlsl.Dot(grad0, d0);
-            float n1 = t1 * Hlsl.Dot(grad1, d1);
-            float n2 = t2 * Hlsl.Dot(grad2, d2);
-            float n3 = t3 * Hlsl.Dot(grad3, d3);
+            float n0 = t0 * math.dot(grad0, d0);
+            float n1 = t1 * math.dot(grad1, d1);
+            float n2 = t2 * math.dot(grad2, d2);
+            float n3 = t3 * math.dot(grad3, d3);
 
             // Step 8: Sum and map to [0,1]
             // The multiplier 32.0 normalizes the range to [-1,1]
@@ -435,7 +439,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             for (int i = 0; i < octaves; i++)
             {
                 float noise = Noise3D(p * frequency);
-                noise = 1.0f - Hlsl.Abs(noise); // Create ridges
+                noise = 1.0f - math.abs(noise); // Create ridges
                 noise *= noise * weight;
                 weight = noise;
 

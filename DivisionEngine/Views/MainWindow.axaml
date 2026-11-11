@@ -68,6 +68,7 @@
             <MenuItem Header="Redo" Command="{Binding RedoCommand}" IsEnabled="{Binding CanRedo}" Foreground="#ccc"/>
             <Separator/>
             <MenuItem Header="Reload Textures" Command="{Binding ReloadTexturesCommand}" Foreground="#ccc"/>
+            <MenuItem Header="Reload All Shaders" Command="{Binding ReloadAllShadersCommand}" Foreground="#ccc"/>
         </MenuItem>
             <!--Add Entity Menu-->
         <MenuItem Header="Add" Foreground="#ccc">

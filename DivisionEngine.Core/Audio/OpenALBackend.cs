@@ -116,13 +116,13 @@ namespace DivisionEngine.Audio
         {
             if (!IsAvailable || alApi == null) return;
 
-            alApi.SetListenerProperty(ListenerVector3.Position, state.Position.X, state.Position.Y, state.Position.Z);
-            alApi.SetListenerProperty(ListenerVector3.Velocity, state.Velocity.X, state.Velocity.Y, state.Velocity.Z);
+            alApi.SetListenerProperty(ListenerVector3.Position, state.Position.x, state.Position.y, state.Position.z);
+            alApi.SetListenerProperty(ListenerVector3.Velocity, state.Velocity.x, state.Velocity.y, state.Velocity.z);
 
             float* orientation = stackalloc float[6]
             {
-                state.Forward.X, state.Forward.Y, state.Forward.Z,
-                state.Up.X, state.Up.Y, state.Up.Z,
+                state.Forward.x, state.Forward.y, state.Forward.z,
+                state.Up.x, state.Up.y, state.Up.z,
             };
             alApi.SetListenerProperty(ListenerFloatArray.Orientation, orientation);
         }

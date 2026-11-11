@@ -7,6 +7,7 @@
 //
 using DivisionEngine.Components;
 using DivisionEngine.Editor.Settings;
+using DivisionEngine.Editor.Undo;
 using DivisionEngine.Input;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
@@ -40,6 +41,12 @@ namespace DivisionEngine.Editor.Systems
 
         // Scaling state
         private static float3 currentScale;
+
+        // Undo snapshot taken when a drag starts, pushed as one command when it ends
+        private static bool dragSnapshotValid;
+        private static float3 dragStartPosition;
+        private static float4 dragStartRotation;
+        private static float3 dragStartScaling;
 
         public override void AppStart()
         {
@@ -83,8 +90,8 @@ namespace DivisionEngine.Editor.Systems
             }
 
             float2 mousePos = InputSystem.MousePosition;
-            int pixelX = (int)mousePos.X;
-            int pixelY = (int)mousePos.Y;
+            int pixelX = (int)mousePos.x;
+            int pixelY = (int)mousePos.y;
 
             // Validate mouse position is within render area before using it
             int width, height;
@@ -130,6 +137,16 @@ namespace DivisionEngine.Editor.Systems
                     return;
                 }
 
+                // Snapshot the transform once, at the start of the drag, so the whole drag can
+                // be undone as a single action.
+                if (entityTransform != null && handleId >= 1 && handleId <= 10)
+                {
+                    dragStartPosition = entityTransform.position;
+                    dragStartRotation = entityTransform.rotation;
+                    dragStartScaling = entityTransform.scaling;
+                    dragSnapshotValid = true;
+                }
+
                 // Check for icon clicks first
                 //uint clickedIconId = RenderPipeline.Instance.GetIconAtPosition(pixelX, pixelY);
                 //if (clickedIconId != 0)
@@ -155,9 +172,9 @@ namespace DivisionEngine.Editor.Systems
 
                     currentPosition = entityTransform!.position;
                     distanceToCamera = math.sqrt(
-                        (cameraPosition.X - currentPosition.X) * (cameraPosition.X - currentPosition.X) +
-                        (cameraPosition.Y - currentPosition.Y) * (cameraPosition.Y - currentPosition.Y) +
-                        (cameraPosition.Z - currentPosition.Z) * (cameraPosition.Z - currentPosition.Z)
+                        (cameraPosition.x - currentPosition.x) * (cameraPosition.x - currentPosition.x) +
+                        (cameraPosition.y - currentPosition.y) * (cameraPosition.y - currentPosition.y) +
+                        (cameraPosition.z - currentPosition.z) * (cameraPosition.z - currentPosition.z)
                     );
                     Debug.Info($"HandleInteraction: Started translation on handle {selectedHandle}, position {currentPosition}");
                 }
@@ -173,9 +190,9 @@ namespace DivisionEngine.Editor.Systems
                     // Use the entity's position for distance calculation
                     float3 entityPos = entityTransform.position;
                     distanceToCamera = math.sqrt(
-                        (cameraPosition.X - entityPos.X) * (cameraPosition.X - entityPos.X) +
-                        (cameraPosition.Y - entityPos.Y) * (cameraPosition.Y - entityPos.Y) +
-                        (cameraPosition.Z - entityPos.Z) * (cameraPosition.Z - entityPos.Z)
+                        (cameraPosition.x - entityPos.x) * (cameraPosition.x - entityPos.x) +
+                        (cameraPosition.y - entityPos.y) * (cameraPosition.y - entityPos.y) +
+                        (cameraPosition.z - entityPos.z) * (cameraPosition.z - entityPos.z)
                     );
                     Debug.Info($"HandleInteraction: Started scaling on handle {handleId}, scale {currentScale}");
                 }
@@ -210,11 +227,11 @@ namespace DivisionEngine.Editor.Systems
             {
                 // Calculate delta from LAST frame
                 float2 delta = new float2(
-                    mousePos.X - lastMousePos.X,
-                    -(mousePos.Y - lastMousePos.Y)
+                    mousePos.x - lastMousePos.x,
+                    -(mousePos.y - lastMousePos.y)
                 );
 
-                if ((delta.X != 0 || delta.Y != 0) && draggedEntity != uint.MaxValue)
+                if ((delta.x != 0 || delta.y != 0) && draggedEntity != uint.MaxValue)
                 {
                     Transform? transform = W.GetComponent<Transform>(draggedEntity);
                     if (transform == null) return;
@@ -227,15 +244,15 @@ namespace DivisionEngine.Editor.Systems
                         // Scale by distance to camera for natural feel
                         float distanceScale = distanceToCamera * 0.002f;
                         movement = new float3(
-                            movement.X * distanceScale,
-                            movement.Y * distanceScale,
-                            movement.Z * distanceScale
+                            movement.x * distanceScale,
+                            movement.y * distanceScale,
+                            movement.z * distanceScale
                         );
 
                         currentPosition = new float3(
-                            currentPosition.X + movement.X,
-                            currentPosition.Y + movement.Y,
-                            currentPosition.Z + movement.Z
+                            currentPosition.x + movement.x,
+                            currentPosition.y + movement.y,
+                            currentPosition.z + movement.z
                         );
 
                         transform.position = currentPosition;
@@ -244,29 +261,29 @@ namespace DivisionEngine.Editor.Systems
 
                         // Update distance as we move
                         distanceToCamera = math.sqrt(
-                            (cameraPosition.X - currentPosition.X) * (cameraPosition.X - currentPosition.X) +
-                            (cameraPosition.Y - currentPosition.Y) * (cameraPosition.Y - currentPosition.Y) +
-                            (cameraPosition.Z - currentPosition.Z) * (cameraPosition.Z - currentPosition.Z)
+                            (cameraPosition.x - currentPosition.x) * (cameraPosition.x - currentPosition.x) +
+                            (cameraPosition.y - currentPosition.y) * (cameraPosition.y - currentPosition.y) +
+                            (cameraPosition.z - currentPosition.z) * (cameraPosition.z - currentPosition.z)
                         );
                     }
                     // Scaling
                     else if (selectedHandle >= 5 && selectedHandle <= 7)
                     {
                         // Use the combined delta for scaling (both X and Y movement contribute)
-                        float scaleDelta = (delta.X + delta.Y) * 0.01f;
+                        float scaleDelta = (delta.x + delta.y) * 0.01f;
 
                         // Start from CURRENT scale, not original
                         float3 newScale = currentScale;
                         switch (selectedHandle)
                         {
                             case 5: // X Scale (orange square)
-                                newScale.X = math.max(0.01f, currentScale.X + scaleDelta);
+                                newScale.x = math.max(0.01f, currentScale.x + scaleDelta);
                                 break;
                             case 6: // Y Scale (green square)
-                                newScale.Y = math.max(0.01f, currentScale.Y + scaleDelta);
+                                newScale.y = math.max(0.01f, currentScale.y + scaleDelta);
                                 break;
                             case 7: // Z Scale (blue square)
-                                newScale.Z = math.max(0.01f, currentScale.Z + scaleDelta);
+                                newScale.z = math.max(0.01f, currentScale.z + scaleDelta);
                                 break;
                         }
 
@@ -314,6 +331,25 @@ namespace DivisionEngine.Editor.Systems
             if (!mouseDown && IsDragging)
             {
                 Debug.Info($"HandleInteraction: Stopped dragging handle {selectedHandle}");
+
+                // Record the whole drag as one undoable action (no-op when nothing changed).
+                if (dragSnapshotValid)
+                {
+                    Transform? transform = W.GetComponent<Transform>(draggedEntity);
+                    if (transform != null &&
+                        (!transform.position.Equals(dragStartPosition) ||
+                         !transform.rotation.Equals(dragStartRotation) ||
+                         !transform.scaling.Equals(dragStartScaling)))
+                    {
+                        UndoManager.Execute(new TransformCommand(
+                            draggedEntity,
+                            dragStartPosition, dragStartRotation, dragStartScaling,
+                            transform.position, transform.rotation, transform.scaling));
+                    }
+
+                    dragSnapshotValid = false;
+                }
+
                 IsDragging = false;
                 selectedHandle = 0;
             }
@@ -326,7 +362,7 @@ namespace DivisionEngine.Editor.Systems
                 1 => new float3(1, 0, 0),
                 2 => new float3(0, 1, 0),
                 3 => new float3(0, 0, 1),
-                _ => float3.Zero
+                _ => float3.zero
             };
 
             // Project the axis direction onto camera's screen plane
@@ -336,17 +372,17 @@ namespace DivisionEngine.Editor.Systems
             );
 
             // Normalize the screen axis to get direction
-            float screenAxisLength = math.sqrt(screenAxis.X * screenAxis.X + screenAxis.Y * screenAxis.Y);
+            float screenAxisLength = math.sqrt(screenAxis.x * screenAxis.x + screenAxis.y * screenAxis.y);
             if (screenAxisLength > 0.001f)
-                screenAxis = new float2(screenAxis.X / screenAxisLength, screenAxis.Y / screenAxisLength);
+                screenAxis = new float2(screenAxis.x / screenAxisLength, screenAxis.y / screenAxisLength);
             else screenAxis = selectedHandle == 1 ? new float2(1, 0) : new float2(0, 1);
-            float projection = delta.X * screenAxis.X + delta.Y * screenAxis.Y;
+            float projection = delta.x * screenAxis.x + delta.y * screenAxis.y;
 
             // Convert back to world movement
             return new float3(
-                axisDirection.X * projection,
-                axisDirection.Y * projection,
-                axisDirection.Z * projection
+                axisDirection.x * projection,
+                axisDirection.y * projection,
+                axisDirection.z * projection
             );
         }
 
@@ -384,20 +420,20 @@ namespace DivisionEngine.Editor.Systems
             float aspect = screenW / (float)screenH;
             float camScreenDist = DivisionEngine.Systems.CameraSystem.FovToScreenDistance(camera);
 
-            float flippedY = screenH - 1 - mousePos.Y;
-            float uvX = mousePos.X / screenW * 2f - 1f;
+            float flippedY = screenH - 1 - mousePos.y;
+            float uvX = mousePos.x / screenW * 2f - 1f;
             float uvY = flippedY / screenH * 2f - 1f;
 
             float px = uvX * aspect * camScreenDist;
             float py = uvY * camScreenDist;
 
             float3 dir = new float3(
-                camTransform.Forward.X + camTransform.Right.X * px + camTransform.Up.X * py,
-                camTransform.Forward.Y + camTransform.Right.Y * px + camTransform.Up.Y * py,
-                camTransform.Forward.Z + camTransform.Right.Z * px + camTransform.Up.Z * py);
+                camTransform.Forward.x + camTransform.Right.x * px + camTransform.Up.x * py,
+                camTransform.Forward.y + camTransform.Right.y * px + camTransform.Up.y * py,
+                camTransform.Forward.z + camTransform.Right.z * px + camTransform.Up.z * py);
 
-            float len = math.sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
-            if (len > 0.0001f) dir = new float3(dir.X / len, dir.Y / len, dir.Z / len);
+            float len = math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            if (len > 0.0001f) dir = new float3(dir.x / len, dir.y / len, dir.z / len);
             return dir;
         }
 
@@ -406,12 +442,12 @@ namespace DivisionEngine.Editor.Systems
             float denom = Vector.Dot(rayDir, axis);
             if (math.abs(denom) < 0.0001f) return float.NaN;
 
-            float3 toCenter = new float3(center.X - rayOrigin.X, center.Y - rayOrigin.Y, center.Z - rayOrigin.Z);
+            float3 toCenter = new float3(center.x - rayOrigin.x, center.y - rayOrigin.y, center.z - rayOrigin.z);
             float t = Vector.Dot(toCenter, axis) / denom;
             if (t < 0f) return float.NaN;
 
-            float3 hitPoint = new float3(rayOrigin.X + rayDir.X * t, rayOrigin.Y + rayDir.Y * t, rayOrigin.Z + rayDir.Z * t);
-            float3 rel = new float3(hitPoint.X - center.X, hitPoint.Y - center.Y, hitPoint.Z - center.Z);
+            float3 hitPoint = new float3(rayOrigin.x + rayDir.x * t, rayOrigin.y + rayDir.y * t, rayOrigin.z + rayDir.z * t);
+            float3 rel = new float3(hitPoint.x - center.x, hitPoint.y - center.y, hitPoint.z - center.z);
 
             float u = Vector.Dot(rel, planeU);
             float v = Vector.Dot(rel, planeV);

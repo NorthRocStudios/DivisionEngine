@@ -5,7 +5,8 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 
 namespace DivisionEngine.Rendering.ShaderUtilities
 {
@@ -35,35 +36,35 @@ namespace DivisionEngine.Rendering.ShaderUtilities
             float b = ((hash >> 16) & 0xFF) / 255.0f;
 
             // Ensure minimum brightness and saturation
-            return Hlsl.Max(new float3(r, g, b), 0.2f);
+            return math.max(new float3(r, g, b), 0.2f);
         }
 
         public static float AdaptiveEpsilon(float td, float width, float height, float camScreenDist, float EPSILON)
         {
-            float pixelSize = Hlsl.Max(td * camScreenDist / height, td * camScreenDist / width);
-            return Hlsl.Max(EPSILON, pixelSize); // Could use half pixel size
+            float pixelSize = math.max(td * camScreenDist / height, td * camScreenDist / width);
+            return math.max(EPSILON, pixelSize); // Could use half pixel size
         }
 
         // Quaternion rotation
         public static float3 RotateVector(float3 v, float4 r)
         {
-            float3 qv = r.XYZ;
-            float3 t = 2.0f * Hlsl.Cross(qv, v);
-            return v + r.W * t + Hlsl.Cross(qv, t);
+            float3 qv = r.xyz;
+            float3 t = 2.0f * math.cross(qv, v);
+            return v + r.w * t + math.cross(qv, t);
         }
 
         public static float3 InverseRotateVector(float3 v, float4 r)
         {
             // Conjugate of a unit quaternion is its inverse
-            return RotateVector(v, new float4(-r.X, -r.Y, -r.Z, r.W));
+            return RotateVector(v, new float4(-r.x, -r.y, -r.z, r.w));
         }
 
         public static float3 GetCameraRayDirNew(float aspect, float2 uv, float camScreenDist, float3 camForward, float3 camRight, float3 camUp)
         {
-            float px = uv.X * aspect * camScreenDist;
-            float py = uv.Y * camScreenDist;
+            float px = uv.x * aspect * camScreenDist;
+            float py = uv.y * camScreenDist;
             float3 rayDir = camForward + camRight * px + camUp * py;
-            return Hlsl.Normalize(rayDir);
+            return math.normalize(rayDir);
         }
 
         /// <summary>
@@ -80,7 +81,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
         public static float3 CalcBitangent(float3 normal, float3 tangent)
         {
-            return Hlsl.Normalize(Hlsl.Cross(normal, tangent));
+            return math.normalize(math.cross(normal, tangent));
         }
 
         public static float3 WorldToLocalPoint(float3 worldPoint, float3 position, float4 rotation, float3 scaling)
@@ -94,14 +95,14 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
         public static float3 WorldToLocalDirection(float3 worldDir, float4 rotation)
         {
-            return Hlsl.Normalize(InverseRotateVector(worldDir, rotation));
+            return math.normalize(InverseRotateVector(worldDir, rotation));
         }
 
         public static float3 LocalToWorldDirection(float3 localDir, float4 rotation)
         {
             // Inverse of WorldToLocalDirection, needed to bring a locally-perturbed
             // normal (e.g. from a normal map) back into world space
-            return Hlsl.Normalize(RotateVector(localDir, rotation));
+            return math.normalize(RotateVector(localDir, rotation));
         }
 
         /// <summary>
@@ -112,7 +113,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// <returns>Perceived luminance in [0, 1] range</returns>
         public static float Luminance(float3 rgb)
         {
-            return Hlsl.Dot(rgb, new float3(0.2126f, 0.7152f, 0.0722f));
+            return math.dot(rgb, new float3(0.2126f, 0.7152f, 0.0722f));
         }
 
         /// <summary>
@@ -120,7 +121,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// </summary>
         public static float Luminance(float4 color)
         {
-            return Hlsl.Dot(color.RGB, new float3(0.2126f, 0.7152f, 0.0722f));
+            return math.dot(color.rgb, new float3(0.2126f, 0.7152f, 0.0722f));
         }
 
         /// <summary>
@@ -128,7 +129,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// </summary>
         public static float LuminanceBT2020(float3 rgb)
         {
-            return Hlsl.Dot(rgb, new float3(0.2627f, 0.6780f, 0.0593f));
+            return math.dot(rgb, new float3(0.2627f, 0.6780f, 0.0593f));
         }
     }
 }

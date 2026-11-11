@@ -5,7 +5,8 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 
 namespace DivisionEngine.Rendering.ShaderUtilities
 {
@@ -25,43 +26,43 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float FresnelWithReflectance(float cosTheta, float f0, float reflectance, float f90)
         {
             // Clamp f0 to realistic values (minimum 2% reflection for dielectrics)
-            float clampedF0 = Hlsl.Clamp(f0, 0.02f, 1.0f);
+            float clampedF0 = math.clamp(f0, 0.02f, 1.0f);
 
             // Apply reflectance as a multiplier to control Fresnel strength
             // reflectance = 0 -> no Fresnel (fully transparent)
             // reflectance = 1 -> standard Fresnel
             // reflectance > 1 -> enhanced Fresnel (more reflective)
-            float effectiveF0 = Hlsl.Clamp(clampedF0 * reflectance, 0.02f, 1.0f);
+            float effectiveF0 = math.clamp(clampedF0 * reflectance, 0.02f, 1.0f);
 
             // Clamp f90 to reasonable range
-            float effectiveF90 = Hlsl.Clamp(f90 * reflectance, 0.02f, 1.0f);
+            float effectiveF90 = math.clamp(f90 * reflectance, 0.02f, 1.0f);
 
             // Schlick approximation with f90 control
-            float fresnel = effectiveF0 + (effectiveF90 - effectiveF0) * Hlsl.Pow(1.0f - cosTheta, 5.0f);
+            float fresnel = effectiveF0 + (effectiveF90 - effectiveF0) * math.pow(1.0f - cosTheta, 5.0f);
 
             // Clamp to [0, 1] range and ensure we never get pure reflection or pure refraction
-            return Hlsl.Clamp(fresnel, 0.02f, 0.98f);
+            return math.clamp(fresnel, 0.02f, 0.98f);
         }
 
         public static float3 FresnelSchlick(float cosTheta, float3 f0, float reflectance, float f90)
         {
             // Clamp f0 to realistic values (minimum 2% reflection for dielectrics)
-            float3 clampedF0 = Hlsl.Clamp(f0, 0.02f, 1.0f);
+            float3 clampedF0 = math.clamp(f0, 0.02f, 1.0f);
 
             // Apply reflectance as a multiplier to control Fresnel strength
             // reflectance = 0 -> no Fresnel (fully transparent)
             // reflectance = 1 -> standard Fresnel
             // reflectance > 1 -> enhanced Fresnel (more reflective)
-            float3 effectiveF0 = Hlsl.Clamp(clampedF0 * reflectance, 0.02f, 1.0f);
+            float3 effectiveF0 = math.clamp(clampedF0 * reflectance, 0.02f, 1.0f);
 
             // Clamp f90 to reasonable range
-            float3 effectiveF90 = Hlsl.Clamp(f90 * reflectance, 0.02f, 1.0f);
+            float3 effectiveF90 = math.clamp(f90 * reflectance, 0.02f, 1.0f);
 
             // Schlick approximation with f90 control
-            float3 fresnel = effectiveF0 + (effectiveF90 - effectiveF0) * Hlsl.Pow(1.0f - cosTheta, 5.0f);
+            float3 fresnel = effectiveF0 + (effectiveF90 - effectiveF0) * math.pow(1.0f - cosTheta, 5.0f);
 
             // Clamp to [0, 1] range and ensure we never get pure reflection or pure refraction
-            return Hlsl.Clamp(fresnel, 0.02f, 0.98f);
+            return math.clamp(fresnel, 0.02f, 0.98f);
         }
 
         /// <summary>
@@ -99,7 +100,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float G1_GGX_Schlick(float NoV, float alpha, float EPSILON)
         {
             float k = alpha / 2f;
-            return Hlsl.Max(NoV, EPSILON) / (NoV * (1f - k) + k);
+            return math.max(NoV, EPSILON) / (NoV * (1f - k) + k);
         }
 
         /// <summary>
@@ -111,7 +112,7 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         /// <returns>Fresnel value</returns>
         public static float FresnelSchlick90(float cosTheta, float f0, float f90)
         {
-            return f0 + (f90 - f0) * Hlsl.Pow(1f - cosTheta, 5f);
+            return f0 + (f90 - f0) * math.pow(1f - cosTheta, 5f);
         }
 
         /// <summary>
@@ -141,28 +142,28 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         public static float3 BRDFMicrofacetFunction(float3 lightDir, float3 viewDir, float3 finalNormal,
             float3 baseCol, float metallic, float roughAlpha, float specular, float reflectance, float RECIPROCAL_PI, float EPSILON)
         {
-            float NoV = Hlsl.Saturate(Hlsl.Dot(finalNormal, viewDir));
-            float NoL = Hlsl.Saturate(Hlsl.Dot(finalNormal, lightDir));
-            float3 halfwayDir = Hlsl.Normalize(viewDir + lightDir);
-            float VoH = Hlsl.Saturate(Hlsl.Dot(viewDir, halfwayDir));
-            float NoH = Hlsl.Saturate(Hlsl.Dot(finalNormal, halfwayDir));
+            float NoV = math.saturate(math.dot(finalNormal, viewDir));
+            float NoL = math.saturate(math.dot(finalNormal, lightDir));
+            float3 halfwayDir = math.normalize(viewDir + lightDir);
+            float VoH = math.saturate(math.dot(viewDir, halfwayDir));
+            float NoH = math.saturate(math.dot(finalNormal, halfwayDir));
 
-            float3 f0 = float3.One * 0.16f * specular * specular;
-            f0 = Hlsl.Lerp(f0, baseCol, new float3(metallic, metallic, metallic));
+            float3 f0 = new float3(1f) * 0.16f * specular * specular;
+            f0 = math.lerp(f0, baseCol, new float3(metallic, metallic, metallic));
 
             float3 F = FresnelSchlick(VoH, f0, specular, 1f);
             float D = D_GGX(NoH, roughAlpha, RECIPROCAL_PI);
             float G = GSmith(NoV, NoL, roughAlpha, EPSILON);
 
             // Add epsilon to denominator to prevent division by near-zero
-            float denominator = 4f * Hlsl.Max(NoV * NoL, EPSILON);
-            float3 specularTerm = Hlsl.Min(F * D * G / denominator, 20f); // Clamp specular to prevent fireflies
+            float denominator = 4f * math.max(NoV * NoL, EPSILON);
+            float3 specularTerm = math.min(F * D * G / denominator, 20f); // Clamp specular to prevent fireflies
 
             float3 rhoD = baseCol * DisneyDiffuseFactor(NoV, NoL, VoH, roughAlpha); // alternative: rhoD *= 1f - metallic;
             float3 diff = rhoD * RECIPROCAL_PI;
 
             // Hard cap to prevent explosions
-            return Hlsl.Min(diff + specularTerm, 100f);
+            return math.min(diff + specularTerm, 100f);
         }
 
         // Reflections functions:
@@ -201,18 +202,18 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         // Importance sample GGX distribution for specular reflections, alpha = roughness * roughness
         public static float3 ImportanceSampleGGX(float2 u, float3 normal, float alpha, float PI)
         {
-            float phi = 2f * PI * u.X;
-            float cosTheta = Hlsl.Sqrt((1f - u.Y) / (1f + (alpha * alpha - 1f) * u.Y));
-            float sinTheta = Hlsl.Sqrt(1f - cosTheta * cosTheta);
+            float phi = 2f * PI * u.x;
+            float cosTheta = math.sqrt((1f - u.y) / (1f + (alpha * alpha - 1f) * u.y));
+            float sinTheta = math.sqrt(1f - cosTheta * cosTheta);
 
             // Spherical to cartesian
-            float3 h = new float3(Hlsl.Cos(phi) * sinTheta, Hlsl.Sin(phi) * sinTheta, cosTheta);
+            float3 h = new float3(math.cos(phi) * sinTheta, math.sin(phi) * sinTheta, cosTheta);
 
             // Tangent space to world space
-            float3 up = Hlsl.Abs(normal.Z) < 0.999f ? new float3(0, 0, 1) : new float3(1, 0, 0);
-            float3 tangent = Hlsl.Normalize(Hlsl.Cross(up, normal));
-            float3 bitangent = Hlsl.Cross(normal, tangent);
-            return Hlsl.Normalize(tangent * h.X + bitangent * h.Y + normal * h.Z);
+            float3 up = math.abs(normal.z) < 0.999f ? new float3(0, 0, 1) : new float3(1, 0, 0);
+            float3 tangent = math.normalize(math.cross(up, normal));
+            float3 bitangent = math.cross(normal, tangent);
+            return math.normalize(tangent * h.x + bitangent * h.y + normal * h.z);
         }
     }
 }

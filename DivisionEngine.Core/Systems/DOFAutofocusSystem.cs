@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -62,11 +62,22 @@ namespace DivisionEngine.Systems
             if (!postEffects.enableDepthOfField || !postEffects.enableAutofocus ||
                 RenderPipeline.Instance?.DepthNormalPixels == null) return;
 
-            // Sample the depth buffer
+            // Sample the depth buffer. The buffer is sized to the renderer's actual viewport
+            // (in the editor the pipeline is embedded and RendererWindow is null), so the
+            // dimensions must come from the pipeline itself - a hard-coded 1920x1080 either
+            // pinned focus to the minimum or indexed past the buffer.
+            RenderPipeline pipeline = RenderPipeline.Instance!;
+            int width = pipeline.Mode == RenderPipeline.RunMode.Embedded
+                ? pipeline.EmbeddedWidth
+                : (pipeline.RendererWindow?.Size.X ?? 1920);
+            int height = pipeline.Mode == RenderPipeline.RunMode.Embedded
+                ? pipeline.EmbeddedHeight
+                : (pipeline.RendererWindow?.Size.Y ?? 1080);
+
             var (focusDistance, focalLength) = AnalyzeDepthBuffer(
-                RenderPipeline.Instance.DepthNormalPixels,
-                RenderPipeline.Instance.RendererWindow?.Size.X ?? 1920,
-                RenderPipeline.Instance.RendererWindow?.Size.Y ?? 1080,
+                pipeline.DepthNormalPixels,
+                width,
+                height,
                 camera.nearClip,
                 camera.farClip
             );
@@ -94,8 +105,8 @@ namespace DivisionEngine.Systems
 
             // Start with center pixel as focus distance
             int centerIndex = (int)centerX + (int)centerY * width;
-            if (centerIndex >= depthNormals.Length) return (0f, farPlane);
-            float focusDistance = depthNormals[centerIndex].X * farPlane;
+            if (centerIndex < 0 || centerIndex >= depthNormals.Length) return (0f, farPlane);
+            float focusDistance = depthNormals[centerIndex].x * farPlane;
 
             // Find the closest object within the center region (25% of screen)
             int regionRadius = (int)(math.min(width, height) * 0.125f); // 12.5% radius from center
@@ -108,7 +119,8 @@ namespace DivisionEngine.Systems
                 {
                     if (x < 0 || x >= width) continue;
                     int index = x + y * width;
-                    float depth = depthNormals[index].X * farPlane;
+                    if (index < 0 || index >= depthNormals.Length) continue;
+                    float depth = depthNormals[index].x * farPlane;
 
                     // Skip background
                     if (depth < farPlane - 1f && depth < closestDepth) closestDepth = depth;
@@ -125,7 +137,7 @@ namespace DivisionEngine.Systems
             // Sample every 8th pixel for performance
             for (int i = 0; i < depthNormals.Length; i += 8)
             {
-                float depth = depthNormals[i].X * farPlane;
+                float depth = depthNormals[i].x * farPlane;
                 if (depth < farPlane - 1f) // Skip background
                 {
                     if (depth < minDepth) minDepth = depth;

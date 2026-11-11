@@ -37,7 +37,7 @@ namespace DivisionEngine.Audio
             Position = new float3(0, 0, 0),
             Forward = new float3(0, 0, -1),
             Up = new float3(0, 1, 0),
-            Velocity = float3.Zero,
+            Velocity = float3.zero,
         };
     }
 

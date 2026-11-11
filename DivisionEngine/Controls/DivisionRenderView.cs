@@ -134,7 +134,7 @@ public class DivisionRenderView : Control
         App.UserInput?.SetMousePosition(pos);
         App.UserInput?.SetRelativeMousePosition(pos, new float2((float)Bounds.Width, (float)Bounds.Height));
         if (!HandleInteractionSystem.IsDragging)
-            App.Renderer?.UpdateHoveredHandle((int)pos.X, (int)pos.Y);
+            App.Renderer?.UpdateHoveredHandle((int)pos.x, (int)pos.y);
     }
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)

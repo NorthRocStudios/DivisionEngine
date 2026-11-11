@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -17,9 +17,10 @@ namespace DivisionEngine.Editor.Systems
     {
         private int saveProjectTimer;
 
-        public override void AppStart()
+        public override void Awake()
         {
-            // Default save timer
+            // World start (not app start): give the timer a full interval before the first
+            // save, so loading a world never triggers an immediate save of unloaded state.
             // 60 fps = save every 2 seconds, 30 fps = save every 4 seconds, etc.
             saveProjectTimer = 120;
         }

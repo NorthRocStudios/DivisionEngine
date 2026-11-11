@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -14,7 +14,7 @@ namespace DivisionEngine.Projects.Assets
     /// </summary>
     public enum AssetType
     {
-        None, Texture, Script, SDF, Material, Audio, Font,
+        None, Texture, Script, SDF, Material, Audio, Font, Shader,
     }
 
     /// <summary>

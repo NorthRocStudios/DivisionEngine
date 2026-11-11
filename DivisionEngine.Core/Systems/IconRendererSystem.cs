@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -20,9 +20,15 @@ namespace DivisionEngine.Systems
 
         private static readonly Dictionary<uint, (float3 pos, IconType icon, float3 dir)> iconsToRender = [];
 
-        public override void AppStart()
+        public override void Awake()
         {
+            // World start: subscribe for this world's lifetime (removed again in Unload).
             ProjectManager.ProjectLoaded += ProjectManager_ProjectLoaded;
+        }
+
+        public override void Unload()
+        {
+            ProjectManager.ProjectLoaded -= ProjectManager_ProjectLoaded;
         }
 
         private void ProjectManager_ProjectLoaded()
@@ -47,7 +53,7 @@ namespace DivisionEngine.Systems
                 IconType icon = IconDefinitions.GetIconForEntity(entityId, WorldManager.CurrentWorld);
                 if (icon != IconType.None)
                 {
-                    float3 direction = float3.Zero;
+                    float3 direction = float3.zero;
 
                     // Get direction for directional lights
                     if (W.HasComponent<Components.Lights.DirectionalLight>(entityId))

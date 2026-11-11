@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -329,7 +329,7 @@ namespace DivisionEngine.Editor
         /// </summary>
         private void AdvanceFrameButton_Click(object? sender, RoutedEventArgs e)
         {
-            if (EngineCore.IsInPlayMode && EngineCore.IsPaused) EngineCore.RunFrame();
+            if (EngineCore.IsInPlayMode && EngineCore.IsPaused) EngineCore.RunFrame(step: true);
         }
 
         #endregion

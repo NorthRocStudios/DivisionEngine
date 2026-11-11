@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -38,7 +38,9 @@ namespace DivisionEngine.Editor.Systems
                 switch (key)
                 {
                     case KeyCode.Delete:
-                        if (W.EntityExists(Selection.Entity))
+                        // Only ever act on an explicitly selected entity: Selection.Entity
+                        // defaults to uint.MaxValue and an entity selection sets the type.
+                        if (Selection.SelectedType == SelectionType.Entity && W.EntityExists(Selection.Entity))
                         {
                             var w = WorldManager.CurrentWorld;
                             if (w != null)
@@ -51,7 +53,8 @@ namespace DivisionEngine.Editor.Systems
                         }
                         break;
                     case KeyCode.D:
-                        if (InputSystem.IsCtrlPressed() && Selection.Entity != uint.MaxValue)
+                        if (InputSystem.IsCtrlPressed() && Selection.SelectedType == SelectionType.Entity &&
+                            Selection.Entity != uint.MaxValue)
                         {
                             var w = WorldManager.CurrentWorld;
                             if (w != null && w.EntityExists(Selection.Entity))

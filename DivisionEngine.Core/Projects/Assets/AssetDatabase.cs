@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -19,10 +19,19 @@ namespace DivisionEngine.Projects.Assets
         private static readonly JsonSerializerOptions jsonSerializerOptions =
             new JsonSerializerOptions { WriteIndented = true };
 
+        // Metadata of assets whose file disappeared, keyed by (size, last-write ticks). If a
+        // file with the same signature shows up under a new name (rename or move within this
+        // refresh) its metadata is adopted again, keeping the GUID - and therefore every
+        // AssetRef that points at the asset - valid.
+        private static readonly Dictionary<(long Size, long Ticks), AssetMetadata> orphanPool = [];
+
         // File watching
         private static FileSystemWatcher? watcher;
         private static Timer? debounceTimer;
         private static string? pendingFolderToRefresh;
+        // Thread that started the watcher (the UI thread): refreshes are marshalled back to it
+        // so Folders/AllAssetsByID are never mutated from a thread-pool callback.
+        private static SynchronizationContext? refreshContext;
 
         /// <summary>
         /// Contains all the folder metadatas.
@@ -71,6 +80,7 @@ namespace DivisionEngine.Projects.Assets
         {
             AllAssetsByID.Clear();
             Folders.Clear();
+            orphanPool.Clear();
             Directory.CreateDirectory(AssetsPath); // Ensures assets folder exists
 
             // Get all directories including root
@@ -101,6 +111,7 @@ namespace DivisionEngine.Projects.Assets
             watcher.Renamed += OnWatcherEvent;
 
             debounceTimer = new Timer(RefreshScheduledFolder, null, Timeout.Infinite, Timeout.Infinite);
+            refreshContext = SynchronizationContext.Current;
             Debug.Info($"Asset Database: file watcher started on: {AssetsPath}");
         }
 
@@ -120,9 +131,16 @@ namespace DivisionEngine.Projects.Assets
 
         private static void RefreshScheduledFolder(object? state)
         {
-            if (string.IsNullOrEmpty(pendingFolderToRefresh)) return;
-            RefreshFolder(pendingFolderToRefresh);
+            string? folderPath = pendingFolderToRefresh;
+            if (string.IsNullOrEmpty(folderPath)) return;
             pendingFolderToRefresh = null;
+
+            // This runs on a thread-pool thread while the UI thread reads the same dictionaries.
+            // Marshal back to the thread that started the watcher so refreshes are serialized
+            // with the UI (and with SaveAll).
+            SynchronizationContext? context = refreshContext;
+            if (context != null) context.Post(_ => RefreshFolder(folderPath), null);
+            else RefreshFolder(folderPath);
         }
 
         /// <summary>
@@ -147,6 +165,8 @@ namespace DivisionEngine.Projects.Assets
             watcher = null;
             debounceTimer?.Dispose();
             debounceTimer = null;
+            refreshContext = null;
+            pendingFolderToRefresh = null;
         }
 
         #endregion fileWatcher
@@ -215,6 +235,10 @@ namespace DivisionEngine.Projects.Assets
                     AssetMetadata asset = folderMeta.Assets[filename];
                     folderMeta.Assets.Remove(filename);
                     AllAssetsByID.Remove(asset.ID);
+
+                    // Keep it around for rename/move detection this refresh.
+                    orphanPool[(asset.FileSize, asset.LastModified.Ticks)] = asset;
+
                     changed = true;
                     AssetsUpdated?.Invoke();
                     Debug.Info($"Asset removed: {asset.FileName}");
@@ -237,12 +261,16 @@ namespace DivisionEngine.Projects.Assets
                 }
                 else
                 {
-                    AssetMetadata newAsset = CreateAssetMetadata(kvp.Value);
+                    // A file we have never seen may be a rename/move of one we just lost.
+                    AssetMetadata? adopted = TryAdoptOrphan(kvp.Value, lastModified);
+                    AssetMetadata newAsset = adopted ?? CreateAssetMetadata(kvp.Value);
                     folderMeta.Assets[filename] = newAsset;
                     AllAssetsByID[newAsset.ID] = newAsset;
                     changed = true;
                     AssetsUpdated?.Invoke();
-                    Debug.Info($"Asset added: {newAsset.FileName} (GUID: {newAsset.ID})");
+                    Debug.Info(adopted != null
+                        ? $"Asset renamed/moved: {newAsset.FileName} (GUID preserved: {newAsset.ID})"
+                        : $"Asset added: {newAsset.FileName} (GUID: {newAsset.ID})");
                 }
             }
 
@@ -257,11 +285,28 @@ namespace DivisionEngine.Projects.Assets
         /// </summary>
         public static void SaveAll()
         {
+            // Prune folders whose directory no longer exists. Writing into them throws
+            // DirectoryNotFoundException (e.g. after deleting a folder in the Assets panel),
+            // which used to abort CloseProject half-way.
+            List<string> missingFolders = [];
+
             foreach (var kvp in Folders)
             {
                 string folderPath = Path.Combine(ProjectPath, kvp.Key);
+                if (!Directory.Exists(folderPath))
+                {
+                    missingFolders.Add(kvp.Key);
+                    continue;
+                }
                 SaveFolderMetadata(folderPath, kvp.Value);
             }
+
+            foreach (string relativeFolder in missingFolders)
+            {
+                Folders.Remove(relativeFolder);
+                Debug.Info($"Asset Database: dropped missing folder '{relativeFolder}'");
+            }
+
             Debug.Info("Asset Database: All metadata saved");
         }
 
@@ -271,6 +316,45 @@ namespace DivisionEngine.Projects.Assets
             string metadataPath = Path.Combine(folderPath, folderName + ".divmeta");
             string json = JsonSerializer.Serialize(metadata, jsonSerializerOptions);
             File.WriteAllText(metadataPath, json);
+        }
+
+        /// <summary>
+        /// Reuses the metadata of a recently removed asset when a file with the same size and
+        /// modification time appears under a new name (a rename or a move). Keeping the GUID
+        /// means every AssetRef that points at the asset stays valid.
+        /// </summary>
+        private static AssetMetadata? TryAdoptOrphan(string filePath, DateTime lastModified)
+        {
+            if (orphanPool.Count == 0) return null;
+
+            FileInfo info = new FileInfo(filePath);
+
+            if (!orphanPool.TryGetValue((info.Length, lastModified.Ticks), out AssetMetadata? orphan))
+            {
+                // Mtime can move by a tick or two across some filesystems: fall back to a
+                // size match, but only when it identifies exactly one orphan.
+                AssetMetadata? candidate = null;
+                int matches = 0;
+                foreach (AssetMetadata item in orphanPool.Values)
+                {
+                    if (item.FileSize != info.Length) continue;
+                    candidate = item;
+                    matches++;
+                }
+
+                if (matches != 1) return null;
+                orphan = candidate;
+            }
+
+            if (orphan == null) return null;
+
+            orphanPool.Remove((orphan.FileSize, orphan.LastModified.Ticks));
+            orphan.FileName = Path.GetFileName(filePath);
+            orphan.RelativePath = GetProjectRelativePath(filePath);
+            orphan.Type = DetermineAssetType(filePath);
+            orphan.LastModified = lastModified;
+            orphan.FileSize = info.Length;
+            return orphan;
         }
 
         private static AssetMetadata CreateAssetMetadata(string filePath)
@@ -304,8 +388,12 @@ namespace DivisionEngine.Projects.Assets
                 ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tga" => AssetType.Texture,
                 ".obj" or ".fbx" or ".gltf" => AssetType.SDF,
                 ".mat" => AssetType.Material,
-                ".shader" or ".hlsl" or ".cs" => AssetType.Script,
-                ".sdf" or ".sdfLib" => AssetType.SDF,
+                // Roslyn only ever compiles .cs files: HLSL sources are their own asset type so
+                // dropping one into the project can never break the script compilation.
+                ".cs" => AssetType.Script,
+                ".shader" or ".hlsl" => AssetType.Shader,
+                // The extension is lower-cased above, so this case must be lower-case too.
+                ".sdf" or ".sdflib" => AssetType.SDF,
                 ".wav" or ".mp3" or ".ogg" => AssetType.Audio,
                 ".ttf" or ".otf" => AssetType.Font,
                 _ => AssetType.None,

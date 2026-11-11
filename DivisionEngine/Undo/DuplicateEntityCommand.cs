@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -17,12 +17,10 @@ namespace DivisionEngine.Editor.Undo
         private readonly uint newEntityId;
         private readonly Dictionary<Type, IComponent> clonedComponents;
         private readonly string? entityName;
-        private readonly World world;
 
         public DuplicateEntityCommand(uint sourceEntityId, World world)
         {
             this.sourceEntityId = sourceEntityId;
-            this.world = world;
             clonedComponents = world.GetClonedComponents(sourceEntityId); // Clone all components from source
             Name? nameComp = world.GetComponent<Name>(sourceEntityId);
             entityName = nameComp?.name;
@@ -31,8 +29,13 @@ namespace DivisionEngine.Editor.Undo
 
         public string Description => $"Duplicate entity {sourceEntityId} → {newEntityId}";
 
+        // The world is resolved when the command runs, like every other command: capturing it
+        // here would let a redo write into a world that has since been replaced.
         public void Do()
         {
+            World? world = WorldManager.CurrentWorld;
+            if (world == null) return;
+
             if (!world.EntityExists(newEntityId)) // Create the duplicate entity with the reserved ID
             {
                 world.AddEntityWithId(newEntityId, entityName);
@@ -42,6 +45,9 @@ namespace DivisionEngine.Editor.Undo
 
         public void Undo()
         {
+            World? world = WorldManager.CurrentWorld;
+            if (world == null) return;
+
             if (world.EntityExists(newEntityId)) world.DestroyEntity(newEntityId); // Remove the duplicated entity
         }
     }

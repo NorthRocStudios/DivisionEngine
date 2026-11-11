@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -12,10 +12,12 @@ using System.Runtime.InteropServices;
 using EngineEnvironment = DivisionEngine.Components.Environment;
 using DivisionEngine.Projects;
 using DivisionEngine.Components;
+using DivisionEngine.Components.SDFs.Effects;
 using SkiaSharp;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Rendering;
+using DivisionEngine.Settings;
 
 namespace DivisionEngine.Editor
 {
@@ -35,6 +37,12 @@ namespace DivisionEngine.Editor
         public static int ExitCode { get; private set; }
 
         /// <summary>
+        /// Sets the process exit code for a command implemented in another file.
+        /// </summary>
+        /// <param name="exitCode">The exit code to report.</param>
+        public static void SetExitCode(int exitCode) => ExitCode = exitCode;
+
+        /// <summary>
         /// Runs a CLI command when the arguments start with <c>--cli</c>.
         /// </summary>
         /// <returns>True when the command was handled (the app should not start the UI).</returns>
@@ -52,7 +60,10 @@ namespace DivisionEngine.Editor
                 switch (command)
                 {
                     case "bench": return RunBench(args);
+                    case "compare": return RunCompare(args);
+                    case "compute": return DivisionComputeCLI.TryRun(args);
                     case "info": return RunInfo();
+                    case "selftest": return EngineSelfTest.Run();
                     case "skyprobe": return RunSkyProbe();
                     case "shot": return RunShot(args);
                     case "help":
@@ -100,6 +111,7 @@ namespace DivisionEngine.Editor
             if (!pipeline.BindCurrentWorld())
                 throw new InvalidOperationException("Failed to bind the current world.");
 
+            ApplyTestRenderOptions(args);
             RenderPipeline.BenchmarkResult result = pipeline.Benchmark(width, height, frames, warmup);
 
             Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
@@ -116,6 +128,22 @@ namespace DivisionEngine.Editor
             int width = GetInt(args, "--width", 1280);
             int height = GetInt(args, "--height", 720);
             string outPath = GetString(args, "--out", System.IO.Path.Combine(System.Environment.CurrentDirectory, "shot.png"));
+
+            // Deterministic capture: --fixed-frame N renders exactly N frames at a
+            // fixed time step with the checkerboard (temporal) path disabled, and
+            // seeds the RNG used while building the default world. Two runs then
+            // produce identical pixels, which is what the golden renders compare to.
+            int? fixedFrame = GetOptionalInt(args, "--fixed-frame");
+            if (fixedFrame.HasValue && fixedFrame.Value < 1)
+                throw new ArgumentException("--fixed-frame must be at least 1.");
+            int seed = GetInt(args, "--seed", 12345);
+            int debugMode = GetInt(args, "--debug-mode", 0);
+            bool noCheckerboard = HasFlag(args, "--no-checkerboard");
+            if (fixedFrame.HasValue || noCheckerboard)
+            {
+                RenderPipeline.DeterministicCapture = true;
+                if (fixedFrame.HasValue) DivisionEngine.MathUtilities.Random.Seed(seed);
+            }
 
             WorldManager.CreateDefaultWorld(makeCurrent: true);
             World world = WorldManager.CurrentWorld!;
@@ -140,8 +168,8 @@ namespace DivisionEngine.Editor
                     float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float lz))
                 {
                     float3 dir = new float3(lx, ly, lz).Normalize();
-                    float pitch = MathF.Asin(System.Math.Clamp(dir.Y, -1f, 1f));
-                    float yaw = MathF.Atan2(-dir.X, -dir.Z);
+                    float pitch = MathF.Asin(System.Math.Clamp(dir.y, -1f, 1f));
+                    float yaw = MathF.Atan2(-dir.x, -dir.z);
                     foreach ((uint id, Transform transform) in world.QueryData<Transform>())
                     {
                         if (!world.HasComponent<Camera>(id)) continue;
@@ -153,7 +181,32 @@ namespace DivisionEngine.Editor
 
             RenderPipeline pipeline = new();
             pipeline.BindCurrentWorld();
-            float4[]? pixels = pipeline.RenderSingleFrame(width, height) ?? throw new InvalidOperationException("Render produced no pixels.");
+            pipeline.CurrentDebugMode = (RenderPipeline.DebugMode)debugMode;
+            ApplyTestRenderOptions(args);
+            float4[]? pixels;
+            if (fixedFrame.HasValue)
+            {
+                if (HasFlag(args, "--reload-shaders"))
+                {
+                    // Test hook for Edit > Reload All Shaders: drop the compiled shaders
+                    // halfway through the capture and prove the rebuilt ones render the
+                    // same pixels.
+                    int first = System.Math.Max(1, fixedFrame.Value / 2);
+                    pipeline.RenderFixedFrames(width, height, first, 1.0 / 60.0);
+                    pipeline.ReloadShaders();
+                    pixels = pipeline.RenderFixedFrames(width, height, System.Math.Max(1, fixedFrame.Value - first), 1.0 / 60.0);
+                }
+                else
+                {
+                    pixels = pipeline.RenderFixedFrames(width, height, fixedFrame.Value, 1.0 / 60.0);
+                }
+            }
+            else
+            {
+                pixels = pipeline.RenderSingleFrame(width, height);
+            }
+            if (pixels is null)
+                throw new InvalidOperationException("Render produced no pixels.");
             using SKBitmap bitmap = new(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
             byte[] bytes = new byte[width * height * 4];
             for (int y = 0; y < height; y++)
@@ -162,9 +215,9 @@ namespace DivisionEngine.Editor
                 {
                     float4 p = pixels[(height - 1 - y) * width + x];
                     int i = (y * width + x) * 4;
-                    bytes[i + 0] = (byte)System.Math.Clamp((int)(p.X * 255f), 0, 255);
-                    bytes[i + 1] = (byte)System.Math.Clamp((int)(p.Y * 255f), 0, 255);
-                    bytes[i + 2] = (byte)System.Math.Clamp((int)(p.Z * 255f), 0, 255);
+                    bytes[i + 0] = (byte)System.Math.Clamp((int)(p.x * 255f), 0, 255);
+                    bytes[i + 1] = (byte)System.Math.Clamp((int)(p.y * 255f), 0, 255);
+                    bytes[i + 2] = (byte)System.Math.Clamp((int)(p.z * 255f), 0, 255);
                     bytes[i + 3] = 255;
                 }
             }
@@ -175,10 +228,146 @@ namespace DivisionEngine.Editor
             using FileStream fs = File.OpenWrite(outPath);
             data.SaveTo(fs);
 
-            Console.WriteLine($"shot: {outPath} ({width}x{height}, sky={sky})");
+            // Pixel statistics make a black/NaN frame obvious in headless runs.
+            float minLum = float.MaxValue, maxLum = float.MinValue;
+            double sumLum = 0;
+            int nanPixels = 0, nonBlackPixels = 0;
+            foreach (float4 pixel in pixels)
+            {
+                float lum = (pixel.x + pixel.y + pixel.z) / 3f;
+                if (float.IsNaN(lum) || float.IsInfinity(lum)) { nanPixels++; continue; }
+                minLum = System.Math.Min(minLum, lum);
+                maxLum = System.Math.Max(maxLum, lum);
+                sumLum += lum;
+                if (lum > 0.001f) nonBlackPixels++;
+            }
+            Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "stats    : minLum={0:F4} maxLum={1:F4} meanLum={2:F4} nonBlack={3} nan={4} debugMode={5}",
+                minLum, maxLum, sumLum / pixels.Length, nonBlackPixels, nanPixels, debugMode));
+
+            if (fixedFrame.HasValue)
+            {
+                Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "shot: {0} ({1}x{2}, sky={3}, fixedFrame={4}, seed={5}, deterministic, frameCount={6}, time={7:F6}, sdfObjects={8}, worldHash={9}, objectHash={10})",
+                    outPath, width, height, sky, fixedFrame.Value, seed,
+                    DivisionEngine.Systems.TimeSystem.FrameCount, RenderPipeline.Time,
+                    DivisionEngine.Systems.SDFRenderSystem.PreparedSDFObjectsDTO.Length,
+                    HashBytes([DivisionEngine.Systems.SDFRenderSystem.PreparedWorldDTO]),
+                    HashBytes(DivisionEngine.Systems.SDFRenderSystem.PreparedSDFObjectsDTO)));
+                RenderPipeline.DeterministicCapture = false;
+            }
+            else Console.WriteLine($"shot: {outPath} ({width}x{height}, sky={sky})");
             ExitCode = 0;
             return true;
         }
+
+        /// <summary>
+        /// Compares two PNG renders per channel and reports the maximum difference.
+        /// Exit code is 1 when any pixel differs by more than <c>--tolerance</c> (in
+        /// 8-bit LSBs), which is the golden-image gate.
+        /// </summary>
+        private static bool RunCompare(string[] args)
+        {
+            string a = GetString(args, "--a", "");
+            string b = GetString(args, "--b", "");
+            int tolerance = GetInt(args, "--tolerance", 2);
+            string? diffPath = GetOptionalString(args, "--diff");
+
+            if (a.Length == 0 || b.Length == 0)
+                throw new ArgumentException("compare requires --a <golden.png> and --b <candidate.png>.");
+
+            using SKBitmap golden = DecodePng(a);
+            using SKBitmap candidate = DecodePng(b);
+            if (golden.Width != candidate.Width || golden.Height != candidate.Height)
+                throw new InvalidOperationException(
+                    $"Image sizes differ: {golden.Width}x{golden.Height} vs {candidate.Width}x{candidate.Height}.");
+
+            int width = golden.Width, height = golden.Height;
+            byte[] ga = ReadRgba(golden), ca = ReadRgba(candidate);
+            int maxDiff = 0, badPixels = 0, over8 = 0, over32 = 0;
+            double totalDiff = 0;
+            byte[]? diff = diffPath is null ? null : new byte[ga.Length];
+
+            for (int i = 0; i < ga.Length; i += 4)
+            {
+                int pixelDiff = 0;
+                for (int c = 0; c < 3; c++)
+                {
+                    int d = System.Math.Abs(ga[i + c] - ca[i + c]);
+                    if (d > pixelDiff) pixelDiff = d;
+                }
+                if (pixelDiff > maxDiff) maxDiff = pixelDiff;
+                if (pixelDiff > tolerance) badPixels++;
+                if (pixelDiff > 8) over8++;
+                if (pixelDiff > 32) over32++;
+                totalDiff += pixelDiff;
+                if (diff is not null)
+                {
+                    for (int c = 0; c < 3; c++)
+                        diff[i + c] = (byte)System.Math.Min(255, System.Math.Abs(ga[i + c] - ca[i + c]) * 16);
+                    diff[i + 3] = 255;
+                }
+            }
+
+            if (diff is not null)
+            {
+                using SKBitmap diffBitmap = new(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+                Marshal.Copy(diff, 0, diffBitmap.GetPixels(), diff.Length);
+                using SKImage diffImage = SKImage.FromBitmap(diffBitmap);
+                using SKData diffData = diffImage.Encode(SKEncodedImageFormat.Png, 100);
+                using FileStream diffStream = File.Create(diffPath!);
+                diffData.SaveTo(diffStream);
+            }
+
+            Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "{{\"golden\":\"{0}\",\"candidate\":\"{1}\",\"width\":{2},\"height\":{3},\"tolerance\":{4},\"maxDiff\":{5},\"badPixels\":{6},\"over8\":{7},\"over32\":{8},\"meanDiff\":{9:F4},\"totalPixels\":{10}}}",
+                a.Replace("\\", "/"), b.Replace("\\", "/"), width, height, tolerance, maxDiff, badPixels,
+                over8, over32, totalDiff / (width * height), width * height));
+
+            if (badPixels > 0)
+            {
+                Console.Error.WriteLine($"compare: {badPixels} pixels exceed the {tolerance} LSB tolerance (max diff {maxDiff}).");
+                ExitCode = 1;
+            }
+            else ExitCode = 0;
+            return true;
+        }
+
+        /// <summary>
+        /// FNV-1a 64 over the raw bytes of a value array, used to prove that two
+        /// runs fed the GPU identical scene data.
+        /// </summary>
+        private static string HashBytes<T>(ReadOnlySpan<T> values) where T : unmanaged
+        {
+            ulong hash = 14695981039346656037UL;
+            foreach (byte b in System.Runtime.InteropServices.MemoryMarshal.AsBytes(values))
+            {
+                hash ^= b;
+                hash *= 1099511628211UL;
+            }
+            return hash.ToString("x16", CultureInfo.InvariantCulture);
+        }
+
+        private static SKBitmap DecodePng(string path)
+        {
+            using SKImage image = SKImage.FromEncodedData(path)
+                ?? throw new FileNotFoundException($"Could not decode image '{path}'.", path);
+            SKBitmap bitmap = new(new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+            if (!image.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0))
+            {
+                bitmap.Dispose();
+                throw new InvalidOperationException($"Could not read pixels from '{path}'.");
+            }
+            return bitmap;
+        }
+
+        private static byte[] ReadRgba(SKBitmap bitmap)
+        {
+            byte[] bytes = new byte[bitmap.Width * bitmap.Height * 4];
+            Marshal.Copy(bitmap.GetPixels(), bytes, 0, bytes.Length);
+            return bytes;
+        }
+
         private static bool RunSkyProbe()
         {
             WorldManager.CreateDefaultWorld(makeCurrent: true);
@@ -190,7 +379,7 @@ namespace DivisionEngine.Editor
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
                     "  environment: skyType={0} skyIntensity={1:F2} sunIntensity={2:F2} sunColor=({3:F2},{4:F2},{5:F2}) discSize={6:F3} falloff={7:F3} planetR={8:F0} atmosH={9:F0} density={10:F2} exposure={11:F2}",
                     environment.skyType, environment.skyIntensity, environment.sunIntensity,
-                    environment.sunColor.X, environment.sunColor.Y, environment.sunColor.Z,
+                    environment.sunColor.x, environment.sunColor.y, environment.sunColor.z,
                     environment.sunDiscSize, environment.sunFalloff, environment.planetRadius,
                     environment.atmosphereHeight, environment.atmosphereDensity, environment.atmosphereExposure));
                 break;
@@ -202,8 +391,8 @@ namespace DivisionEngine.Editor
                 float3 dir = transform.rotation.RotateVector(new float3(0f, 0f, -1f)).Normalize();
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
                     "  sun: entity={0} pos=({1:F2},{2:F2},{3:F2}) mainLightDir=({4:F3},{5:F3},{6:F3})",
-                    id, transform.position.X, transform.position.Y, transform.position.Z,
-                    dir.X, dir.Y, dir.Z));
+                    id, transform.position.x, transform.position.y, transform.position.z,
+                    dir.x, dir.y, dir.z));
                 break;
             }
 
@@ -232,15 +421,99 @@ namespace DivisionEngine.Editor
                 Commands:
                   bench     Render frames offscreen and report frame times
                             Options: --width N --height N --frames N --warmup N
+                  compare   Compare two PNG renders per channel (golden-image gate)
+                            Options: --a <golden.png> --b <candidate.png> [--tolerance N] [--diff file.png]
+                  compute   DivisionCompute tooling (see --cli compute help)
                   info      Print engine/runtime information
+                  selftest  Run headless regression checks (locale serialization, snapshots,
+                            undo, matrix accessors, terrain noise); exits 1 on any failure
                   skyprobe  Print environment sun/atmosphere values for the default world
                   shot      Render one frame to a PNG
                             Options: --sky <solid|gradient|hdri|procedural> --look x,y,z --out file --width N --height N
+                                     --fixed-frame N --seed N  (deterministic capture)
+                                     --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels)
+                                     --no-checkerboard --no-post --no-denoise --no-fxaa
+                                     --reload-shaders  (drop compiled shaders mid-capture)
                   help      Show this message
+
+                Deterministic capture (--fixed-frame N) renders exactly N frames at a fixed
+                1/60 s step with temporal jitter (checkerboard rendering) disabled and the
+                world RNG seeded, so every run produces identical pixels.
 
                 Examples:
                   DivisionEngine.Editor.exe --cli bench --width 1280 --height 720 --frames 120
+                  DivisionEngine.Editor.exe --cli shot --fixed-frame 8 --width 1280 --height 720 --out golden.png
+                  DivisionEngine.Editor.exe --cli compare --a golden.png --b shot.png --tolerance 2
+                  DivisionEngine.Editor.exe --cli compute selftest
                 """);
+        }
+
+        /// <summary>
+        /// Applies the render-testing switches used by `shot` and `bench`:
+        /// `--effects` turns on a fixed set of post-processing effects for the first
+        /// camera, and `--bloom` includes the (nondeterministic) bloom effect.
+        /// </summary>
+        private static void ApplyTestRenderOptions(string[] args)
+        {
+            // --no-post disables every post-processing stage (denoisers, FXAA and the
+            // colour effects) so a capture shows exactly what the SDF pass wrote.
+            if (HasFlag(args, "--no-post") && WorldManager.CurrentWorld is not null)
+            {
+                foreach ((uint _, Camera camera) in WorldManager.CurrentWorld.QueryData<Camera>())
+                {
+                    camera.enableFxaa = false;
+                    camera.enableDivisionDenoise = false;
+                    camera.enableATrousDenoise = false;
+                    break;
+                }
+                foreach ((uint _, PostProcessing postProcess) in WorldManager.CurrentWorld.QueryData<PostProcessing>())
+                {
+                    postProcess.enableDepthOfField = false;
+                    postProcess.enableBlur = false;
+                    postProcess.enableBloom = false;
+                    postProcess.enableChromaticAberration = false;
+                    postProcess.enableVignette = false;
+                    postProcess.hueShift = 0f;
+                    postProcess.saturation = 1f;
+                    postProcess.lightness = 1f;
+                    postProcess.contrast = 1f;
+                    break;
+                }
+            }
+
+            // Finer-grained isolation switches for the post chain.
+            if ((HasFlag(args, "--no-denoise") || HasFlag(args, "--no-fxaa")) && WorldManager.CurrentWorld is not null)
+            {
+                foreach ((uint _, Camera camera) in WorldManager.CurrentWorld.QueryData<Camera>())
+                {
+                    if (HasFlag(args, "--no-denoise"))
+                    {
+                        camera.enableDivisionDenoise = false;
+                        camera.enableATrousDenoise = false;
+                    }
+                    if (HasFlag(args, "--no-fxaa")) camera.enableFxaa = false;
+                    break;
+                }
+            }
+
+            if (!HasFlag(args, "--effects")) return;
+            if (WorldManager.CurrentWorld is null) return;
+
+            foreach ((uint _, PostProcessing postProcess) in WorldManager.CurrentWorld.QueryData<PostProcessing>())
+            {
+                postProcess.enableBlur = true;
+                postProcess.blurRadius = 5f;
+                postProcess.enableVignette = true;
+                postProcess.vignetteIntensity = 0.6f;
+                postProcess.enableChromaticAberration = true;
+                postProcess.hueShift = 10f;
+                postProcess.saturation = 1.1f;
+
+                // Bloom is opt-in: its shader races (it reads texels it writes in the
+                // same dispatch), so it makes frame-to-frame comparisons noisy.
+                postProcess.enableBloom = HasFlag(args, "--bloom");
+                break;
+            }
         }
 
         private static string GetString(string[] args, string name, string fallback)
@@ -248,6 +521,23 @@ namespace DivisionEngine.Editor
             int index = Array.IndexOf(args, name);
             return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
         }
+
+        private static string? GetOptionalString(string[] args, string name)
+        {
+            int index = Array.IndexOf(args, name);
+            return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+        }
+
+        private static int? GetOptionalInt(string[] args, string name)
+        {
+            int index = Array.IndexOf(args, name);
+            if (index >= 0 && index + 1 < args.Length &&
+                int.TryParse(args[index + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+                return value;
+            return null;
+        }
+
+        private static bool HasFlag(string[] args, string name) => Array.IndexOf(args, name) >= 0;
 
         private static int GetInt(string[] args, string name, int fallback)
         {

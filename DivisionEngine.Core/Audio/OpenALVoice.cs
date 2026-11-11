@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -143,8 +143,8 @@ namespace DivisionEngine.Audio
 
             if (Spatial)
             {
-                al.SetSourceProperty(source, SourceVector3.Position, Position.X, Position.Y, Position.Z);
-                al.SetSourceProperty(source, SourceVector3.Velocity, Velocity.X, Velocity.Y, Velocity.Z);
+                al.SetSourceProperty(source, SourceVector3.Position, Position.x, Position.y, Position.z);
+                al.SetSourceProperty(source, SourceVector3.Velocity, Velocity.x, Velocity.y, Velocity.z);
             }
 
             al.SetSourceProperty(source, SourceFloat.ReferenceDistance, MathF.Max(0.01f, MinDistance));
@@ -233,6 +233,11 @@ namespace DivisionEngine.Audio
             {
                 StopStreaming();
                 IsPlaying = false;
+
+                // Mark finished as well: AudioEngine evicts list entries by IsFinished, so a
+                // voice disposed elsewhere would otherwise stay in the list forever.
+                IsFinished = true;
+
                 if (source != 0)
                 {
                     al.DeleteSource(source);

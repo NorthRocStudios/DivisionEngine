@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -87,10 +87,12 @@ namespace DivisionEngine
         /// <summary>
         /// Execute a frame in the engine.
         /// </summary>
+        /// <param name="step">Run exactly one frame even while paused (editor "Advance Frame").</param>
         /// <returns>Whether the frame was successfully executed</returns>
-        public static bool RunFrame()
+        public static bool RunFrame(bool step = false)
         {
-            if (!IsRunning || IsPaused) return false;
+            if (!IsRunning) return false;
+            if (IsPaused && !step) return false;
 
             WorldManager.CurrentWorld?.CallUpdate();
             WorldManager.CurrentWorld?.CallFixedUpdate(); // Fixed update loop runs after update loop

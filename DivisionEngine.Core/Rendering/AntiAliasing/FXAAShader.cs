@@ -1,67 +1,94 @@
-﻿//
+
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
+
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
+using F2 = DivisionEngine.MathLib.float2;
+using F3 = DivisionEngine.MathLib.float3;
+using F4 = DivisionEngine.MathLib.float4;
+using I2 = DivisionEngine.MathLib.int2;
+using U3 = DivisionEngine.MathLib.uint3;
 
 namespace DivisionEngine.Rendering.AntiAliasing
 {
     /// <summary>
     /// Computes fast approximate anti-aliasing on an image.
     /// </summary>
-    /// <param name="width">Width of image</param>
-    /// <param name="height">Height of image</param>
-    /// <param name="inputTexture">Input image</param>
-    /// <param name="outputTexture">Anti-aliased output image</param>
-    /// <param name="edgeThreshold">Threshold for edge detection</param>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
-    [GeneratedComputeShaderDescriptor]
-    [ThreadGroupSize(8, 8, 1)]
-    public readonly partial struct FXAAShader(
-        int width,
-        int height,
-        ReadWriteTexture2D<float4> inputTexture,
-        ReadWriteTexture2D<float4> outputTexture,
-        float edgeThreshold = 0.05f,
-        float strength = 0.5f,
-        int area = 2,
-        int debug = 0) : IComputeShader
+    [Shader]
+    public struct FXAAShader
     {
-        private static float Luminance(float4 color)
+        /// <summary>Width of image.</summary>
+        public int width;
+
+        /// <summary>Height of image.</summary>
+        public int height;
+
+        /// <summary>Threshold for edge detection.</summary>
+        public float edgeThreshold;
+
+        /// <summary>Strength of the anti-aliasing blend.</summary>
+        public float strength;
+
+        /// <summary>Neighbourhood radius that is averaged for the edge blur.</summary>
+        public int area;
+
+        /// <summary>Debug visualization mode (0 = off).</summary>
+        public int debug;
+
+        /// <summary>Input image.</summary>
+        [ShaderResource] public RWTexture2D<F4> inputTexture;
+
+        /// <summary>Anti-aliased output image.</summary>
+        [ShaderResource] public RWTexture2D<F4> outputTexture;
+
+        private static float Luminance(F4 color)
         {
-            return color.R * 0.299f + color.G * 0.587f + color.B * 0.114f;
+            return color.x * 0.299f + color.y * 0.587f + color.z * 0.114f;
         }
 
-        public void Execute()
+        /// <summary>Anti-aliases one texel per thread.</summary>
+        [Kernel(8, 8, 1)]
+        public void Execute(U3 id)
         {
-            int2 pixel = ThreadIds.XY;
-            if (pixel.X >= width || pixel.Y >= height) return;
-            float4 center = inputTexture[pixel];
+            I2 pixel = new I2((int)id.x, (int)id.y);
+            if (pixel.x >= width || pixel.y >= height) return;
+            F4 center = inputTexture[pixel];
 
             // Sample neighbors
             int count = 0;
-            float4 finalColor = float4.Zero;
+            F4 finalColor = new F4(0f);
             for (int x = -area; x <= area; x++)
             {
                 for (int y = -area; y <= area; y++)
                 {
-                    if (x >= 0 && x < width && y >= 0 && y < height)
+                    // Bounds-test the resulting TEXEL, not the offset: testing the offset threw
+                    // away every negative tap and never rejected right/bottom edge reads.
+                    int sx = pixel.x + x;
+                    int sy = pixel.y + y;
+                    if (sx >= 0 && sx < width && sy >= 0 && sy < height)
                     {
-                        int2 curPix = new int2(x + pixel.X, y + pixel.Y);
-                        finalColor += inputTexture[curPix];
-                        count++;
+                        I2 curPix = new I2(sx, sy);
+                        finalColor = finalColor + inputTexture[curPix];
+                        count = count + 1;
                     }
                 }
             }
 
-            finalColor /= count;
-            float4 left = inputTexture[new int2(pixel.X - 1, pixel.Y)];
-            float4 right = inputTexture[new int2(pixel.X + 1, pixel.Y)];
-            float4 up = inputTexture[new int2(pixel.X, pixel.Y - 1)];
-            float4 down = inputTexture[new int2(pixel.X, pixel.Y + 1)];
+            finalColor = finalColor / count;
+            I2 leftPix = new I2(math.max(0, pixel.x - 1), pixel.y);
+            I2 rightPix = new I2(math.min((int)width - 1, pixel.x + 1), pixel.y);
+            I2 upPix = new I2(pixel.x, math.max(0, pixel.y - 1));
+            I2 downPix = new I2(pixel.x, math.min((int)height - 1, pixel.y + 1));
+            F4 left = inputTexture[leftPix];
+            F4 right = inputTexture[rightPix];
+            F4 up = inputTexture[upPix];
+            F4 down = inputTexture[downPix];
 
             float lumaLeft = Luminance(left);
             float lumaRight = Luminance(right);
@@ -69,8 +96,8 @@ namespace DivisionEngine.Rendering.AntiAliasing
             float lumaDown = Luminance(down);
 
             // Detect edge
-            float lumaMin = Hlsl.Min(Hlsl.Min(lumaLeft, lumaRight), Hlsl.Min(lumaUp, lumaDown));
-            float lumaMax = Hlsl.Max(Hlsl.Max(lumaLeft, lumaRight), Hlsl.Max(lumaUp, lumaDown));
+            float lumaMin = math.min(math.min(lumaLeft, lumaRight), math.min(lumaUp, lumaDown));
+            float lumaMax = math.max(math.max(lumaLeft, lumaRight), math.max(lumaUp, lumaDown));
 
             // If no edge, output original
             if (lumaMax - lumaMin < edgeThreshold)
@@ -79,27 +106,32 @@ namespace DivisionEngine.Rendering.AntiAliasing
                 return;
             }
 
-            // Simple blur along edge (2x2 average)
-            //float4 avgColor = (left + right + up + down + center) / 5f;
-
             // Blend based on edge strength
-            float edgeStrength = Hlsl.Saturate((lumaMax - lumaMin) / edgeThreshold);
-            float4 result = Hlsl.Lerp(center, finalColor, edgeStrength * strength);
+            float edgeStrength = math.saturate((lumaMax - lumaMin) / edgeThreshold);
+            F4 result = math.lerp(center, finalColor, edgeStrength * strength);
 
-            if (debug == 0) outputTexture[pixel] = result;
+            if (debug == 0)
+            {
+                outputTexture[pixel] = result;
+            }
             else if (debug == 1)
-                outputTexture[pixel] = new float4(1f - result.R, 1f - result.G, result.B, result.A);
+            {
+                outputTexture[pixel] = new F4(1f - result.x, 1f - result.y, result.z, result.w);
+            }
             else if (debug == 2)
             {
                 // Show edge direction (color coded)
                 float lumaX = lumaLeft - lumaRight;
                 float lumaY = lumaUp - lumaDown;
-                float2 normDir = Hlsl.Normalize(new float2(lumaX, lumaY));
-                float3 dirColor = new float3(Hlsl.Abs(normDir.X), Hlsl.Abs(normDir.Y), 0f);
-                dirColor = Hlsl.Saturate(dirColor * 2f);
-                outputTexture[pixel] = new float4(dirColor, 1f);
+                F2 normDir = math.normalize(new F2(lumaX, lumaY));
+                F3 dirColor = new F3(math.abs(normDir.x), math.abs(normDir.y), 0f);
+                dirColor = math.saturate(dirColor * 2f);
+                outputTexture[pixel] = new F4(dirColor, 1f);
             }
-            else outputTexture[pixel] = result;
+            else
+            {
+                outputTexture[pixel] = result;
+            }
         }
     }
 }

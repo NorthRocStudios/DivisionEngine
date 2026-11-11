@@ -1,61 +1,87 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
-using ComputeSharp;
-
-#pragma warning disable CA1416 // Validate platform compatibility
+using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 
 namespace DivisionEngine.Rendering
 {
-    [GeneratedComputeShaderDescriptor]
-    [ThreadGroupSize(DefaultThreadGroupSizes.XY)]
-    public readonly partial struct IconShader(
-        float width,
-        float height,
-        float aspect,
-        float camScreenDist,
-        float3 cameraOrigin,
-        float3 camForward,
-        float3 camRight,
-        float3 camUp,
-        ReadWriteTexture2D<float4> renderTexture,
-        ReadWriteBuffer<uint> iconIdBuffer,
-        float3 iconPosition,
-        uint iconType,
-        float3 lightDirection,  // New parameter for directional light direction
-        uint entityId) : IComputeShader
+    [Shader]
+    public struct IconShader
     {
+        /// <summary>Width of the target.</summary>
+        public float width;
+
+        /// <summary>Height of the target.</summary>
+        public float height;
+
+        /// <summary>Aspect ratio of the target.</summary>
+        public float aspect;
+
+        /// <summary>Camera screen distance.</summary>
+        public float camScreenDist;
+
+        /// <summary>Camera origin.</summary>
+        public float3 cameraOrigin;
+
+        /// <summary>Camera forward vector.</summary>
+        public float3 camForward;
+
+        /// <summary>Camera right vector.</summary>
+        public float3 camRight;
+
+        /// <summary>Camera up vector.</summary>
+        public float3 camUp;
+
+        /// <summary>World position to draw the icon at.</summary>
+        public float3 iconPosition;
+
+        /// <summary>Icon type (100 = camera, 101 = directional light, ...).</summary>
+        public uint iconType;
+
+        /// <summary>Directional light direction, for the light icon.</summary>
+        public float3 lightDirection;
+
+        /// <summary>Entity the icon belongs to.</summary>
+        public uint entityId;
+
+        /// <summary>Render target.</summary>
+        [ShaderResource] public RWTexture2D<float4> renderTexture;
+
+        /// <summary>Per-pixel icon ID buffer.</summary>
+        [ShaderResource] public RWBuffer<uint> iconIdBuffer;
+
         private float3 WorldToScreen(float3 worldPos)
         {
             float3 relativePos = worldPos - cameraOrigin;
-            float camX = Hlsl.Dot(relativePos, camRight);
-            float camY = Hlsl.Dot(relativePos, camUp);
-            float camZ = Hlsl.Dot(relativePos, camForward);
+            float camX = math.dot(relativePos, camRight);
+            float camY = math.dot(relativePos, camUp);
+            float camZ = math.dot(relativePos, camForward);
 
             if (camZ <= 0.001f) return new float3(-1, -1, -1);
 
             float2 uv = new float2(camX / camZ / camScreenDist, camY / camZ / camScreenDist);
-            uv.X = uv.X / aspect;
+            uv.x = uv.x / aspect;
 
-            float screenX = (uv.X * 0.5f + 0.5f) * width;
-            float screenY = (uv.Y * 0.5f + 0.5f) * height;
+            float screenX = (uv.x * 0.5f + 0.5f) * width;
+            float screenY = (uv.y * 0.5f + 0.5f) * height;
             return new float3(screenX, screenY, camZ);
         }
 
         private float CircleSDF(float2 p, float2 center, float radius, float thickness)
         {
-            float d = Hlsl.Length(p - center) - radius;
+            float d = math.length(p - center) - radius;
             if (d < 0) return float.MaxValue;
             return d - thickness;
         }
 
         private float FilledCircleSDF(float2 p, float2 center, float radius)
         {
-            float d = Hlsl.Length(p - center) - radius;
+            float d = math.length(p - center) - radius;
             return d;
         }
 
@@ -63,16 +89,16 @@ namespace DivisionEngine.Rendering
         {
             float2 pa = p - a;
             float2 ba = b - a;
-            float h = Hlsl.Saturate(Hlsl.Dot(pa, ba) / Hlsl.Dot(ba, ba));
-            float d = Hlsl.Length(pa - ba * h);
+            float h = math.saturate(math.dot(pa, ba) / math.dot(ba, ba));
+            float d = math.length(pa - ba * h);
             return d - thickness;
         }
 
         private float SquareSDF(float2 p, float2 center, float size, float thickness)
         {
             float2 halfSize = new float2(size * 0.5f, size * 0.5f);
-            float2 d = Hlsl.Abs(p - center) - halfSize;
-            float distToSquare = Hlsl.Max(d.X, d.Y);
+            float2 d = math.abs(p - center) - halfSize;
+            float distToSquare = math.max(d.x, d.y);
             if (distToSquare < 0) return float.MaxValue;
             return distToSquare - thickness;
         }
@@ -80,8 +106,8 @@ namespace DivisionEngine.Rendering
         private float3 DrawShape(float distance, float thickness, float3 color, float3 currentColor)
         {
             if (distance > thickness) return currentColor;
-            float alpha = Hlsl.Saturate(1.0f - distance / thickness);
-            return Hlsl.Lerp(currentColor, color, alpha);
+            float alpha = math.saturate(1.0f - distance / thickness);
+            return math.lerp(currentColor, color, alpha);
         }
 
         private void DrawCamera(float2 centerScreen, float scale, float2 uv, ref float3 finalColor, ref bool isHit)
@@ -95,8 +121,8 @@ namespace DivisionEngine.Rendering
             float cornerRadius = 2 * scale;
 
             // Rounded rectangle SDF
-            float2 q = Hlsl.Abs(uv - center) - halfSize;
-            float distBody = Hlsl.Length(Hlsl.Max(q, 0.0f)) + Hlsl.Min(Hlsl.Max(q.X, q.Y), 0.0f) - cornerRadius;
+            float2 q = math.abs(uv - center) - halfSize;
+            float distBody = math.length(math.max(q, 0.0f)) + math.min(math.max(q.x, q.y), 0.0f) - cornerRadius;
             if (distBody <= 2.0f)
             {
                 isHit = true;
@@ -141,14 +167,14 @@ namespace DivisionEngine.Rendering
                 finalColor = DrawShape(distCircle, 2, new float3(1.0f, 0.8f, 0.2f), finalColor);
             }
 
-            float3 cameraDist = Hlsl.Distance(cameraOrigin, iconPosition);
+            float3 cameraDist = math.distance(cameraOrigin, iconPosition);
 
             // Project the light direction to screen space
             // The direction is in world space, we need to project it to screen space
             float3 dirEnd = iconPosition + direction * 0.2f * cameraDist; // 2 units in the direction
             float3 dirEndScreen = WorldToScreen(dirEnd);
             float2 dirStart = centerScreen;
-            float2 dirEnd2D = dirEndScreen.XY;
+            float2 dirEnd2D = dirEndScreen.xy;
 
             // Draw the main direction line
             float distMainLine = LineSDF(uv, dirStart, dirEnd2D, 1.0f);
@@ -159,8 +185,8 @@ namespace DivisionEngine.Rendering
             }
 
             // Draw arrow head at the end of direction line
-            float2 dirVec = Hlsl.Normalize(dirEnd2D - dirStart);
-            float2 perp = new float2(-dirVec.Y, dirVec.X);
+            float2 dirVec = math.normalize(dirEnd2D - dirStart);
+            float2 perp = new float2(-dirVec.y, dirVec.x);
             float arrowSize = 8 * scale;
 
             float2 arrowLeft = dirEnd2D - dirVec * arrowSize * 0.5f + perp * arrowSize * 0.3f;
@@ -184,7 +210,7 @@ namespace DivisionEngine.Rendering
             for (int i = 0; i < 4; i++)
             {
                 float angle = i * 90.0f * 3.14159f / 180.0f;
-                float2 rayDir = new float2(Hlsl.Cos(angle), Hlsl.Sin(angle));
+                float2 rayDir = new float2(math.cos(angle), math.sin(angle));
                 float2 rayStart = center + rayDir * 8 * scale;
                 float2 rayEnd = center + rayDir * 14 * scale;
 
@@ -267,7 +293,7 @@ namespace DivisionEngine.Rendering
             for (int i = 0; i < 6; i++)
             {
                 float angle = i * 60.0f * 3.14159f / 180.0f;
-                float2 rayDir = new float2(Hlsl.Cos(angle), Hlsl.Sin(angle));
+                float2 rayDir = new float2(math.cos(angle), math.sin(angle));
                 float2 rayStart = sunCenter + rayDir * 4 * scale;
                 float2 rayEnd = sunCenter + rayDir * 7 * scale;
 
@@ -349,45 +375,48 @@ namespace DivisionEngine.Rendering
             }
         }
 
-        public void Execute()
+        /// <summary>Draws one icon over one texel per thread.</summary>
+        [Kernel(8, 8, 1)]
+        public void Execute(uint3 id)
         {
-            int2 pixel = ThreadIds.XY;
-            float2 uv = new float2(pixel.X, pixel.Y);
+            int2 pixel = new int2((int)id.x, (int)id.y);
+            // Groups are whole 8x8 tiles, so trailing threads can be outside the viewport.
+            // Writing the ID buffer without this guard stamps entity IDs onto the next scanline.
+            if (pixel.x >= width || pixel.y >= height) return;
+            float2 uv = new float2(pixel.x, pixel.y);
 
             float3 centerScreen = WorldToScreen(iconPosition);
-            if (centerScreen.Z < 0) return;
+            if (centerScreen.z < 0) return;
 
             float scale = 1f; // Base scale for all icons
             float4 existingColor = renderTexture[pixel];
-            float3 finalColor = existingColor.XYZ;
+            float3 finalColor = existingColor.xyz;
             bool isHit = false;
 
             switch (iconType)
             {
                 case 100: // Camera
-                    DrawCamera(centerScreen.XY, scale, uv, ref finalColor, ref isHit);
+                    DrawCamera(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
                     break;
                 case 101: // DirectionalLight
-                    DrawDirectionalLight(centerScreen.XY, scale, uv, lightDirection, ref finalColor, ref isHit);
+                    DrawDirectionalLight(centerScreen.xy, scale, uv, lightDirection, ref finalColor, ref isHit);
                     break;
                 case 102: // PointLight
-                    DrawPointLight(centerScreen.XY, scale, uv, ref finalColor, ref isHit);
+                    DrawPointLight(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
                     break;
                 case 103: // SpotLight
-                    DrawSpotLight(centerScreen.XY, scale, uv, ref finalColor, ref isHit);
+                    DrawSpotLight(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
                     break;
                 case 104: // Environment
-                    DrawEnvironment(centerScreen.XY, scale, uv, ref finalColor, ref isHit);
+                    DrawEnvironment(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
                     break;
             }
 
             if (isHit)
             {
-                iconIdBuffer[pixel.X + pixel.Y * (int)width] = entityId;
+                iconIdBuffer[pixel.x + pixel.y * (int)width] = entityId;
                 renderTexture[pixel] = new float4(finalColor, 1.0f);
             }
         }
     }
 }
-
-#pragma warning restore CA1416 // Validate platform compatibility
