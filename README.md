@@ -83,7 +83,7 @@ In the future there will be a Division Engine marketplace, completely separate w
 ## Editor Preview Screenshots:
 
 Extreme Scale:
-<img width="1919" height="1031" alt="Screenshot 2026-04-01 231259" src="https://github.com/user-attachments/assets/c5af0231-2844-4e48-9721-3608e652bd62" />
+<img width="1919" height="1031" alt="Screenshot 2026-11-09 021502" src="https://github.com/user-attachments/assets/6044d156-ba3c-4a32-a943-e6a2c83050a9" />
 
 High Quality Effects:
 <img width="1919" height="1029" alt="Screenshot 2026-02-12 015857" src="https://github.com/user-attachments/assets/7fe0f9b6-5a65-4160-ad74-874034a14ee6" />
