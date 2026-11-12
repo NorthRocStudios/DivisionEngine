@@ -64,6 +64,7 @@ namespace DivisionEngine.Editor
                     case "compute": return DivisionComputeCLI.TryRun(args);
                     case "info": return RunInfo();
                     case "selftest": return EngineSelfTest.Run();
+                    case "shadowtest": return ShadowTest.Run(args);
                     case "skyprobe": return RunSkyProbe();
                     case "shot": return RunShot(args);
                     case "help":
@@ -84,6 +85,32 @@ namespace DivisionEngine.Editor
             }
         }
 
+        /// <summary>
+        /// Warns when the shader cache is empty. Compiling the raymarch shader takes minutes
+        /// with fxc, and it happens inside the first rendered frame, so a cold run otherwise
+        /// looks like a hang with no output.
+        /// </summary>
+        internal static void WarnIfShaderCacheCold()
+        {
+            if (System.Environment.GetEnvironmentVariable("DIVISION_DISABLE_SHADER_CACHE") is "1" or "true")
+            {
+                Console.WriteLine("note: shader cache disabled (DIVISION_DISABLE_SHADER_CACHE) - every shader " +
+                                  "is recompiled and the first frame can take several minutes");
+                return;
+            }
+
+            string cacheDirectory = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                "DivisionEngine", "ShaderCache");
+
+            bool cold = !System.IO.Directory.Exists(cacheDirectory) ||
+                        System.IO.Directory.GetFiles(cacheDirectory).Length == 0;
+
+            if (cold)
+                Console.WriteLine("note: cold shader cache - compiling shaders, the first frame can take " +
+                                  "several minutes (this is normal on a fresh checkout or after a shader edit)");
+        }
+
         private static bool RunBench(string[] args)
         {
             int width = GetInt(args, "--width", 1280);
@@ -95,6 +122,7 @@ namespace DivisionEngine.Editor
                 throw new ArgumentException("--width, --height and --frames must be positive.");
 
             Console.WriteLine($"divisioncli bench: {width}x{height}, {frames} frames (+{warmup} warmup)");
+            WarnIfShaderCacheCold();
 
             WorldManager.CreateDefaultWorld(makeCurrent: true);
 
@@ -183,6 +211,7 @@ namespace DivisionEngine.Editor
             pipeline.BindCurrentWorld();
             pipeline.CurrentDebugMode = (RenderPipeline.DebugMode)debugMode;
             ApplyTestRenderOptions(args);
+            WarnIfShaderCacheCold();
             float4[]? pixels;
             if (fixedFrame.HasValue)
             {
@@ -427,6 +456,9 @@ namespace DivisionEngine.Editor
                   info      Print engine/runtime information
                   selftest  Run headless regression checks (locale serialization, snapshots,
                             undo, matrix accessors, terrain noise); exits 1 on any failure
+                  shadowtest  Render a shadow scene and verify it numerically; exits 1 on failure
+                            Options: --scene soft|colored  (colored checks glass tints combine)
+                                     --caustics  also render/compare the caustic shadow style
                   skyprobe  Print environment sun/atmosphere values for the default world
                   shot      Render one frame to a PNG
                             Options: --sky <solid|gradient|hdri|procedural> --look x,y,z --out file --width N --height N
@@ -549,3 +581,4 @@ namespace DivisionEngine.Editor
         }
     }
 }
+

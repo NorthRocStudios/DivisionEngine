@@ -57,6 +57,13 @@ namespace DivisionEngine.Rendering
         private GL? gl;
         private uint glTexture, glShaderProgram;
         private static bool deviceLost;
+        private bool presentLogged;
+        private bool announcedShaderCompile;
+
+        // Diagnostic for "black/white window" reports: set DIVISION_LOG_PRESENT=1 to log one
+        // read-back of the presented frame (what GL actually holds vs. the CPU colour buffer).
+        private static readonly bool presentLogEnabled =
+            System.Environment.GetEnvironmentVariable("DIVISION_LOG_PRESENT") is "1" or "true";
         private float currentDpiScale = 1f;
 
         // Rendering variables
@@ -487,6 +494,7 @@ namespace DivisionEngine.Rendering
         {
             Mode = RunMode.Embedded;
             deviceLost = false;
+            WarnIfShaderCacheCold();
             Context = EnsureContext();
             Debug.Info("Renderer: Using DivisionCompute D3D11 device");
             Context.DeviceLost += Device_DeviceLost;
@@ -576,6 +584,38 @@ namespace DivisionEngine.Rendering
         private DivisionComputeContext EnsureContext() => Context ??= new DivisionComputeContext();
 
         /// <summary>
+        /// Warns once at startup when the on-disk shader cache is empty: the first frame then
+        /// has to compile the raymarch shader, which takes minutes and looks like a hang.
+        /// </summary>
+        private static void WarnIfShaderCacheCold()
+        {
+            try
+            {
+                if (System.Environment.GetEnvironmentVariable("DIVISION_DISABLE_SHADER_CACHE") is "1" or "true")
+                {
+                    Debug.Warning("Renderer: shader cache disabled - the first frame compiles every shader " +
+                                  "and can take several minutes");
+                    return;
+                }
+
+                string cacheDirectory = System.IO.Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "DivisionEngine", "ShaderCache");
+
+                if (!System.IO.Directory.Exists(cacheDirectory) ||
+                    System.IO.Directory.GetFiles(cacheDirectory).Length == 0)
+                {
+                    Debug.Warning("Renderer: shader cache is empty - the first frame compiles the raymarch " +
+                                  "shader and can take several minutes. Later runs will start quickly.");
+                }
+            }
+            catch
+            {
+                // Diagnostics must never prevent startup.
+            }
+        }
+
+        /// <summary>
         /// Returns the compiled kernel for a shader type, compiling it on first use.
         /// </summary>
         private DivisionShader GetShader(Type shaderType)
@@ -583,7 +623,34 @@ namespace DivisionEngine.Rendering
             if (shaders.TryGetValue(shaderType, out DivisionShader? shader))
                 return shader;
 
-            shader = Context!.CompileShader(shaderType);
+            // Compilation happens inside the first frame, so show something in the window while
+            // the (potentially multi-minute) cold-cache compile runs, and log how long it took.
+            bool announce = !announcedShaderCompile;
+            string previousTitle = string.Empty;
+            if (announce)
+            {
+                announcedShaderCompile = true;
+                previousTitle = RendererWindow?.Title ?? string.Empty;
+                if (RendererWindow != null)
+                    RendererWindow.Title = "Division Engine - compiling shaders";
+            }
+
+            Debug.Info($"Renderer: compiling '{shaderType.Name}'");
+            System.Diagnostics.Stopwatch compileTimer = System.Diagnostics.Stopwatch.StartNew();
+
+            try
+            {
+                shader = Context!.CompileShader(shaderType);
+            }
+            finally
+            {
+                compileTimer.Stop();
+                if (announce && RendererWindow != null)
+                    RendererWindow.Title = previousTitle;
+            }
+
+            Debug.Info($"Renderer: '{shaderType.Name}' ready in {compileTimer.ElapsedMilliseconds} ms" +
+                       (compileTimer.ElapsedMilliseconds > 5000 ? " (compiled, not a cache hit)" : string.Empty));
             shaders[shaderType] = shader;
             return shader;
         }
@@ -727,6 +794,7 @@ namespace DivisionEngine.Rendering
         public void Run(double defaultFPS, bool editorMode)
         {
             deviceLost = false;
+            WarnIfShaderCacheCold();
             try
             {
                 WindowOptions options = WindowOptions.Default;
@@ -931,7 +999,18 @@ namespace DivisionEngine.Rendering
             Context.CheckDeviceLost();
 
             if (boundWorld == null) return;
-            boundWorld.CallRender();
+
+            try
+            {
+                boundWorld.CallRender();
+            }
+            catch (Exception ex)
+            {
+                // A system's Render() can race the editor thread mutating the world; an
+                // unhandled exception here would kill the process. Skip this frame instead.
+                Debug.Error("Renderer: a system threw during Render() - skipping this frame", ex);
+                return;
+            }
             int lowResWidth = math.max(1, texWidth / 4),
                 lowResHeight = math.max(1, texHeight / 4);
 
@@ -1492,6 +1571,21 @@ namespace DivisionEngine.Rendering
             gl.Uniform1(loc, 0);
 
             gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+
+            if (!presentLogged && presentLogEnabled)
+            {
+                presentLogged = true;
+                unsafe
+                {
+                    float* px = stackalloc float[4];
+                    gl.ReadPixels(texWidth / 2, texHeight / 2, 1, 1, PixelFormat.Rgba, PixelType.Float, px);
+                    float4 cpu = Pixels![(texHeight / 2) * texWidth + texWidth / 2];
+                    Debug.Info($"DBG present: window={RendererWindow?.Size.X}x{RendererWindow?.Size.Y} " +
+                               $"render={texWidth}x{texHeight} glCenter=({px[0]:F3},{px[1]:F3},{px[2]:F3}) " +
+                               $"cpuCenter=({cpu.x:F3},{cpu.y:F3},{cpu.z:F3}) checkerboard={CheckerboardRenderingEnabled}");
+                }
+            }
+
             gl.Finish();
         }
 

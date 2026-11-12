@@ -11,11 +11,11 @@
 
 </div>
 
-Division Engine is an SDF-based game engine written entirely in C#. Utilizing Avalonia UI for the interface and Silk.NET for native rendering, Division Engine features a comprehensive build pipeline that dynamically builds HLSL shader code from .NET code, thanks to a library called ComputeSharp.
+Division Engine is an SDF-based game engine written entirely in C#. Utilizing Avalonia UI for the interface and Silk.NET for native rendering, Division Engine features a comprehensive shader pipeline that dynamically builds HLSL shader code from .NET code, thanks to [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute).
 
 *Note: This engine is still in preview and has known issues; it is specifically built for experimentation and education only.*
 
-The render pipeline is built using an OpenGL backend with HLSL shaders written in C# using ComputeSharp.
+Rendering is compute-driven: shaders are written as ordinary C# structs, translated to HLSL on demand by DivisionCompute, and dispatched through its Direct3D 11 backend, while Silk.NET's OpenGL context presents the finished frame. The vector and matrix types shared by CPU code and shaders come from [DivisionMath](https://github.com/NorthRocStudios/DivisionMath).
 
 Picture this:
 - SDF-based rendering
@@ -35,14 +35,14 @@ Picture this:
 
 ## Framework
 
-Division Engine is built using three core packages: Silk.NET, ComputeSharp, and AvaloniaUI.
+Division Engine is built on four core packages: Silk.NET, DivisionCompute, DivisionMath, and AvaloniaUI.
 Check them out here:
 - [Silk.NET](https://github.com/dotnet/Silk.NET)
-- [ComputeSharp](https://github.com/Sergio0694/ComputeSharp)
+- [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) - C# to HLSL source-to-source compiler and Direct3D 11 compute runtime
+- [DivisionMath](https://github.com/NorthRocStudios/DivisionMath) - vectorized math library built for near 1:1 parity with HLSL
 - [AvaloniaUI](https://github.com/AvaloniaUI/Avalonia)
 
-> **Upcoming Change:** In a future release, **ComputeSharp will be replaced by [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) and [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)**.  
-> DivisionCompute will provide a shader compiler and translator, while DivisionMath will offer a unified math API. Together, they will deliver the full functionality of ComputeSharp and more with improved cross-platform support, CPU/GPU parity, and a consistent math layer for both CPU and GPU code.
+> **A note on ComputeSharp:** earlier previews of Division Engine built shaders with [ComputeSharp](https://github.com/Sergio0694/ComputeSharp). The engine has since migrated to DivisionCompute and DivisionMath: shader translation, bytecode compilation, resource binding, and dispatch all live in DivisionCompute, and no engine project references ComputeSharp anymore. The new stack targets Direct3D 11 (HLSL compiled to DXBC at runtime, cached on disk between runs) and shares one math API between CPU and GPU code.
 
 ## Resources:
 Follow the development: https://trello.com/b/mWtyHBMf/division-engine

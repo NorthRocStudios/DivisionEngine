@@ -46,6 +46,11 @@ namespace DivisionEngine
             updateSystems, editorUpdateSystems, fixedUpdateSystems,
             unloadSystems, appExitSystems, renderSystems;
 
+        // Guards the entity set and the component stores. The render thread enumerates them
+        // (systems' Render) while the editor thread mutates them, so every access takes this
+        // lock and queries hand back snapshots instead of live dictionary views.
+        private readonly Lock gate = new();
+
         /// <summary>
         /// Create a new world.
         /// </summary>
@@ -76,7 +81,10 @@ namespace DivisionEngine
         /// </summary>
         /// <param name="id">Entity id to check</param>
         /// <returns>Whether the entity exists in the world</returns>
-        public bool EntityExists(uint id) => entities.Contains(id);
+        public bool EntityExists(uint id)
+        {
+            lock (gate) return entities.Contains(id);
+        }
 
         /// <summary>
         /// Creates a new entity in the world.
@@ -84,10 +92,13 @@ namespace DivisionEngine
         /// <returns>The new entity id created</returns>
         public uint CreateEntity()
         {
-            uint id = NextEntityId;
-            entities.Add(id);
-            NextEntityId++;
-            return id;
+            lock (gate)
+            {
+                uint id = NextEntityId;
+                entities.Add(id);
+                NextEntityId++;
+                return id;
+            }
         }
 
         /// <summary>
@@ -152,12 +163,13 @@ namespace DivisionEngine
         /// <returns>Whether entity of <paramref name="entityId"/> was destroyed.</returns>
         public bool DestroyEntity(uint entityId)
         {
-            if (entities.Remove(entityId))
+            lock (gate)
             {
+                if (!entities.Remove(entityId)) return false;
+
                 foreach (Type t in components.Keys) components[t].Remove(entityId);
                 return true;
             }
-            return false;
         }
         
         /// <summary>
@@ -177,9 +189,13 @@ namespace DivisionEngine
 
         public bool AddEntityWithId(uint id, string? name = null)
         {
-            if (entities.Contains(id)) return false;
-            entities.Add(id);
-            if (id >= NextEntityId) NextEntityId = id + 1;
+            lock (gate)
+            {
+                if (entities.Contains(id)) return false;
+                entities.Add(id);
+                if (id >= NextEntityId) NextEntityId = id + 1;
+            }
+
             if (!string.IsNullOrEmpty(name))
                 AddComponent(id, new Name(name));
             return true;
@@ -480,26 +496,28 @@ namespace DivisionEngine
         /// <returns>True if the component was added</returns>
         public bool AddComponent<T>(uint entityId, T component) where T : IComponent
         {
-            if (!EntityExists(entityId))
-                return false;
-
-            Type type = component.GetType();
-            if (components.ContainsKey(type))
+            lock (gate)
             {
-                if (!components[type].ContainsKey(entityId))
+                if (!entities.Contains(entityId))
+                    return false;
+
+                Type type = component.GetType();
+                if (components.TryGetValue(type, out Dictionary<uint, IComponent>? store))
                 {
-                    components[type].Add(entityId, component);
-                    return true;
+                    if (!store.ContainsKey(entityId))
+                    {
+                        store.Add(entityId, component);
+                        return true;
+                    }
+                    return false;
                 }
-                return false;
-            }
 
-            Dictionary<uint, IComponent> temp = new Dictionary<uint, IComponent>
-            {
-                { entityId, component }
-            };
-            components.Add(type, temp);
-            return true;
+                components.Add(type, new Dictionary<uint, IComponent>
+                {
+                    { entityId, component }
+                });
+                return true;
+            }
         }
 
         /// <summary>
@@ -511,14 +529,7 @@ namespace DivisionEngine
         public bool RemoveComponent<T>(uint entityId) where T : IComponent
         {
             Type type = typeof(T);
-            if (EntityExists(entityId) && components.TryGetValue(type, out var value))
-            {
-                bool removed = value.Remove(entityId);
-                if (value.Count < 1)
-                    components.Remove(type);
-                return removed;
-            }
-            return false;
+            return RemoveComponent(entityId, type);
         }
 
         /// <summary>
@@ -529,14 +540,16 @@ namespace DivisionEngine
         /// <returns>True if the component was removed</returns>
         public bool RemoveComponent(uint entityId, Type type)
         {
-            if (EntityExists(entityId) && components.TryGetValue(type, out var value))
+            lock (gate)
             {
+                if (!entities.Contains(entityId) || !components.TryGetValue(type, out var value))
+                    return false;
+
                 bool removed = value.Remove(entityId);
                 if (value.Count < 1)
                     components.Remove(type);
                 return removed;
             }
-            return false;
         }
 
         /// <summary>
@@ -548,9 +561,12 @@ namespace DivisionEngine
         public T? GetComponent<T>(uint entityId) where T : IComponent
         {
             Type type = typeof(T);
-            if (components.TryGetValue(type, out var value) && value.TryGetValue(entityId, out var component))
-                return (T)component;
-            return default;
+            lock (gate)
+            {
+                if (components.TryGetValue(type, out var value) && value.TryGetValue(entityId, out var component))
+                    return (T)component;
+                return default;
+            }
         }
 
         /// <summary>
@@ -561,9 +577,12 @@ namespace DivisionEngine
         /// <returns>The component on the entity</returns>
         public IComponent? GetComponent(uint entityId, Type componentType)
         {
-            if (components.TryGetValue(componentType, out var value) && value.TryGetValue(entityId, out var component))
-                return component;
-            return default;
+            lock (gate)
+            {
+                if (components.TryGetValue(componentType, out var value) && value.TryGetValue(entityId, out var component))
+                    return component;
+                return default;
+            }
         }
 
         /// <summary>
@@ -573,13 +592,16 @@ namespace DivisionEngine
         /// <returns>List of all components on entity of <paramref name="entityId"/></returns>
         public List<IComponent> GetAllComponents(uint entityId)
         {
-            List<IComponent> entityComponents = [];
-            foreach (var componentType in components.Values)
+            lock (gate)
             {
-                if (componentType.TryGetValue(entityId, out IComponent? component))
-                    entityComponents.Add(component);
+                List<IComponent> entityComponents = [];
+                foreach (var componentType in components.Values)
+                {
+                    if (componentType.TryGetValue(entityId, out IComponent? component))
+                        entityComponents.Add(component);
+                }
+                return entityComponents;
             }
-            return entityComponents;
         }
 
         /// <summary>
@@ -588,11 +610,7 @@ namespace DivisionEngine
         /// <typeparam name="T">Type of component to check for</typeparam>
         /// <param name="entityId">Entity ID to check on</param>
         /// <returns>Whether the entity of <paramref name="entityId"/> has a component type <typeparamref name="T"/></returns>
-        public bool HasComponent<T>(uint entityId) where T : IComponent
-        {
-            Type type = typeof(T);
-            return components.ContainsKey(type) && components[type].ContainsKey(entityId);
-        }
+        public bool HasComponent<T>(uint entityId) where T : IComponent => HasComponent(entityId, typeof(T));
 
         /// <summary>
         /// Checks if an entity has a component of a certain type.
@@ -600,7 +618,10 @@ namespace DivisionEngine
         /// <param name="entityId">Entity ID to check on</param>
         /// <param name="type">Component type to check for</param>
         /// <returns>Whether the entity of <paramref name="entityId"/> has a certain component type</returns>
-        public bool HasComponent(uint entityId, Type type) => components.ContainsKey(type) && components[type].ContainsKey(entityId);
+        public bool HasComponent(uint entityId, Type type)
+        {
+            lock (gate) return components.TryGetValue(type, out var store) && store.ContainsKey(entityId);
+        }
 
         /// <summary>
         /// Adds a component to the world from ComponentData serialized data.
@@ -719,9 +740,15 @@ namespace DivisionEngine
         public IEnumerable<uint> Query<T>() where T : IComponent
         {
             Type type = typeof(T);
-            if (components.Count > 0 && components.TryGetValue(type, out Dictionary<uint, IComponent>? value))
-                return value.Keys;
-            return [];
+            lock (gate)
+            {
+                // Snapshot rather than a live KeyCollection: the render thread enumerates
+                // queries while the editor thread adds/removes entities, and a live view would
+                // throw "Collection was modified" mid-frame.
+                if (components.TryGetValue(type, out Dictionary<uint, IComponent>? value))
+                    return [.. value.Keys];
+                return [];
+            }
         }
 
         /// <summary>
@@ -733,10 +760,22 @@ namespace DivisionEngine
         {
             if (componentTypes.Length == 0) return [];
 
-            IEnumerable<uint> queryResult = GetComponentStore(componentTypes[0]).Keys;
-            for (int i = 1; i < componentTypes.Length; i++)
-                queryResult = queryResult.Intersect(GetComponentStore(componentTypes[i]).Keys);
-            return queryResult;
+            lock (gate)
+            {
+                if (!components.TryGetValue(componentTypes[0], out Dictionary<uint, IComponent>? first))
+                    return [];
+
+                List<uint> result = [.. first.Keys];
+                for (int i = 1; i < componentTypes.Length; i++)
+                {
+                    if (!components.TryGetValue(componentTypes[i], out Dictionary<uint, IComponent>? other))
+                        return [];
+
+                    HashSet<uint> set = [.. other.Keys];
+                    result.RemoveAll(id => !set.Contains(id));
+                }
+                return result;
+            }
         }
 
         /// <summary>
@@ -746,11 +785,16 @@ namespace DivisionEngine
         /// <returns>Tuple of (entityID, T component)</returns>
         public IEnumerable<(uint, T)> QueryData<T>() where T : IComponent
         {
-            foreach (uint entityId in Query<T>())
+            List<(uint, T)> results = [];
+            lock (gate)
             {
-                T queryResultComponent = (T)components[typeof(T)][entityId];
-                yield return (entityId, queryResultComponent);
+                if (components.TryGetValue(typeof(T), out Dictionary<uint, IComponent>? store))
+                {
+                    foreach (KeyValuePair<uint, IComponent> kvp in store)
+                        results.Add((kvp.Key, (T)kvp.Value));
+                }
             }
+            return results;
         }
 
         /// <summary>
@@ -762,12 +806,20 @@ namespace DivisionEngine
         public IEnumerable<(uint, T1, T2)> QueryData<T1, T2>()
             where T1 : IComponent where T2 : IComponent
         {
-            foreach (uint entityId in Query(typeof(T1), typeof(T2)))
+            List<(uint, T1, T2)> results = [];
+            lock (gate)
             {
-                T1 queryResultComponent1 = (T1)components[typeof(T1)][entityId];
-                T2 queryResultComponent2 = (T2)components[typeof(T2)][entityId];
-                yield return (entityId, queryResultComponent1, queryResultComponent2);
+                if (components.TryGetValue(typeof(T1), out Dictionary<uint, IComponent>? store1) &&
+                    components.TryGetValue(typeof(T2), out Dictionary<uint, IComponent>? store2))
+                {
+                    foreach (KeyValuePair<uint, IComponent> kvp in store1)
+                    {
+                        if (!store2.TryGetValue(kvp.Key, out IComponent? second)) continue;
+                        results.Add((kvp.Key, (T1)kvp.Value, (T2)second));
+                    }
+                }
             }
+            return results;
         }
 
         /// <summary>
@@ -785,13 +837,22 @@ namespace DivisionEngine
         public IEnumerable<(uint, T1, T2, T3)> QueryData<T1, T2, T3>()
             where T1 : IComponent where T2 : IComponent where T3 : IComponent
         {
-            foreach (uint entityId in Query(typeof(T1), typeof(T2), typeof(T3)))
+            List<(uint, T1, T2, T3)> results = [];
+            lock (gate)
             {
-                T1 queryResultComponent1 = (T1)components[typeof(T1)][entityId];
-                T2 queryResultComponent2 = (T2)components[typeof(T2)][entityId];
-                T3 queryResultComponent3 = (T3)components[typeof(T3)][entityId];
-                yield return (entityId, queryResultComponent1, queryResultComponent2, queryResultComponent3);
+                if (components.TryGetValue(typeof(T1), out Dictionary<uint, IComponent>? store1) &&
+                    components.TryGetValue(typeof(T2), out Dictionary<uint, IComponent>? store2) &&
+                    components.TryGetValue(typeof(T3), out Dictionary<uint, IComponent>? store3))
+                {
+                    foreach (KeyValuePair<uint, IComponent> kvp in store1)
+                    {
+                        if (!store2.TryGetValue(kvp.Key, out IComponent? second)) continue;
+                        if (!store3.TryGetValue(kvp.Key, out IComponent? third)) continue;
+                        results.Add((kvp.Key, (T1)kvp.Value, (T2)second, (T3)third));
+                    }
+                }
             }
+            return results;
         }
 
         /// <summary>
@@ -807,13 +868,34 @@ namespace DivisionEngine
         /// the specified types. The sequence is empty if no entities match the query.</returns>
         public IEnumerable<(uint, IComponent[])> QueryData(params Type[] componentTypes)
         {
-            foreach (uint entityId in Query(componentTypes))
-            {
-                IComponent[] queryResultComponents = new IComponent[componentTypes.Length];
-                for (int i = 0; i < componentTypes.Length; i++)
-                    queryResultComponents[i] = components[componentTypes[i]][entityId];
+            if (componentTypes.Length == 0) return [];
 
-                yield return (entityId, queryResultComponents);
+            lock (gate)
+            {
+                if (!components.TryGetValue(componentTypes[0], out Dictionary<uint, IComponent>? first))
+                    return [];
+
+                List<(uint, IComponent[])> results = [];
+                foreach (KeyValuePair<uint, IComponent> kvp in first)
+                {
+                    IComponent[] row = new IComponent[componentTypes.Length];
+                    row[0] = kvp.Value;
+
+                    bool complete = true;
+                    for (int i = 1; i < componentTypes.Length; i++)
+                    {
+                        if (!components.TryGetValue(componentTypes[i], out Dictionary<uint, IComponent>? store) ||
+                            !store.TryGetValue(kvp.Key, out IComponent? component))
+                        {
+                            complete = false;
+                            break;
+                        }
+                        row[i] = component;
+                    }
+
+                    if (complete) results.Add((kvp.Key, row));
+                }
+                return results;
             }
         }
 

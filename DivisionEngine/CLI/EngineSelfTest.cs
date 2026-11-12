@@ -1,4 +1,4 @@
-//
+﻿//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -15,6 +15,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Threading;
 
 namespace DivisionEngine.Editor
 {
@@ -54,6 +55,8 @@ namespace DivisionEngine.Editor
             Check("Undo coalesces repeated edits of one field", CheckUndoCoalescing);
             Check("Terrain noise spans a usable range", CheckTerrainNoise);
             Check("Asset types: .cs/.hlsl/.sdfLib", CheckAssetTypes);
+            Check("World queries survive mutation while enumerating", CheckQuerySnapshot);
+            Check("Log list is safe under concurrent writes", CheckLogConcurrency);
 
             Console.WriteLine();
             Console.WriteLine($"{{\"checks\":{passed + failed},\"passed\":{passed},\"failed\":{failed}}}");
@@ -321,6 +324,78 @@ namespace DivisionEngine.Editor
             return cs == AssetType.Script && hlsl == AssetType.Shader && sdfLib == AssetType.SDF;
         }
 
+        /// <summary>
+        /// Queries hand back snapshots, so destroying entities while a query is being
+        /// enumerated must not throw "Collection was modified". The render thread relies on
+        /// this while the editor thread edits the world.
+        /// </summary>
+        private static bool CheckQuerySnapshot()
+        {
+            World world = new("selftest_queries");
+            for (int i = 0; i < 64; i++)
+            {
+                uint entity = world.CreateEntity();
+                world.AddComponent(entity, new Transform());
+            }
+
+            int seen = 0;
+            foreach (uint entity in world.Query<Transform>())
+            {
+                seen++;
+                if (seen % 2 == 0) world.DestroyEntity(entity);
+            }
+
+            int dataSeen = 0;
+            foreach (var (entity, _) in world.QueryData<Transform>())
+            {
+                dataSeen++;
+                if (dataSeen % 3 == 0) world.DestroyEntity(entity);
+            }
+
+            int remaining = 0;
+            foreach (uint _ in world.Query<Transform>()) remaining++;
+
+            return seen == 64 && dataSeen == 32 && remaining > 0;
+        }
+
+        /// <summary>
+        /// Log entries are appended from many threads while the console enumerates them on the
+        /// UI thread; the snapshot list must never throw under that load.
+        /// </summary>
+        private static bool CheckLogConcurrency()
+        {
+            Exception? failure = null;
+
+            Thread[] writers = new Thread[4];
+            for (int t = 0; t < writers.Length; t++)
+            {
+                int writer = t;
+                writers[t] = new Thread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < 40; i++)
+                            Debug.Info($"selftest log line {writer}-{i}");
+                    }
+                    catch (Exception ex) { failure = ex; }
+                });
+                writers[t].Start();
+            }
+
+            try
+            {
+                for (int i = 0; i < 60; i++)
+                {
+                    IReadOnlyList<LogEntry> snapshot = Debug.Logs;
+                    if (snapshot.Count < 0) return false; // force enumeration
+                    foreach (LogEntry entry in snapshot) _ = entry.Message;
+                }
+            }
+            catch (Exception ex) { failure = ex; }
+
+            foreach (Thread writer in writers) writer.Join();
+            return failure == null;
+        }
         private static bool Near(float3 a, float3 b) =>
             Math.Abs(a.x - b.x) < 1e-4f && Math.Abs(a.y - b.y) < 1e-4f && Math.Abs(a.z - b.z) < 1e-4f;
 
@@ -341,3 +416,4 @@ namespace DivisionEngine.Editor
         }
     }
 }
+

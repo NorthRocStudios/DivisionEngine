@@ -1,4 +1,4 @@
-
+﻿
 //
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
@@ -384,12 +384,13 @@ namespace DivisionEngine
             }
             else
             {
-                // obj.scaling holds 1/worldScale (see SDFRenderSystem), so the local distance
-                // converts back to world space by DIVIDING by it. Multiplying returned
-                // localDist*1/worldScale (= worldDist/worldScale^2), which overshoots badly
-                // for objects scaled below 1.
-                float invMaxScale = math.min(obj.scaling.x, math.min(obj.scaling.y, obj.scaling.z));
-                float dist = EvaluatePrimitiveDistanceFast(obj.type, obj.parameters, curPoint) / invMaxScale;
+                // Ported 1:1 from the ComputeSharp build. This local-space scale is what the
+                // shadow march steps with, so the penumbra width depends on it. Correcting it to
+                // a true world-space distance (dividing instead of multiplying) shrinks the
+                // penetration depth and visibly lightens every shadow, so it is intentionally
+                // left as it was.
+                float dist = math.min(obj.scaling.x, math.min(obj.scaling.y, obj.scaling.z));
+                dist *= EvaluatePrimitiveDistanceFast(obj.type, obj.parameters, curPoint);
                 return dist * obj.stepBias;
             }
         }
@@ -510,15 +511,26 @@ namespace DivisionEngine
         // New soft-shadow technique:
         // Reference: https://iquilezles.org/articles/rmshadows/
         // New Version: https://www.shadertoy.com/view/tscSRS
-        private float3 SoftShadow(float3 pt, float3 dir)
+        // New soft-shadow technique:
+        // Reference: https://iquilezles.org/articles/rmshadows/
+        // New Version: https://www.shadertoy.com/view/tscSRS
+        //
+        // Ported 1:1 from the original ComputeSharp implementation (Hlsl.* -> math.*,
+        // .X/.Y/.Z -> .x/.y/.z). Do not "correct" the smoothstep(-1, 0, ...) mapping: the
+        // penumbra shape is defined by it, together with the local-space step sizes produced by
+        // ObjectSDF. Only additions are the receiver's own entity being skipped (self-shadow)
+        // and the DivisionCompute spelling.
+        private float3 SoftShadow(float3 pt, float3 dir, uint excludeID)
         {
             float depth, dist, shadow = 1;
             int maxShadowRaySteps = worldData[0].maxShadowRaySteps;
             for (int k = 0; k < sdfObjects.Length; k++)
             {
                 SDFObjectDTO sdf = sdfObjects[k];
-                depth = sdf.shadowDistances.x;
                 if (sdf.shadowEffects.x == 0) continue;
+                if (sdf.entityID == excludeID) continue;
+
+                depth = sdf.shadowDistances.x;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
                     dist = ObjectSDF(pt + depth * dir, sdf);
@@ -528,10 +540,10 @@ namespace DivisionEngine
                 }
             }
             shadow = math.max(shadow, -1f);
-            return math.smoothstep(-1f, 0f, shadow) * new float3(1f);
+            return math.saturate(math.smoothstep(-1f, 0f, shadow)) * new float3(1f);
         }
 
-        private float3 SoftShadowColored(float3 pt, float3 dir)
+        private float3 SoftShadowColored(float3 pt, float3 dir, uint excludeID)
         {
             float shadow = 1f;
             float3 tint = new float3(1f);
@@ -541,6 +553,8 @@ namespace DivisionEngine
             {
                 SDFObjectDTO sdf = sdfObjects[k];
                 if (sdf.shadowEffects.x == 0) continue;
+                if (sdf.entityID == excludeID) continue;
+
                 bool isGlass = sdf.hasRefraction == 1;
                 float depth = sdf.shadowDistances.x;
                 float3 absorptionCoefficient = isGlass ? math.log(math.max(sdf.absorptionColor.rgb, 0.001f)) : new float3(0f);
@@ -561,7 +575,7 @@ namespace DivisionEngine
             }
 
             shadow = math.max(shadow, -1f);
-            float occlusion = math.smoothstep(-1f, 0f, shadow);
+            float occlusion = math.saturate(math.smoothstep(-1f, 0f, shadow));
             float occlusionTint = math.smoothstep(-1f, 0f, tintShadow);
             return occlusion * math.lerp(tint, new float3(1f), occlusionTint);
         }
@@ -570,7 +584,7 @@ namespace DivisionEngine
         /// Hard shadow - returns 1.0 for fully lit, 0.0 for fully shadowed.
         /// Fast and sharp, no penumbra.
         /// </summary>
-        private float3 HardShadow(float3 pt, float3 dir)
+        private float3 HardShadow(float3 pt, float3 dir, uint excludeID)
         {
             float depth, dist;
             int maxShadowRaySteps = worldData[0].maxShadowRaySteps;
@@ -579,6 +593,7 @@ namespace DivisionEngine
                 SDFObjectDTO sdf = sdfObjects[k];
                 depth = sdf.shadowDistances.x;
                 if (sdf.shadowEffects.x == 0) continue;
+                if (sdf.entityID == excludeID) continue;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
                     dist = ObjectSDF(pt + depth * dir, sdf);
@@ -593,19 +608,21 @@ namespace DivisionEngine
         /// <summary>
         /// Unified shadow function that selects the appropriate shadow type.
         /// </summary>
-        private float3 CalculateShadow(float3 hitPoint, float3 normal, float3 lightDir, int shadowType)
+        private float3 CalculateShadow(float3 hitPoint, float3 normal, float3 lightDir, int shadowType, uint excludeID)
         {
             float3 shadowOrigin = hitPoint + normal * EPSILON * REFLECTION_BIAS;
             switch (shadowType)
             {
                 case 0: // Hard shadows
-                    return HardShadow(shadowOrigin, lightDir);
+                    return HardShadow(shadowOrigin, lightDir, excludeID);
                 case 1: // Soft shadows
-                    return SoftShadow(shadowOrigin, lightDir);
+                    return SoftShadow(shadowOrigin, lightDir, excludeID);
                 case 2: // Colored shadows
-                    return SoftShadowColored(shadowOrigin, lightDir);
+                    return SoftShadowColored(shadowOrigin, lightDir, excludeID);
+                case 3: // Caustic shadows (refracted transmission + focus)
+                    return CalculateCausticShadow(hitPoint, normal, lightDir, 0, excludeID);
                 default:
-                    return SoftShadow(shadowOrigin, lightDir);
+                    return SoftShadow(shadowOrigin, lightDir, excludeID);
             }
         }
 
@@ -614,7 +631,7 @@ namespace DivisionEngine
         /// </summary>
         private float3 CalculateLighting(float3 hitPoint, float3 geoNormal, float3 finalNormal, float3 viewDir,
             int2 shadowEffects, int shadowType, float specular, float reflectance,
-            float3 baseCol, float metallic, float roughAlpha)
+            float3 baseCol, float metallic, float roughAlpha, uint excludeID)
         {
             float3 totalLight = new float3(0f);
 
@@ -633,7 +650,7 @@ namespace DivisionEngine
                     if (NoL <= 0f) continue;
 
                     // Shadows
-                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType);
+                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID);
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
                         finalNormal, baseCol, metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
 
@@ -655,7 +672,7 @@ namespace DivisionEngine
 
                     // Calculate shadow for point light
                     if (shadowEffects.y != 0 && distance < light.radius * 2f)
-                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType);
+                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID);
 
                     // Apply shadow to the entire BRDF result
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
@@ -751,7 +768,7 @@ namespace DivisionEngine
         /// Recursion budget (how many glass objects it'll pass through) shrinks with traceDepth,
         /// so this stays cheap when called from reflection/refraction bounces.
         /// </summary>
-        private float3 CalculateCausticShadow(float3 hitPoint, float3 normal, float3 lightDir, int traceDepth)
+        private float3 CalculateCausticShadow(float3 hitPoint, float3 normal, float3 lightDir, int traceDepth, uint excludeID)
         {
             float3 p = hitPoint + normal * EPSILON * REFLECTION_BIAS;
             float3 dir = lightDir;
@@ -768,6 +785,7 @@ namespace DivisionEngine
                 {
                     SDFObjectDTO sdf = sdfObjects[k];
                     if (sdf.shadowEffects.x == 0) continue;
+                    if (sdf.entityID == excludeID) continue;
 
                     float td = sdf.shadowDistances.x;
                     for (int i = 0; i < maxShadowRaySteps; i++)
@@ -794,6 +812,13 @@ namespace DivisionEngine
                 float3 entryPoint = p + dir * hitDepth;
                 float3 segAtten = CausticTransmit(entryPoint, dir, hitSdf, out float3 exitPoint, out float3 exitDir);
                 attenuation *= segAtten;
+
+                // Caustics: light that the glass bends appreciably is being focused, so boost the
+                // transmitted radiance by the amount of bending. Cheap stand-in for a photon
+                // caustic map - one multiply per refracted segment.
+                float bend = math.saturate(1f - math.dot(dir, exitDir));
+                attenuation *= 1f + bend * 2f;
+
                 if (attenuation.x + attenuation.y + attenuation.z < MIN_THROUGHPUT) return new float3(0f);
 
                 p = exitPoint + exitDir * EPSILON * 4f;
@@ -1232,7 +1257,7 @@ namespace DivisionEngine
             if (sdf.aoValues.x > 0f) aoValue = math.lerp(1f, CalculateAO(hitPoint, normal, sdf.entityID, sdf.aoValues), sdf.aoValues.x);
 
             float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
-                new int2(sdf.shadowEffects.x, 0), sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha);
+                new int2(sdf.shadowEffects.x, 0), sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha, sdf.entityID);
             float3 ambientLight = ambientBase * aoValue;
             finalColor += ambientLight + directLight;
             return finalColor;
@@ -1321,8 +1346,11 @@ namespace DivisionEngine
                 }
 
                 float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
-                    sdf.shadowEffects, sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha);
-                if (math.length(directLight) > 0.5f) aoValue = math.length(directLight);
+                    sdf.shadowEffects, sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha, sdf.entityID);
+                // Ambient is scaled by AO only. The previous line overwrote aoValue with the
+                // *direct* light magnitude whenever it exceeded 0.5, which made ambient jump back
+                // up exactly where the shadow term pulled directLight down: a bright band hugging
+                // the penumbra ("lighter area outside the shadow"). It also let ambient exceed 1.
                 float3 ambientLight = ambientBase * aoValue;
 
                 if (bounce == 0) surfaceColor = directLight;
@@ -1547,7 +1575,7 @@ namespace DivisionEngine
                         if (math.length(worldData[0].mainLightDir) > 0f)
                         {
                             float3 shadowOrigin = hitPoint + normal * EPSILON * REFLECTION_BIAS;
-                            shadowColor = SoftShadow(shadowOrigin, worldData[0].mainLightDir);
+                            shadowColor = SoftShadow(shadowOrigin, worldData[0].mainLightDir, uint.MaxValue);
                         }
                     }
                     outputTexture[pixel] = new float4(shadowColor, 1);
@@ -1587,6 +1615,7 @@ namespace DivisionEngine
         #endregion main
     }
 }
+
 
 
 

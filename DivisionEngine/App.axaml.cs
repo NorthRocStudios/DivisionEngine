@@ -67,16 +67,19 @@ namespace DivisionEngine.Editor
         /// <remarks>
         /// Compilation can run on the render thread or the background preload task, so
         /// the message is marshalled onto the UI thread before it reaches the console.
+        /// Takes the severity by name so the bridge does not depend on which namespace
+        /// DivisionCompute's <c>ShaderLogLevel</c> lives in (the sibling checkout and the
+        /// NuGet package differ).
         /// </remarks>
-        private static void ForwardShaderCompileLog(ShaderLogLevel level, string message)
+        private static void ForwardShaderCompileLog(string severity, string message)
         {
             void Write()
             {
                 // Attribute the entry to the compiler rather than to this forwarder.
-                LogLevel logLevel = level switch
+                LogLevel logLevel = severity switch
                 {
-                    ShaderLogLevel.Error => LogLevel.Error,
-                    ShaderLogLevel.Warning => LogLevel.Warning,
+                    "Error" => LogLevel.Error,
+                    "Warning" => LogLevel.Warning,
                     _ => LogLevel.Info,
                 };
                 Debug.Log(message, logLevel, "DivisionShaderCompiler.cs", "CompileHLSL", 0);
@@ -120,7 +123,7 @@ namespace DivisionEngine.Editor
 
                 // DivisionCompute shader compilation messages go to the editor console
                 // next to the rest of the engine's logs.
-                DivisionShaderCompiler.Log += ForwardShaderCompileLog;
+                DivisionShaderCompiler.Log += (level, message) => ForwardShaderCompileLog(level.ToString(), message);
 
                 // Settings are automatically loaded when Instance is first accessed
                 EditorSettings settings = EditorSettings.Instance;

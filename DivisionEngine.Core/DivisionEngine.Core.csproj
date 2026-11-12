@@ -20,13 +20,16 @@
     <DivisionComputeProject Condition="'$(DivisionComputeProject)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj')">$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj</DivisionComputeProject>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(DivisionComputeProject)' != ''">
+    <ProjectReference Include="$(DivisionComputeProject)" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(DivisionComputeProject)' == ''">
     <PackageReference Include="NorthRoc.DivisionCompute" Version="0.4.0" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
-    <PackageReference Include="NorthRoc.DivisionCompute" Version="0.4.0" />
     <PackageReference Include="NorthRoc.DivisionMath" Version="0.3.0" />
     <PackageReference Include="NVorbis" Version="0.10.5" />
     <PackageReference Include="Silk.NET" Version="2.23.0" />

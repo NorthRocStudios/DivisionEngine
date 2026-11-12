@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -16,7 +16,7 @@ namespace DivisionEngine.Components.SDFs.Effects
     {
         public enum ShadowType
         {
-            Hard = 0, Soft = 1, Colored = 2,
+            Hard = 0, Soft = 1, Colored = 2, Caustic = 3,
         }
 
         /// <summary>

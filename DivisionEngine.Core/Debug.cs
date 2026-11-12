@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -107,11 +107,13 @@ namespace DivisionEngine
     {
         private static readonly Debug instance = new Debug();
         private readonly List<LogEntry> debugLog = [];
+        private readonly Lock logLock = new();
         private readonly Lock fileLock = new();
         private readonly string logFilePath;
         private readonly string logDirectoryPath;
         private const int MAX_LOG_FILE_SIZE_MB = 50; // Maximum size before rotating
         private const int MAX_LOG_FILES = 5; // Number of rotated log files to keep
+        private const int MAX_LOG_ENTRIES = 5000; // In-memory history cap
         private bool headerWritten = false;
 
         /// <summary>
@@ -120,9 +122,19 @@ namespace DivisionEngine
         public static event Action<LogEntry>? OnLogUpdate;
 
         /// <summary>
-        /// Read only list of all logs stored in the debug system.
+        /// Snapshot of all logs stored in the debug system.
         /// </summary>
-        public static IReadOnlyList<LogEntry> Logs => instance.debugLog;
+        /// <remarks>
+        /// Returns a copy taken under the log lock: log entries are appended from the render
+        /// thread and background tasks while the console enumerates this list on the UI thread.
+        /// </remarks>
+        public static IReadOnlyList<LogEntry> Logs
+        {
+            get
+            {
+                lock (instance.logLock) return [.. instance.debugLog];
+            }
+        }
 
         /// <summary>
         /// Whether file logging is enabled.
@@ -365,20 +377,32 @@ namespace DivisionEngine
             // Write to file
             instance.WriteToFile(entry.ToFileString());
 
-            // Add to in-memory log
-            instance.debugLog.Add(entry);
+            // Add to in-memory log (locked: written from every thread, read by the UI)
+            lock (instance.logLock)
+            {
+                instance.debugLog.Add(entry);
+                if (instance.debugLog.Count > MAX_LOG_ENTRIES)
+                    instance.debugLog.RemoveRange(0, instance.debugLog.Count - MAX_LOG_ENTRIES);
+            }
+
             OnLogUpdate?.Invoke(entry);
         }
 
         /// <summary>
         /// Clears all debug logs.
         /// </summary>
-        public static void ClearLogs() => instance.debugLog.Clear();
+        public static void ClearLogs()
+        {
+            lock (instance.logLock) instance.debugLog.Clear();
+        }
 
         /// <summary>
         /// Removes a specific log entry.
         /// </summary>
-        public static void ClearLog(LogEntry e) => instance.debugLog.Remove(e);
+        public static void ClearLog(LogEntry e)
+        {
+            lock (instance.logLock) instance.debugLog.Remove(e);
+        }
 
         /// <summary>
         /// Gets the path to the current log file.
