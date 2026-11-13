@@ -10,12 +10,14 @@ using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Effects;
 using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.Denoising;
+using DivisionEngine.Rendering.VoxelSDF;
 using DivisionEngine.Settings;
 using DivisionEngine.Systems;
 using Silk.NET.Input;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using System.Diagnostics;
+using Vortice.D3DCompiler;
 using System.Runtime.InteropServices;
 using Window = Silk.NET.Windowing.Window;
 
@@ -154,6 +156,9 @@ namespace DivisionEngine.Rendering
         private StructuredBuffer<TerrainDTO>? terrainMetadataBuffer;
         private bool rebuildTerrainBuffer = true;
 
+        // Voxelized SDF path
+        private VoxelClipmapRenderer? voxelClipmap;
+
         // Post-processing storage
         private RWTexture2D<float4>? fxaaInputTex;
 
@@ -182,6 +187,30 @@ namespace DivisionEngine.Rendering
         /// Is checkerboard rendering enabled (renders half the pixels each frame).
         /// </summary>
         public static bool CheckerboardRenderingEnabled => !DeterministicCapture && (EngineSettings.Instance?.CheckerboardRendering ?? false);
+
+        /// <summary>
+        /// Optional runtime override for the voxel rendering toggle. CLI test hooks use
+        /// this so a headless run never rewrites the user's persisted settings.
+        /// </summary>
+        public static bool? VoxelModeOverride { get; set; }
+
+        /// <summary>Optional runtime override for the voxel grid resolution.</summary>
+        public static int? VoxelResolutionOverride { get; set; }
+
+        /// <summary>True when the voxelized SDF path should render this frame.</summary>
+        public static bool VoxelRenderingEnabled =>
+            VoxelModeOverride ?? (EngineSettings.Instance?.VoxelSdfRendering ?? false);
+
+        /// <summary>Grid points along each axis of a voxel clipmap level.</summary>
+        public static int VoxelGridResolution =>
+            VoxelResolutionOverride ?? (EngineSettings.Instance?.VoxelGridResolution ?? 96);
+
+        /// <summary>Maximum newly baked cells processed per frame while streaming.</summary>
+        public static int VoxelUpdateCellBudget =>
+            EngineSettings.Instance?.VoxelUpdateCellBudget ?? VoxelClipmapRenderer.DefaultCellBudget;
+
+        /// <summary>The voxel clipmap renderer owned by this pipeline, if it has run.</summary>
+        public VoxelClipmapRenderer? VoxelClipmap => voxelClipmap;
 
         /// <summary>
         /// Number of frames that finished rendering. Used by the editor to defer
@@ -636,7 +665,7 @@ namespace DivisionEngine.Rendering
 
             try
             {
-                shader = Context!.CompileShader(shaderType);
+                shader = CompileShaderWithFlags(shaderType);
             }
             finally
             {
@@ -649,6 +678,29 @@ namespace DivisionEngine.Rendering
                        (compileTimer.ElapsedMilliseconds > 5000 ? " (compiled, not a cache hit)" : string.Empty));
             shaders[shaderType] = shader;
             return shader;
+        }
+
+        /// <summary>
+        /// Compiles a shader through the explicit translation/compile path. The voxel
+        /// raymarch shader explicitly requests O3 because D3DCompiler's O1 default for
+        /// this shader produced a much slower runtime. The O3 bytecode is cached, so
+        /// the long first compile is paid only once.
+        /// </summary>
+        private DivisionShader CompileShaderWithFlags(Type shaderType)
+        {
+            if (shaderType != typeof(VoxelSDFShader3D))
+                return Context!.CompileShader(shaderType);
+
+            HLSLTranslationResult translation = Context!.Compiler.TranslateShader(shaderType);
+            if (!translation.IsSuccess)
+                throw new InvalidOperationException(translation.ErrorMessage);
+
+            HLSLCompilationResult compilation = DivisionShaderCompiler.CompileHLSL(
+                translation, ShaderFlags.OptimizationLevel3);
+            if (!compilation.IsSuccess)
+                throw new InvalidOperationException(compilation.DebugMessage);
+
+            return Context.CreateShader(compilation, shaderType);
         }
 
         /// <summary>
@@ -665,6 +717,11 @@ namespace DivisionEngine.Rendering
                 foreach (DivisionShader shader in shaders.Values)
                     shader.Dispose();
                 shaders.Clear();
+
+                // The clipmap owns its own bake shader and grid textures; drop them
+                // so the next frame rebuilds both against fresh code.
+                voxelClipmap?.Dispose();
+                voxelClipmap = null;
 
                 // The post-processing shader may have been the one that failed before.
                 divisionPostUnavailable = false;
@@ -750,18 +807,24 @@ namespace DivisionEngine.Rendering
         /// <param name="height">Render height in pixels</param>
         /// <param name="frames">Number of frames to measure</param>
         /// <param name="warmupFrames">Frames rendered before measuring (shader/JIT warmup)</param>
-        public BenchmarkResult Benchmark(int width, int height, int frames, int warmupFrames = 10)
+        /// <param name="cameraMovePerFrame">Optional world-space X movement applied before each frame.</param>
+        public BenchmarkResult Benchmark(int width, int height, int frames, int warmupFrames = 10,
+            float cameraMovePerFrame = 0f)
         {
             EnsureContext();
             if (boundWorld == null) BindCurrentWorld();
             if (boundWorld == null) throw new InvalidOperationException("No world is loaded to benchmark.");
 
             for (int i = 0; i < warmupFrames; i++)
+            {
+                if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
                 RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+            }
 
             double[] times = new double[frames];
             for (int i = 0; i < frames; i++)
             {
+                if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
                 Stopwatch sw = Stopwatch.StartNew();
                 RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
                 sw.Stop();
@@ -776,6 +839,19 @@ namespace DivisionEngine.Rendering
             double median = times[frames / 2];
             double p95 = times[Math.Min(frames - 1, (int)(frames * 0.95))];
             return new BenchmarkResult(width, height, frames, average, median, p95);
+        }
+
+        private void MoveActiveCamera(float deltaX)
+        {
+            if (boundWorld == null) return;
+            foreach ((uint id, Transform transform) in boundWorld.QueryData<Transform>())
+            {
+                if (!boundWorld.HasComponent<Camera>(id)) continue;
+                Camera? camera = boundWorld.GetComponent<Camera>(id);
+                if (camera is not { isActive: true }) continue;
+                transform.position += new float3(deltaX, 0f, 0f);
+                return;
+            }
         }
 
         #endregion benchmark
@@ -1152,10 +1228,6 @@ namespace DivisionEngine.Rendering
                         rebuildTerrainBuffer = false;
                     }
 
-                    // Dispatch SDF compute shader
-                    int outputMode = 0;
-                    if ((int)CurrentDebugMode > 3) outputMode = (int)CurrentDebugMode - 3;
-
                     // Checkerboard rendering toggle
                     int checkerboardEnabled = CheckerboardRenderingEnabled ? 1 : 0;
                     int dispatchWidth, dispatchHeight;
@@ -1172,24 +1244,69 @@ namespace DivisionEngine.Rendering
 
                     // Quickly update the world data buffer
                     SDFRenderSystem.UploadWorldData(Context!);
-                    DivisionShader sdfShader = GetShader(typeof(SDFShader3D));
-                    sdfShader.SetFloat("width", texWidth);
-                    sdfShader.SetFloat("height", texHeight);
-                    sdfShader.SetFloat("aspect", texWidth / (float)texHeight);
-                    sdfShader.SetInt("frameCount", TimeSystem.FrameCount);
-                    sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
-                    sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
-                    sdfShader.SetStructuredBuffer("worldData", SDFRenderSystem.WorldDataBuffer!);
-                    sdfShader.SetRWTexture2D("outputTexture", renderTex!);
-                    sdfShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
-                    sdfShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
-                    sdfShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
-                    sdfShader.SetStructuredBuffer("lights", lightsBuffer);
-                    sdfShader.SetBuffer("textureData", textureBuffer!);
-                    sdfShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
-                    sdfShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
-                    sdfShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
-                    sdfShader.Dispatch2D(sdfShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
+
+                    // The voxel path needs non-empty bindings even for scenes without
+                    // textures or terrain. The exact path has always relied on these
+                    // dummy buffers being created during the terrain rebuild.
+                    if (textureBuffer == null) textureBuffer = Context!.CreateBuffer<uint>(new uint[1]);
+                    if (textureMetaBuffer == null) textureMetaBuffer = Context!.CreateStructuredBuffer(new TextureMetadata[1]);
+                    if (terrainHeightBuffer == null) terrainHeightBuffer = Context!.CreateBuffer<float>(new float[1]);
+                    if (terrainMetadataBuffer == null) terrainMetadataBuffer = Context!.CreateStructuredBuffer(new TerrainDTO[1]);
+
+                    bool voxelFrame = VoxelRenderingEnabled;
+                    if (voxelFrame)
+                    {
+                        voxelClipmap ??= new VoxelClipmapRenderer();
+                        voxelFrame = voxelClipmap.Update(
+                            Context!, worldDTO, sdfObjDTO, sdfObjBuffer,
+                            terrainHeightBuffer!, terrainMetadataBuffer!,
+                            TerrainSystem.DataVersion, VoxelGridResolution,
+                            VoxelUpdateCellBudget);
+                    }
+
+                    if (voxelFrame)
+                    {
+                        DivisionShader voxelShader = GetShader(typeof(VoxelSDFShader3D));
+                        voxelShader.SetFloat("width", texWidth);
+                        voxelShader.SetFloat("height", texHeight);
+                        voxelShader.SetFloat("aspect", texWidth / (float)texHeight);
+                        voxelShader.SetInt("frameCount", TimeSystem.FrameCount);
+                        voxelShader.SetInt("debugMode", (int)CurrentDebugMode);
+                        voxelShader.SetInt("enableCheckerboard", checkerboardEnabled);
+                        voxelClipmap!.Bind(voxelShader);
+                        voxelShader.SetStructuredBuffer("worldData", SDFRenderSystem.WorldDataBuffer!);
+                        voxelShader.SetRWTexture2D("outputTexture", renderTex!);
+                        voxelShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
+                        voxelShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
+                        voxelShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
+                        voxelShader.SetStructuredBuffer("lights", lightsBuffer);
+                        voxelShader.SetBuffer("textureData", textureBuffer!);
+                        voxelShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
+                        voxelShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
+                        voxelShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
+                        voxelShader.Dispatch2D(voxelShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
+                    }
+                    else
+                    {
+                        DivisionShader sdfShader = GetShader(typeof(SDFShader3D));
+                        sdfShader.SetFloat("width", texWidth);
+                        sdfShader.SetFloat("height", texHeight);
+                        sdfShader.SetFloat("aspect", texWidth / (float)texHeight);
+                        sdfShader.SetInt("frameCount", TimeSystem.FrameCount);
+                        sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
+                        sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
+                        sdfShader.SetStructuredBuffer("worldData", SDFRenderSystem.WorldDataBuffer!);
+                        sdfShader.SetRWTexture2D("outputTexture", renderTex!);
+                        sdfShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
+                        sdfShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
+                        sdfShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
+                        sdfShader.SetStructuredBuffer("lights", lightsBuffer);
+                        sdfShader.SetBuffer("textureData", textureBuffer!);
+                        sdfShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
+                        sdfShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
+                        sdfShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
+                        sdfShader.Dispatch2D(sdfShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
+                    }
                 }
 
                 RWTexture2D<float4>? currentTexture = renderTex;
@@ -1708,6 +1825,8 @@ namespace DivisionEngine.Rendering
             textureMetaBuffer?.Dispose();
             terrainHeightBuffer?.Dispose();
             terrainMetadataBuffer?.Dispose();
+            voxelClipmap?.Dispose();
+            voxelClipmap = null;
             if (disposeInputContext)
             {
                 inputContext?.Dispose(); // Rare null reference error here

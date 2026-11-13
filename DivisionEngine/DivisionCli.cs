@@ -67,6 +67,7 @@ namespace DivisionEngine.Editor
                     case "shadowtest": return ShadowTest.Run(args);
                     case "skyprobe": return RunSkyProbe();
                     case "shot": return RunShot(args);
+                    case "voxeltest": return VoxelSdfTest.Run(args);
                     case "help":
                     case "--help":
                     case "-h": PrintHelp(); return true;
@@ -117,11 +118,13 @@ namespace DivisionEngine.Editor
             int height = GetInt(args, "--height", 720);
             int frames = GetInt(args, "--frames", 120);
             int warmup = GetInt(args, "--warmup", 10);
+            float move = GetFloat(args, "--move", 0f);
 
             if (width <= 0 || height <= 0 || frames <= 0)
                 throw new ArgumentException("--width, --height and --frames must be positive.");
 
-            Console.WriteLine($"divisioncli bench: {width}x{height}, {frames} frames (+{warmup} warmup)");
+            Console.WriteLine($"divisioncli bench: {width}x{height}, {frames} frames (+{warmup} warmup, move={move:F3})");
+            ApplyVoxelOptions(args);
             WarnIfShaderCacheCold();
 
             WorldManager.CreateDefaultWorld(makeCurrent: true);
@@ -140,11 +143,11 @@ namespace DivisionEngine.Editor
                 throw new InvalidOperationException("Failed to bind the current world.");
 
             ApplyTestRenderOptions(args);
-            RenderPipeline.BenchmarkResult result = pipeline.Benchmark(width, height, frames, warmup);
+            RenderPipeline.BenchmarkResult result = pipeline.Benchmark(width, height, frames, warmup, move);
 
             Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{{\"width\":{0},\"height\":{1},\"frames\":{2},\"avgMs\":{3:F3},\"medianMs\":{4:F3},\"p95Ms\":{5:F3},\"fps\":{6:F2}}}",
-                result.Width, result.Height, result.Frames,
+                "{{\"width\":{0},\"height\":{1},\"frames\":{2},\"move\":{3:F3},\"avgMs\":{4:F3},\"medianMs\":{5:F3},\"p95Ms\":{6:F3},\"fps\":{7:F2}}}",
+                result.Width, result.Height, result.Frames, move,
                 result.AverageMs, result.MedianMs, result.P95Ms, result.Fps));
 
             ExitCode = 0;
@@ -186,6 +189,24 @@ namespace DivisionEngine.Editor
                 }
             }
 
+            string position = GetString(args, "--pos", "");
+            if (!string.IsNullOrWhiteSpace(position))
+            {
+                string[] parts = position.Split(',');
+                if (parts.Length == 3 &&
+                    float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float px) &&
+                    float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float py) &&
+                    float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float pz))
+                {
+                    foreach ((uint id, Transform transform) in world.QueryData<Transform>())
+                    {
+                        if (!world.HasComponent<Camera>(id)) continue;
+                        transform.position = new float3(px, py, pz);
+                        break;
+                    }
+                }
+            }
+
             string look = GetString(args, "--look", "");
             if (!string.IsNullOrWhiteSpace(look))
             {
@@ -207,6 +228,7 @@ namespace DivisionEngine.Editor
                 }
             }
 
+            ApplyVoxelOptions(args);
             RenderPipeline pipeline = new();
             pipeline.BindCurrentWorld();
             pipeline.CurrentDebugMode = (RenderPipeline.DebugMode)debugMode;
@@ -450,6 +472,8 @@ namespace DivisionEngine.Editor
                 Commands:
                   bench     Render frames offscreen and report frame times
                             Options: --width N --height N --frames N --warmup N
+                                     --voxel --voxel-resolution N
+                                     --move N  (translate the camera N units per frame)
                   compare   Compare two PNG renders per channel (golden-image gate)
                             Options: --a <golden.png> --b <candidate.png> [--tolerance N] [--diff file.png]
                   compute   DivisionCompute tooling (see --cli compute help)
@@ -462,10 +486,14 @@ namespace DivisionEngine.Editor
                             Options: --scene soft|colored  (colored checks glass tints combine)
                                      --caustics  also render/compare the caustic shadow style
                   skyprobe  Print environment sun/atmosphere values for the default world
+                  voxeltest Run the world-stable clipmap regression test; exits 1 on failure
+                            Options: --width N --height N --resolution N (32-128)
                   shot      Render one frame to a PNG
-                            Options: --sky <solid|gradient|hdri|procedural> --look x,y,z --out file --width N --height N
+                            Options: --sky <solid|gradient|hdri|procedural> --pos x,y,z --look x,y,z --out file --width N --height N
                                      --fixed-frame N --seed N  (deterministic capture)
-                                     --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels)
+                                     --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels, 10 = LOD levels)
+                                     --voxel --voxel-resolution N  (de-voxelized SDF path)
+                                     --no-voxel                   (force the exact SDF path)
                                      --no-checkerboard --no-post --no-denoise --no-fxaa
                                      --reload-shaders  (drop compiled shaders mid-capture)
                   help      Show this message
@@ -487,6 +515,19 @@ namespace DivisionEngine.Editor
         /// `--effects` turns on a fixed set of post-processing effects for the first
         /// camera, and `--bloom` includes the (nondeterministic) bloom effect.
         /// </summary>
+        /// <summary>
+        /// Applies the headless voxel-mode switches. Using the runtime overrides keeps
+        /// CLI runs from rewriting the user's persisted engine settings.
+        /// </summary>
+        private static void ApplyVoxelOptions(string[] args)
+        {
+            if (HasFlag(args, "--voxel")) RenderPipeline.VoxelModeOverride = true;
+            else if (HasFlag(args, "--no-voxel")) RenderPipeline.VoxelModeOverride = false;
+            else RenderPipeline.VoxelModeOverride = null;
+
+            RenderPipeline.VoxelResolutionOverride = GetOptionalInt(args, "--voxel-resolution");
+        }
+
         private static void ApplyTestRenderOptions(string[] args)
         {
             // --no-post disables every post-processing stage (denoisers, FXAA and the
@@ -578,6 +619,15 @@ namespace DivisionEngine.Editor
             int index = Array.IndexOf(args, name);
             if (index >= 0 && index + 1 < args.Length &&
                 int.TryParse(args[index + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+                return value;
+            return fallback;
+        }
+
+        private static float GetFloat(string[] args, string name, float fallback)
+        {
+            int index = Array.IndexOf(args, name);
+            if (index >= 0 && index + 1 < args.Length &&
+                float.TryParse(args[index + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
                 return value;
             return fallback;
         }

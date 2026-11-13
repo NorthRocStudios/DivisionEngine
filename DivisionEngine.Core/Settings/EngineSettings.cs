@@ -90,6 +90,51 @@ namespace DivisionEngine.Settings
             set => Set(nameof(CheckerboardRendering), value);
         }
 
+        /// <summary>Raised whenever <see cref="VoxelSdfRendering"/> changes.</summary>
+        public static event Action? VoxelRenderingChanged;
+
+        /// <summary>
+        /// When true, the renderer rebuilds the scene SDF into a voxel grid and traces
+        /// the trilinearly reconstructed ("de-voxelized") surface instead of evaluating
+        /// the exact scene SDF at every ray step. Toggling is live; the next frame uses
+        /// the other path.
+        /// </summary>
+        [JsonIgnore]
+        public bool VoxelSdfRendering
+        {
+            get => Get(nameof(VoxelSdfRendering), false);
+            set
+            {
+                bool changed = Get(nameof(VoxelSdfRendering), false) != value;
+                Set(nameof(VoxelSdfRendering), value);
+                if (changed) VoxelRenderingChanged?.Invoke();
+            }
+        }
+
+        /// <summary>
+        /// Number of grid points along each axis of a clipmap level. The cell size is
+        /// derived from this so higher values preserve finer detail at the cost of
+        /// memory and bake time.
+        /// </summary>
+        [JsonIgnore]
+        public int VoxelGridResolution
+        {
+            get => Get(nameof(VoxelGridResolution), 96);
+            set => Set(nameof(VoxelGridResolution), math.clamp(value, 32, 128));
+        }
+
+        /// <summary>
+        /// Maximum number of newly baked voxel cells processed per frame. Shells
+        /// produced by camera motion and object edits are spread across frames using
+        /// this budget; a static scene queues no work.
+        /// </summary>
+        [JsonIgnore]
+        public int VoxelUpdateCellBudget
+        {
+            get => Get(nameof(VoxelUpdateCellBudget), 2_000_000);
+            set => Set(nameof(VoxelUpdateCellBudget), math.clamp(value, 100_000, 8_000_000));
+        }
+
         [JsonIgnore]
         public int MaxFPS
         {

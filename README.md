@@ -97,6 +97,75 @@ Open **View → Examples → SDF Playground (Example)** to try the example graph
 DivisionEngine.Editor.exe --cli nodetest
 ```
 
+## Voxelized SDF Rendering
+
+Division Engine can render the same scene through either the exact SDF or a
+world-stable voxel clipmap. Flip the **Voxel SDF** toggle in the main toolbar (or
+enable **Voxel SDF Rendering** in the Settings window) to switch live; the next
+frame uses the other path. The regular ray-marched path is unchanged and remains
+the default.
+
+The voxel path combines the de-voxelization approach from [Ray Tracing of Signed
+Distance Function Grids](https://jcgt.org/published/0011/03/06/paper-lowres.pdf)
+with the nested-grid LOD idea from Hoppe's [Geometry
+Clipmaps](https://hhoppe.com/geomclipmap.pdf), the same structure Mike Turitzin
+describes in his engine video:
+
+- Four nested levels use power-of-two cell sizes. Each level is stored in a
+  3D atlas and addressed toroidally by **absolute world cell index**, so
+  moving the camera changes only which window is active, not where the voxels
+  are. A sub-cell camera move does not shift or rebake anything.
+- Rendering trilinearly reconstructs the de-voxelized surface and blends adjacent
+  levels across a transition band. The nearest level is chosen from camera
+  distance; normals are computed analytically from the trilinear patch.
+- Updates are incremental and asynchronous. A moving camera only queues the
+  newly exposed L-shaped shell; a moved SDF object only queues the levels/cells
+  its old and new bounds touch. The queue is drained under a per-frame cell
+  budget (2,000,000 cells by default) so streaming does not turn into a full
+  rebake on every frame.
+- A static scene queues no work at all. The first voxel frame primes all four
+  levels once; after that, a fast camera can outrun the finer levels, which crop
+  to their currently-ready region while the renderer falls back to a coarser
+  level or the exact SDF until the shell arrives.
+- Rays that leave all ready levels fall back to the exact scene SDF, which keeps
+  infinite planes and distant terrain correct.
+
+The clipmap is a pragmatic middle ground between a dense grid and a full sparse
+voxel octree. An SVO would remove more empty storage, but dynamic node updates,
+neighbour stitching, and GPU pointer traversal are substantially more complex;
+the toroidal regular grids already give world stability, incremental updates,
+and LOD with a much smaller implementation surface. Sparse brick allocation per
+level remains a possible future optimization.
+
+The voxel path currently supports the core material, lighting, shadow,
+reflection, and single-object refraction features. Refraction is a single-object
+approximation (caustic shadowing is not reproduced), texture normal maps are not
+applied, and procedural skies fall back to the gradient sky. Its simplified
+lighting model can also be slightly darker than the exact path. The first voxel
+frame compiles the large de-voxelization shader with D3DCompiler's O3 pass; this
+can take several minutes once, after which it is read from the shader cache.
+Increase **Voxel Grid Resolution** for finer cells (at the cost of memory and
+initial bake time), and tune **Voxel Update Budget** for faster or gentler
+streaming.
+
+Command-line tests:
+
+```bash
+# Static stability, sub-cell stability, cell-boundary streaming, object edits,
+# teleport recovery, and exact/voxel image validity
+DivisionEngine.Editor.exe --cli voxeltest
+
+# One deterministic voxel screenshot
+DivisionEngine.Editor.exe --cli shot --voxel --fixed-frame 2 --out voxel.png
+
+# Colour each pixel by the clipmap level that supplied its hit surface
+DivisionEngine.Editor.exe --cli shot --voxel --debug-mode 10 --fixed-frame 2 --out levels.png
+
+# Compare static or moving-camera performance against the exact path
+DivisionEngine.Editor.exe --cli bench --voxel --move 0.4 --frames 60
+DivisionEngine.Editor.exe --cli bench --no-voxel --move 0.4 --frames 60
+```
+
 ### What about the planned marketplace?
 
 In the future there will be a Division Engine marketplace, completely separate with its own terms. The engine remains free and GPL-licensed. The marketplace will be where creators can buy/sell assets, projects, etc. with revenue supporting ongoing development.

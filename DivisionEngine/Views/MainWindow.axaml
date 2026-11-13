@@ -157,6 +157,18 @@
                     <TextBlock x:Name="GameModeText" Text="Editing" FontSize="11" FontWeight="Bold" 
                                Foreground="#888" VerticalAlignment="Center"/>
                 </Border>
+
+                <!-- Renderer Path Toggle -->
+                <ToggleButton x:Name="VoxelToggle" Height="28" Margin="12,0,0,0" Padding="8,0"
+                              Background="#222" BorderThickness="0,0,0,2" BorderBrush="#111"
+                              CornerRadius="4" Cursor="Hand"
+                              ToolTip.Tip="Toggle between exact SDF ray marching and the world-stable de-voxelized SDF clipmap">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <icons:MaterialIcon x:Name="VoxelIcon" Kind="CubeOutline" Width="14" Height="14" Foreground="#888"/>
+                        <TextBlock x:Name="VoxelText" Text="Voxel SDF (Preview)" FontSize="11" FontWeight="SemiBold" Foreground="#888"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
             </StackPanel>
         </Border>
     </StackPanel>

@@ -18,6 +18,7 @@ using DivisionEngine.Editor.ViewModels;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects;
+using DivisionEngine.Settings;
 using Material.Icons;
 using Material.Icons.Avalonia;
 using System;
@@ -354,6 +355,36 @@ namespace DivisionEngine.Editor
                 PauseButton.Click += (_, _) => UpdatePlayControlsUI();
             }
             AdvanceFrameButton?.Click += AdvanceFrameButton_Click;
+
+            if (VoxelToggle != null)
+            {
+                VoxelToggle.IsChecked = EngineSettings.Instance.VoxelSdfRendering;
+                VoxelToggle.IsCheckedChanged += (_, _) =>
+                {
+                    EngineSettings.Instance.VoxelSdfRendering = VoxelToggle.IsChecked ?? false;
+                    UpdateVoxelToggleUI();
+                };
+                EngineSettings.VoxelRenderingChanged += () => Dispatcher.UIThread.Post(UpdateVoxelToggleUI);
+                UpdateVoxelToggleUI();
+            }
+        }
+
+        /// <summary>
+        /// Reflects the live voxel/exact renderer choice in the toolbar toggle.
+        /// </summary>
+        private void UpdateVoxelToggleUI()
+        {
+            bool enabled = EngineSettings.Instance.VoxelSdfRendering;
+            if (VoxelToggle != null && VoxelToggle.IsChecked != enabled)
+                VoxelToggle.IsChecked = enabled;
+
+            bool on = enabled;
+            if (VoxelText != null)
+                VoxelText.Foreground = on ? EditorColor.FromRGB(180, 255, 60) : EditorColor.FromRGB(136, 136, 136);
+            if (VoxelIcon != null)
+                VoxelIcon.Foreground = on ? EditorColor.FromRGB(180, 255, 60) : EditorColor.FromRGB(136, 136, 136);
+            if (VoxelToggle != null)
+                VoxelToggle.BorderBrush = on ? EditorColor.FromRGB(120, 180, 30) : EditorColor.FromRGB(17, 17, 17);
         }
 
         /// <summary>

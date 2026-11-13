@@ -98,7 +98,7 @@ namespace DivisionEngine.Editor
                             Options: --filter <text>
                   compile   Translate and compile shaders; fails on any error
                             Options: --filter <text> --hlsl <dir> --print-hlsl --verbose
-                                     --translate-only --skip-opt --opt1
+                                     --translate-only --skip-opt --opt1 --opt2 --opt3
                             Compiled bytecode is cached under %LOCALAPPDATA%\DivisionEngine\ShaderCache;
                             set DIVISION_DISABLE_SHADER_CACHE=1 to always recompile.
                   selftest  Run probe shaders and compare GPU output with the CPU reference
@@ -238,6 +238,8 @@ namespace DivisionEngine.Editor
             ShaderFlags compileFlags = ShaderFlags.None;
             if (HasFlag(args, "--skip-opt")) compileFlags = ShaderFlags.SkipOptimization;
             else if (HasFlag(args, "--opt1")) compileFlags = ShaderFlags.OptimizationLevel1;
+            else if (HasFlag(args, "--opt2")) compileFlags = ShaderFlags.OptimizationLevel2;
+            else if (HasFlag(args, "--opt3")) compileFlags = ShaderFlags.OptimizationLevel3;
 
             // Translation-only runs skip D3DCompile: useful while iterating on a
             // shader and when dumping HLSL for external analysis.

@@ -141,6 +141,10 @@ public partial class SettingsWindow : EditorWindow
         AddBoolSetting("Fullscreen", settings.Fullscreen, val => settings.Fullscreen = val);
         AddBoolSetting("VSync", settings.VSync, val => settings.VSync = val);
         AddBoolSetting("Checkerboard Rendering", settings.CheckerboardRendering, val => settings.CheckerboardRendering = val);
+        AddBoolSetting("Voxel SDF Rendering", settings.VoxelSdfRendering, val => settings.VoxelSdfRendering = val);
+        AddIntSetting("Voxel Grid Resolution", settings.VoxelGridResolution, 32, 128, val => settings.VoxelGridResolution = val);
+        AddFloatSetting("Voxel Update Budget (Mcells)", settings.VoxelUpdateCellBudget / 1_000_000f, 0.1f, 8f,
+            val => settings.VoxelUpdateCellBudget = (int)(val * 1_000_000f));
         AddIntSetting("Max FPS (0 = unlimited)", settings.MaxFPS, 0, 1024, val => settings.MaxFPS = val);
         AddBoolSetting("Auto Recompile On Script Change", settings.AutoRecompileOnScriptChange, val => settings.AutoRecompileOnScriptChange = val);
         AddBoolSetting("Reload World On Recompile", settings.ReloadWorldOnRecompile, val => settings.ReloadWorldOnRecompile = val);

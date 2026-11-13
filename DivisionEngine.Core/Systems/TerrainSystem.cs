@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -36,6 +36,13 @@ namespace DivisionEngine.Systems
         /// Called when terrain data is updated.
         /// </summary>
         public static event Action? UpdatedTerrainData;
+
+        /// <summary>
+        /// Incremented whenever <see cref="AllTerrainData"/> is rebuilt. The voxel
+        /// grid uses it as part of its scene hash so a terrain rebuild invalidates
+        /// the baked grid.
+        /// </summary>
+        public static int DataVersion { get; private set; }
 
         public override void Render()
         {
@@ -79,6 +86,7 @@ namespace DivisionEngine.Systems
             {
                 AllTerrainData = [.. allData];
                 AllTerrainMetadata = [.. allMeta];
+                DataVersion++;
                 UpdatedTerrainData?.Invoke();
             }
         }
