@@ -34,17 +34,16 @@ namespace DivisionEngine.Editor
     /// </summary>
     public partial class MainWindow : Window
     {
-        // All available windows per tab group are defined here
-        private readonly List<(string AvaiableTabGroups, Type ViewModelType)> AvailableWindows =
-        [
-            ("left,right,center,bottom", typeof(WorldWindowViewModel)),
-            ("left,right,center,bottom", typeof(EnvironmentWindowViewModel)),
-            ("left,right,center,bottom", typeof(AssetsWindowViewModel)),
-            ("left,right,center,bottom", typeof(ConsoleWindowViewModel)),
-            ("left,right,center,bottom", typeof(PropertiesWindowViewModel)),
-            ("left,right,center,bottom", typeof(SettingsWindowViewModel)),
-            ("left,right,center,bottom", typeof(DeveloperWindowViewModel)),
-        ];
+        // Single source of truth for the View menu and each panel's add-window menu.
+        private sealed record WindowCatalogEntry(
+            Type ViewModelType,
+            string Title,
+            MaterialIconKind Icon,
+            string AllowedTabGroups,
+            string DefaultTabGroup,
+            bool IsExample);
+
+        private readonly List<WindowCatalogEntry> WindowCatalog = [];
 
         // Bottom nav bar vars
         private static Flyout? tasksFlyout;
@@ -67,6 +66,8 @@ namespace DivisionEngine.Editor
             InitializeComponent(); // Initialize the main window components
             if (DataContext is MainWindowViewModel vm) vm.RequestClose = Close;
             AttachContextMenus();
+            BuildWindowCatalog();
+            SetupViewMenu();
             SetupUniversalProgressBar(); // Build editor task system UI
             SetupAddButtons();
             SetupPlayControls();
@@ -79,6 +80,125 @@ namespace DivisionEngine.Editor
         {
             ProjectManager.ProjectLoaded += OnProjectLoaded;
             ProjectManager.ProjectClosing += OnProjectClosing;
+        }
+
+        /// <summary>
+        /// Builds the catalog of editor windows used by the View menu and by each
+        /// tab group's add-window flyout. The default tab group is the panel the View
+        /// menu opens the window in; allowed groups determine where it can be added
+        /// with a plus button.
+        /// </summary>
+        private void BuildWindowCatalog()
+        {
+            AddWindow<WorldWindowViewModel>("left,right,center,bottom", "left");
+            AddWindow<EnvironmentWindowViewModel>("left,right,center,bottom", "center");
+            AddWindow<AssetsWindowViewModel>("left,right,center,bottom", "bottom");
+            AddWindow<ConsoleWindowViewModel>("left,right,center,bottom", "bottom");
+            AddWindow<PropertiesWindowViewModel>("left,right,center,bottom", "right");
+            AddWindow<SettingsWindowViewModel>("left,right,center,bottom", "right");
+            AddWindow<DeveloperWindowViewModel>("left,right,center,bottom", "bottom");
+            AddWindow<SdfPlaygroundExampleViewModel>("center", "center", isExample: true);
+        }
+
+        private void AddWindow<T>(string allowedTabGroups, string defaultTabGroup, bool isExample = false)
+            where T : EditorWindowViewModel, new()
+        {
+            T window = new();
+            WindowCatalog.Add(new WindowCatalogEntry(
+                typeof(T), window.Title, window.Icon, allowedTabGroups, defaultTabGroup, isExample));
+        }
+
+        /// <summary>
+        /// Fills the View menu from the shared window catalog. Regular editor windows
+        /// are listed directly; example windows are grouped under an Examples submenu
+        /// so they are clearly demonstrations rather than production tools.
+        /// </summary>
+        private void SetupViewMenu()
+        {
+            ViewMenu.Items.Clear();
+
+            foreach (WindowCatalogEntry entry in WindowCatalog)
+            {
+                if (entry.IsExample) continue;
+                ViewMenu.Items.Add(CreateWindowMenuItem(entry));
+            }
+
+            List<WindowCatalogEntry> examples = WindowCatalog.Where(entry => entry.IsExample).ToList();
+            if (examples.Count == 0) return;
+
+            ViewMenu.Items.Add(new Separator());
+            MenuItem examplesMenu = new()
+            {
+                Header = CreateWindowMenuHeader("Examples", MaterialIconKind.FlaskOutline),
+                Foreground = EditorColor.FromRGB(200, 200, 200),
+            };
+            foreach (WindowCatalogEntry example in examples)
+                examplesMenu.Items.Add(CreateWindowMenuItem(example));
+            ViewMenu.Items.Add(examplesMenu);
+        }
+
+        private MenuItem CreateWindowMenuItem(WindowCatalogEntry entry)
+        {
+            MenuItem item = new()
+            {
+                Header = CreateWindowMenuHeader(entry.Title, entry.Icon),
+                Foreground = EditorColor.FromRGB(200, 200, 200),
+            };
+            item.Click += (_, _) => OpenOrFocusWindow(entry);
+            return item;
+        }
+
+        private static StackPanel CreateWindowMenuHeader(string title, MaterialIconKind icon)
+        {
+            StackPanel header = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
+            header.Children.Add(new MaterialIcon
+            {
+                Kind = icon,
+                Width = 14,
+                Height = 14,
+                Foreground = EditorColor.FromRGB(180, 180, 180),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            header.Children.Add(new TextBlock
+            {
+                Text = title,
+                FontSize = 12,
+                Foreground = EditorColor.FromRGB(200, 200, 200),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            return header;
+        }
+
+        /// <summary>
+        /// Opens a window from the View menu. If that window type is already open,
+        /// focuses the existing tab instead of creating a duplicate.
+        /// </summary>
+        private void OpenOrFocusWindow(WindowCatalogEntry entry)
+        {
+            if (DataContext is not MainWindowViewModel vm) return;
+
+            EditorWindowViewModel? existing = vm.CenterTabs
+                .Concat(vm.LeftTabs)
+                .Concat(vm.RightTabs)
+                .Concat(vm.BottomTabs)
+                .FirstOrDefault(window => entry.ViewModelType.IsInstanceOfType(window));
+
+            if (existing is not null)
+            {
+                FocusTab(vm, existing);
+                return;
+            }
+
+            if (Activator.CreateInstance(entry.ViewModelType) is not EditorWindowViewModel window) return;
+            vm.AddWindowToPanel(window, entry.DefaultTabGroup);
+        }
+
+        private static void FocusTab(MainWindowViewModel vm, EditorWindowViewModel tab)
+        {
+            if (vm.CenterTabs.Contains(tab)) vm.SelectedCenterTab = tab;
+            else if (vm.LeftTabs.Contains(tab)) vm.SelectedLeftTab = tab;
+            else if (vm.RightTabs.Contains(tab)) vm.SelectedRightTab = tab;
+            else if (vm.BottomTabs.Contains(tab)) vm.SelectedBottomTab = tab;
         }
 
         private void OnProjectLoaded() => Dispatcher.UIThread.Post(async () => await LoadEditorLayoutFromProjectAsync());
@@ -438,14 +558,12 @@ namespace DivisionEngine.Editor
             };
 
             StackPanel stackPanel = new StackPanel();
-            foreach (var (AvaiableTabGroups, ViewModelType) in AvailableWindows)
+            foreach (WindowCatalogEntry entry in WindowCatalog)
             {
-                if (!AvaiableTabGroups.Contains(panelType, StringComparison.InvariantCultureIgnoreCase)) continue;
+                if (!entry.AllowedTabGroups.Contains(panelType, StringComparison.InvariantCultureIgnoreCase)) continue;
 
-                // Create a temporary instance to get window info
-                EditorWindowViewModel? tempInstance = Activator.CreateInstance(ViewModelType) as EditorWindowViewModel;
-                string windowTitle = tempInstance?.Title ?? ViewModelType.Name.Replace("WindowViewModel", "");
-                MaterialIconKind windowIcon = tempInstance?.Icon ?? MaterialIconKind.DatabaseEdit;
+                string windowTitle = entry.Title;
+                MaterialIconKind windowIcon = entry.Icon;
 
                 StackPanel menuPanel = new StackPanel
                 {
@@ -476,7 +594,7 @@ namespace DivisionEngine.Editor
                 menuPanel.Children.Add(menuIcon);
                 menuPanel.Children.Add(menuLabel);
 
-                Type viewModelType = ViewModelType; // Store the type locally to avoid closure issues
+                Type viewModelType = entry.ViewModelType; // Store the type locally to avoid closure issues
                 menuPanel.PointerPressed += (s, e) =>
                 {
                     if (DataContext is MainWindowViewModel vm &&

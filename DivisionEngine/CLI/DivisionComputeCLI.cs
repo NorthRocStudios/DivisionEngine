@@ -29,7 +29,6 @@ using DivisionEngine.Graphics;
 using Vortice.D3DCompiler;
 using DivisionEngine.MathLib;
 using SkiaSharp;
-using Vortice.Direct3D11;
 using Vortice.DXGI;
 using M2 = DivisionEngine.MathLib.float2;
 using M3 = DivisionEngine.MathLib.float3;

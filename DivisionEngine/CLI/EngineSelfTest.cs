@@ -7,8 +7,6 @@
 //
 using DivisionEngine.Components;
 using DivisionEngine.Editor.Undo;
-using DivisionEngine.MathLib;
-using DivisionEngine.Projects;
 using DivisionEngine.Projects.Assets;
 using DivisionEngine.Serialization;
 using System;

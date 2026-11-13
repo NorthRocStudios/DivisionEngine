@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -7,19 +7,24 @@
 //
 namespace DivisionEngine.Nodes.Math
 {
-    public class FloatNode : Node
+    /// <summary>
+    /// A constant float value.
+    /// </summary>
+    [NodeMenuItem("Input/Float", Description = "A constant float value.", Icon = "Numeric")]
+    public sealed class FloatNode : Node
     {
-        public float Value { get; set; }
+        /// <summary>Value produced by the node.</summary>
+        [NodeProperty(DisplayName = "Value", Step = 0.1)]
+        public float Value { get; set; } = 1f;
 
+        /// <summary>Creates a float constant node.</summary>
         public FloatNode()
         {
             Name = "Float";
-            Value = 0f;
+            AddOutput<float>("Value", "The constant value.");
         }
 
-        public override object? Evaluate()
-        {
-            return Value;
-        }
+        /// <inheritdoc />
+        public override object? Evaluate(NodeEvaluationContext context, NodePort? output) => Value;
     }
 }

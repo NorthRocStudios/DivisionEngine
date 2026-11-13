@@ -34,6 +34,9 @@
     <DataTemplate DataType="{x:Type local:ViewModels.DeveloperWindowViewModel}">
       <local:DeveloperWindow/>
     </DataTemplate>
+    <DataTemplate DataType="{x:Type local:ViewModels.SdfPlaygroundExampleViewModel}">
+      <local:NodeEditorWindow/>
+    </DataTemplate>
   </Window.DataTemplates>
 
   <!--Main Window-->
@@ -105,6 +108,7 @@
             <MenuItem Header="Debug" Command="{Binding ApplyDebugLayoutCommand}" Foreground="#ccc"/>
         </MenuItem>
             <!--Other Menus-->
+        <MenuItem x:Name="ViewMenu" Header="View" Foreground="#ccc"/>
         <MenuItem Header="Logs" Foreground="#ccc">
             <MenuItem Header="Open Log Directory" Command="{Binding OpenLogDirectoryCommand}" Foreground="#ccc"/>
             <MenuItem Header="Open Current Log File" Command="{Binding OpenLogFileCommand}" Foreground="#ccc"/>

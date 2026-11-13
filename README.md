@@ -21,7 +21,7 @@ Picture this:
 - SDF-based rendering
 - GPU compute acceleration in C#
 - Open source
-- ECS backend, fast data handling
+- ECS data-oriented setup
 - Convenient editor tooling
 
 ## What Are SDFs?
@@ -52,6 +52,20 @@ Tutorials by Inigo Quilez (Not sponsored, just useful for learning constructive 
 - Build a 3D landscape: https://youtu.be/BFld4EBO2RE?si=EASXvq-ez2qBOIHN
 - Paint a 3D character with math: https://youtu.be/8--5LwHRhjk?si=fH9QwvCz6dLptHE1
 
+## Editor Preview Screenshots:
+
+Reflective Menger Sponge:
+<img width="1919" height="1031" alt="Screenshot 2026-11-09 021502" src="https://github.com/user-attachments/assets/6044d156-ba3c-4a32-a943-e6a2c83050a9" />
+
+Reflective and Refractive Glass Objects:
+<img width="1919" height="1029" alt="Screenshot 2026-02-12 015857" src="https://github.com/user-attachments/assets/7fe0f9b6-5a65-4160-ad74-874034a14ee6" />
+
+Texturing System:
+<img width="1919" height="1029" alt="Screenshot 2026-07-18 013607" src="https://github.com/user-attachments/assets/86c5ae53-8e12-4164-98dd-418f4ff5bae1" />
+
+Multiple Workflows:
+<img width="1919" height="1028" alt="Screenshot 2026-09-02 020709" src="https://github.com/user-attachments/assets/353f6bb6-527a-4336-99b2-01b55e936383" />
+
 ## License:
 Division Engine is free and open-source software licensed under **GNU General Public License v3.0 (GPL 3.0)**
 
@@ -73,29 +87,19 @@ Yes, you can use Division Engine commercially! The engine is free for any use.
 
 *The only requirement*: If you distribute a modified version of the engine itself (not your game assets or code), those modifications must be shared under GPL 3.0.
 
+## Node Editor
+
+The editor ships with a reusable node graph window (`NodeEditorWindow` plus `NodeEditorWindowViewModel`) for building graph-based tools. It supports typed input/output ports, live node previews, inline value editing, drag-to-connect wiring, pan/zoom, undo/redo, search and context-menu node creation, and JSON graph serialization.
+
+Open **View → Examples → SDF Playground (Example)** to try the example graph. The View menu lists every editor window; the **+** button on each panel lists only the windows relevant to that panel. To build a new editor (geometry, materials, procedural audio, and so on), derive a view model from `NodeEditorWindowViewModel`, seed a `NodeGraph`, and optionally override `CreateNodeViewModel` for custom node visuals. New node types are registered with `[NodeMenuItem(...)]` and can be validated headlessly with:
+
+```bash
+DivisionEngine.Editor.exe --cli nodetest
+```
+
 ### What about the planned marketplace?
 
 In the future there will be a Division Engine marketplace, completely separate with its own terms. The engine remains free and GPL-licensed. The marketplace will be where creators can buy/sell assets, projects, etc. with revenue supporting ongoing development.
 
 **In short:** You can build anything with Division Engine - free games, commercial games, modded versions - as long as any distributed version (including modified versions) remains under GPL 3.0 with source code available.
 *Full license terms are available in [LICENSE.txt](LICENSE.txt)*
-
-## Editor Preview Screenshots:
-
-Extreme Scale:
-<img width="1919" height="1031" alt="Screenshot 2026-11-09 021502" src="https://github.com/user-attachments/assets/6044d156-ba3c-4a32-a943-e6a2c83050a9" />
-
-High Quality Effects:
-<img width="1919" height="1029" alt="Screenshot 2026-02-12 015857" src="https://github.com/user-attachments/assets/7fe0f9b6-5a65-4160-ad74-874034a14ee6" />
-
-Texturing System:
-<img width="1919" height="1029" alt="Screenshot 2026-07-18 013607" src="https://github.com/user-attachments/assets/86c5ae53-8e12-4164-98dd-418f4ff5bae1" />
-
-Multiple Workflows:
-<img width="1919" height="1028" alt="Screenshot 2026-09-02 020709" src="https://github.com/user-attachments/assets/353f6bb6-527a-4336-99b2-01b55e936383" />
-
-## Sponsor
-
-If you find Division Engine useful, consider supporting development:
-
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Rex-J-W)

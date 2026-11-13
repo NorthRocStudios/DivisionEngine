@@ -7,7 +7,6 @@
 //
 using DivisionEngine.Editor.Settings;
 using DivisionEngine.Editor.Tasks;
-using DivisionEngine.Graphics;
 using DivisionEngine.Rendering;
 using Material.Icons;
 using System;

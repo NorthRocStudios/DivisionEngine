@@ -592,6 +592,7 @@ namespace DivisionEngine.Editor.ViewModels
                 "World" => new WorldWindowViewModel(),
                 "Settings" => new SettingsWindowViewModel(),
                 "Developer" => new DeveloperWindowViewModel(),
+                "NodeGraphDemo" or "SdfPlaygroundExample" => new SdfPlaygroundExampleViewModel(),
                 _ => null
             };
 

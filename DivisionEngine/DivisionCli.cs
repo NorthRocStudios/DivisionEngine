@@ -17,7 +17,6 @@ using SkiaSharp;
 using DivisionEngine.Components.Lights;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Rendering;
-using DivisionEngine.Settings;
 
 namespace DivisionEngine.Editor
 {
@@ -63,6 +62,7 @@ namespace DivisionEngine.Editor
                     case "compare": return RunCompare(args);
                     case "compute": return DivisionComputeCLI.TryRun(args);
                     case "info": return RunInfo();
+                    case "nodetest": return NodeGraphTest.Run(args);
                     case "selftest": return EngineSelfTest.Run();
                     case "shadowtest": return ShadowTest.Run(args);
                     case "skyprobe": return RunSkyProbe();
@@ -454,6 +454,8 @@ namespace DivisionEngine.Editor
                             Options: --a <golden.png> --b <candidate.png> [--tolerance N] [--diff file.png]
                   compute   DivisionCompute tooling (see --cli compute help)
                   info      Print engine/runtime information
+                  nodetest  Run headless node graph model checks (registry, typed connections,
+                            evaluation, cycle rejection, serialization); exits 1 on failure
                   selftest  Run headless regression checks (locale serialization, snapshots,
                             undo, matrix accessors, terrain noise); exits 1 on any failure
                   shadowtest  Render a shadow scene and verify it numerically; exits 1 on failure

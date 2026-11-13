@@ -21,7 +21,6 @@ using DivisionEngine.Components.SDFs.Effects;
 using DivisionEngine.Editor.Systems;
 using DivisionEngine.Editor.Undo;
 using DivisionEngine.MathLib;
-using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects;
 using DivisionEngine.Projects.Assets;
 using DivisionEngine.Projects.Scripting;

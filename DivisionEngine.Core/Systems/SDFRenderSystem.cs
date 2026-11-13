@@ -16,7 +16,6 @@ using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects.Assets;
 using DivisionEngine.Rendering;
-using System.Diagnostics.CodeAnalysis;
 using Environment = DivisionEngine.Components.Environment;
 
 namespace DivisionEngine.Systems

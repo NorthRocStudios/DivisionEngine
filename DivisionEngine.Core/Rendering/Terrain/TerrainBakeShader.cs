@@ -6,7 +6,6 @@
 // project root for full license terms.
 //
 using DivisionEngine.Graphics;
-using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.ShaderUtilities;
 
 namespace DivisionEngine.Rendering.Terrain

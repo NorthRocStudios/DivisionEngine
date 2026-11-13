@@ -9,18 +9,14 @@ using DivisionEngine.Graphics;
 using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Effects;
 using DivisionEngine.MathLib;
-using DivisionEngine.Rendering.AntiAliasing;
 using DivisionEngine.Rendering.Denoising;
-using DivisionEngine.Rendering.Effects;
 using DivisionEngine.Settings;
 using DivisionEngine.Systems;
 using Silk.NET.Input;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
-using M4 = DivisionEngine.MathLib.float4;
 using Window = Silk.NET.Windowing.Window;
 
 namespace DivisionEngine.Rendering
