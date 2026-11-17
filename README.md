@@ -69,13 +69,13 @@ Multiple Workflows:
 ## License:
 Division Engine is free and open-source software licensed under **GNU General Public License v3.0 (GPL 3.0)**
 
-#### You may:
+#### You May:
 - Use it for any purpose (commercial or non-commercial)
 - Modify it to fit your needs
 - Distribute copies to others
 - Sell it (but see requirements below)
 
-#### You must:
+#### You Must:
 - Include the original copyright notice
 - State significant changes you make
 - Disclose source when you distribute
@@ -103,7 +103,14 @@ Division Engine can render the same scene through either the exact SDF or a
 world-stable voxel clipmap. Flip the **Voxel SDF** toggle in the main toolbar (or
 enable **Voxel SDF Rendering** in the Settings window) to switch live; the next
 frame uses the other path. The regular ray-marched path is unchanged and remains
-the default.
+the default; voxel rendering is **off by default** (settings written by older
+builds are migrated to off once).
+
+The voxel shaders are deliberately **not** precompiled by the editor's background
+shader preload. They are the largest shaders in the engine (the de-voxelization
+shader is built with D3DCompiler's O3 pass and can take several minutes), so they
+compile lazily on the first frame where the voxel path is actually enabled. A
+normal editor session never pays that cost.
 
 The voxel path combines the de-voxelization approach from [Ray Tracing of Signed
 Distance Function Grids](https://jcgt.org/published/0011/03/06/paper-lowres.pdf)
@@ -142,8 +149,9 @@ reflection, and single-object refraction features. Refraction is a single-object
 approximation (caustic shadowing is not reproduced), texture normal maps are not
 applied, and procedural skies fall back to the gradient sky. Its simplified
 lighting model can also be slightly darker than the exact path. The first voxel
-frame compiles the large de-voxelization shader with D3DCompiler's O3 pass; this
-can take several minutes once, after which it is read from the shader cache.
+frame compiles the large de-voxelization shader with D3DCompiler's O3 pass in the
+background (the editor stays responsive while it runs); this can take several
+minutes once, after which it is read from the shader cache.
 Increase **Voxel Grid Resolution** for finer cells (at the cost of memory and
 initial bake time), and tune **Voxel Update Budget** for faster or gentler
 streaming.
@@ -216,7 +224,7 @@ single-sample trace for those pixels: their silhouettes stay aliased, but their
 fine detail is preserved. CTSS applies to the exact SDF renderer, not the voxel
 clipmap.
 
-### Measured results
+### Measured Results
 
 Quality gate (`--cli ctsstest`, 640x360, 4x-SSAA reference, reflections and
 refractions disabled to isolate geometric edges):
@@ -244,9 +252,15 @@ with GPU clocks; the table uses the median of repeated 60-frame runs after a
 warm-up. The None path still carries a little of the larger shader's register
 cost, which is why CTSS is the recommended exact-SDF anti-aliasing choice.
 
-The first optimized shader compile takes about 15 minutes on this machine
-(roughly 4 minutes unoptimized); it is cached on disk and later runs start in
-under a second.
+The exact-SDF raymarcher is compiled in two stages so a cold cache never blocks
+the editor. A fast (unoptimized) variant compiles on a worker thread first and is
+swapped in after a couple of seconds; the renderer then compiles the optimized
+variant in the background and swaps it in when it is ready. The optimized compile
+is still slow (about 15 minutes on this machine, and the inlined terrain sampler
+makes it slower than the pre-terrain shader), but it no longer freezes the UI.
+Both variants are cached on disk, so later launches get the fast variant from the
+cache and swap to the optimized one almost immediately. Set
+`DIVISION_SDF_SHADER_OD=1` to skip the background optimized pass while iterating.
 
 Cone-edge detection runs in a separate small kernel that writes a mask; the main
 SDF kernel reads an SRV copy. That keeps `None`/`FXAA` on their original register
@@ -254,7 +268,146 @@ budget. Multi-kernel shaders require DivisionCompute to emit explicit
 `register(tN/uN)` slots (the translator change lives in the sibling
 `DivisionTranslate/DivisionCompute` checkout this project builds against).
 
-### What about the planned marketplace?
+## Terrain System
+
+Terrains are height fields evaluated directly inside the SDF raymarcher. The terrain
+solid's surface is `y = height(x, z)`, so it has no triangle edges, its normals come
+from the analytic gradient, and it can be intersected with every other SDF in the
+scene. A terrain sample stores height **and** both slope components, which is what
+makes the cubic reconstruction and the shading cheap.
+
+### Procedural Erosion
+
+The base height is a three-octave gradient-noise FBM (the `noised` field also returns
+analytic derivatives). On top of it, the terrain applies **Rune Skovbo Johansen's
+"Advanced Terrain Erosion Filter"** — the stacked faded gully technique from
+[the Shadertoy](https://www.shadertoy.com/view/wXcfWn) and
+[the video](https://www.youtube.com/watch?v=r4V21_uUK8Y)
+([blog post](https://blog.runevision.com/2026/03/fast-and-gorgeous-erosion-filter.html)).
+It layers directional Phacelle-noise gullies over the slope field, octave by octave,
+and masks each new octave by the previous one, so the result has branching drainage
+networks, crisp interlocking ridges and creases, and a ridge map that can be used for
+drainage/vegetation shading. Only Rune's scale-independent parameters are exposed
+(erosion strength, gully weight, detail, scale, octaves, lacunarity, gain, cell scale,
+normalization).
+
+The technique is a *filter*, not a simulation: every point is evaluated in isolation,
+so it is trivially parallel and chunked, which is exactly what the infinite terrain
+needs. The filter is MPL-2.0 licensed; the attribution lives at the top of
+`DivisionEngine.Core/Rendering/Terrain/TerrainRendering.cs`. It derives from Clay
+John's and Fewes' earlier Shadertoys.
+
+### Cubic Heightmap Reconstruction
+
+Each texel stores `(height, dH/dx, dH/dz, ridge)`. The sampler reconstructs the
+surface with **cubic Hermite interpolation** using the stored analytic slopes as
+tangents, so a sample reads only four texels while still producing a C1 surface with
+smooth silhouettes and normals. A bilinear mode is available for comparison.
+
+Reconstruction error against the source function (mean absolute height error over a
+sweep of random sample positions): bilinear **0.0897**, cubic Hermite **0.0050**,
+Catmull-Rom **0.0071**. Hermite is ~18x more accurate than bilinear at half the fetch
+footprint of the 16-texel Catmull-Rom kernel.
+
+### Fixed and Infinite Terrains
+
+`SDFTerrain.infinite` selects the mode:
+
+- **Fixed** (`infinite = false`) bakes one heightmap on the GPU whenever the component
+  changes. The height field is clipped to a square prism, so the sides read as a
+  layered rock cross-section instead of an infinitely thin sheet. The map resolution
+  and filtering mode are configurable, so a 512-texel map with cubic reconstruction
+  is smooth where a 2048-texel bilinear map used to show facets.
+- **Infinite** (`infinite = true`) streams a quadtree cut of heightmap chunks around
+  the camera. Each LOD level is a square grid of world-aligned chunks; a chunk always
+  occupies the same storage slot, so moving the camera only replaces the chunks that
+  enter the grid (no buffer shifting). Every slot carries the identity of the chunk it
+  holds, so a stale slot is detected and never sampled. The LOD ring is chosen from
+  camera distance with power-of-two chunk sizes.
+
+Chunks are baked on background worker threads (`bakeThreads`) and uploaded at most
+`chunksPerFrame` per frame through ranged `UpdateSubresource` patches, so streaming
+never rebuilds the whole heightmap buffer. A chunk that has not arrived yet falls back
+to the next coarser level; outside every loaded ring a flat sea-level plane keeps the
+world solid, and the outermost ring fades to it so the clipmap never ends in a cliff.
+
+Terrain also participates in **its own shadows and ambient occlusion**. The engine's
+AO approximates occlusion with the second-closest object, which by design cannot
+occlude an object with itself; a height field needs self-occlusion most of all. The
+terrain therefore marches its own SDF in the shadow ray (with a larger ray bias to
+avoid acne) and derives an ambient self-occlusion term from the baked ridge map
+(creases shadowed, ridges exposed). Without these two terms eroded mountains read as
+flat and washed out regardless of the heightmap detail.
+
+On this machine the full 200-chunk quadtree (8 levels, 24 m level-0 chunks, 80-texel
+chunks) streams in about **1.4 s** on four bake threads, and the CPU and GPU heightmap
+bakes agree to within **0.001 m**. The GPU-side layout and LOD fallback are exercised
+by a CPU mirror of the sampler in the terrain tests.
+
+### CLI
+
+```bash
+# Height-field/erosion reference images and a ray-marched preview (no GPU needed)
+DivisionEngine.Editor.exe --cli terrain image --out terrain-images
+DivisionEngine.Editor.exe --cli terrain preview --out terrain.png --grid 1024
+
+# Unit checks: height bounds, Hermite accuracy/continuity, chunk seams,
+# quadtree slot stability, buffer sampling and LOD fallback
+DivisionEngine.Editor.exe --cli terrain unit
+
+# Compare the GPU bake shader against the CPU bake
+DivisionEngine.Editor.exe --cli terrain gputest --chunk 64
+
+# CPU bake throughput
+DivisionEngine.Editor.exe --cli terrain bench --chunk 96
+
+# Deterministic terrain capture (fixed or streaming quadtree). Infinite captures
+# pre-warm the quadtree first so screenshots are fully streamed; pass --no-prewarm
+# to capture mid-streaming instead. --diagnostics prints the GPU metadata, chunk
+# table and sampled heights.
+DivisionEngine.Editor.exe --cli terrain shot --fixed-frame 3 --out terrain-fixed.png
+DivisionEngine.Editor.exe --cli terrain shot --infinite --fixed-frame 3 --out terrain-infinite.png
+```
+
+Measured unit-test results: all 11 terrain checks pass; bilinear reconstruction
+error 0.0897 vs cubic Hermite 0.0050 and Catmull-Rom 0.0071; adjacent chunk seams
+match exactly; the GPU bake differs from the CPU bake by at most 0.00095 m; the
+sampled fixed terrain matches the analytic height field to 0.000 m (mean) with no
+missing samples.
+
+Terrains are exposed through the **SDFTerrain** component (bounds, height, frequency,
+filtering, erosion and quadtree settings) and appear in the Add menu as
+**Terrain**. The default world ships a fixed terrain; create a new terrain and enable
+**Infinite** to stream one that follows the camera.
+
+### Limitations
+
+- Infinite terrain LOD rings currently switch levels without geometric blending, so a
+  very distant ring boundary can show a small step in the silhouette. The LOD distance
+  also includes the camera's height above the terrain, so an aerial camera selects a
+  coarser ring than its XZ offset alone would suggest.
+- At grazing aerial angles the finest LOD rings can show fine comb-like shading in the
+  reconstructed surface. The height field itself is continuous; the likely cause is
+  the Hermite slope channel's small first-derivative discontinuity at cell boundaries
+  (the stored Z-slope is only C0 in X). Sampling the height derivative from the SDF
+  gradient instead of using the stored slope channel, or a C1 slope reconstruction,
+  is the planned fix.
+- The infinite quadtree is a camera-centred cut with fixed power-of-two rings rather
+  than a per-node screen-space error metric; occlusion culling and a sparse node set
+  are future work.
+- Terrain overhangs and caves are not supported by a height field; the planned 3D
+  overhang work in the Trello board would need an additional volume layer.
+- Non-uniform terrain scaling and pitch/roll rotation are not handled specially; use
+  uniform scale and yaw-only rotation.
+- The terrain sampler is inlined into the raymarcher, so the optimized SDF shader
+  takes several minutes to compile. The renderer compiles a fast variant on a worker
+  thread first and renders immediately, then compiles the optimized variant in the
+  background and swaps it in when ready; both are cached afterwards. Set
+  `DIVISION_SDF_SHADER_OD=1` to skip the background optimized pass while iterating.
+- Self-shadowing and self-occlusion are terrain-specific; other objects still use the
+  engine's existing second-object AO approximation and do not self-shadow.
+
+### What About the Planned Marketplace?
 
 In the future there will be a Division Engine marketplace, completely separate with its own terms. The engine remains free and GPL-licensed. The marketplace will be where creators can buy/sell assets, projects, etc. with revenue supporting ongoing development.
 

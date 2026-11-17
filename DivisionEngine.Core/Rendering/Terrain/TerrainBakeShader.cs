@@ -6,56 +6,61 @@
 // project root for full license terms.
 //
 using DivisionEngine.Graphics;
+using DivisionEngine.MathLib;
 using DivisionEngine.Rendering.ShaderUtilities;
 
 namespace DivisionEngine.Rendering.Terrain
 {
+    /// <summary>
+    /// Bakes one heightmap chunk (fixed terrain or one quadtree LOD node) into
+    /// packed terrain data. The height function lives in
+    /// <see cref="TerrainRendering"/> and is shared with the CPU fallback used by
+    /// the asynchronous chunk streamer, so GPU and CPU chunks agree.
+    /// </summary>
     [Shader]
     public struct TerrainBakeShader
     {
-        // Uniforms: plain fields are packed into the b0 constant buffer.
-        public int2 resolution;
-        public float size;
-        public float heightScale;
-        public float frequency;
-        public int octaves;
-        public float lacunarity;
-        public float persistence;
-        public float ridgeBlend;
-        public float ridgeWeight;
+        /// <summary>Which terrain of <see cref="terrainMetadata"/> to bake.</summary>
+        public int terrainIndex;
 
-        /// <summary>Baked height output.</summary>
-        [ShaderResource] public RWBuffer<float> output;
+        /// <summary>First texel column of the chunk in height-function space.</summary>
+        public float2 chunkOrigin;
 
-        /// <summary>Bakes one heightmap texel per thread.</summary>
+        /// <summary>World size of the chunk at its LOD level.</summary>
+        public float levelSize;
+
+        /// <summary>Texels per chunk side, excluding the 1-texel apron.</summary>
+        public int resolution;
+
+        /// <summary>Texels per stored row, including the 1-texel apron.</summary>
+        public int stride;
+
+        /// <summary>All terrain metadata.</summary>
+        [ShaderResource] public StructuredBuffer<TerrainDTO> terrainMetadata;
+
+        /// <summary>Packed output: (height, dHdX, dHdZ, ridge01) per texel.</summary>
+        [ShaderResource] public RWBuffer<float4> output;
+
+        /// <summary>Bakes one texel per thread.</summary>
         [Kernel(8, 8, 1)]
         public void Execute(uint3 id)
         {
             int2 pixel = new int2((int)id.x, (int)id.y);
-            if (pixel.x >= resolution.x || pixel.y >= resolution.y) return;
+            if (pixel.x >= stride || pixel.y >= stride) return;
 
-            // Map texel to world-space XZ within [-size, size]
-            float2 uv = new float2(pixel.x, pixel.y) / new float2(resolution.x - 1, resolution.y - 1) * 2f - 1f;
-            float2 worldXZ = uv * size;
+            TerrainDTO meta = terrainMetadata[terrainIndex];
 
-            // Sample simplex noise with FBM. FBM2D returns [0,1]; map it once to
-            // [-heightScale/2, +heightScale/2]. (Scaling here *and* below applied
-            // heightScale twice, which made heights grow with heightScale squared.)
-            float noiseValue = SimplexNoise.FBM2D(worldXZ * frequency, octaves, persistence, lacunarity);
+            // Texels -1..resolution are stored (the 1-texel apron lets bicubic
+            // interpolation read the neighbour chunk without a branch at the seam).
+            float2 local = chunkOrigin + (new float2(pixel.x, pixel.y) - 1.0f)
+                / math.max(resolution - 1, 1) * levelSize;
+            float2 worldXZ = local + new float2(meta.position.x, meta.position.z);
 
-            // Optional ridge noise blend
-            //float ridgeValue = 0f;
-            //if (ridgeWeight > 0f)
-            //{
-            //    ridgeValue = SimplexNoise.FBM2D(new float3(worldXZ * frequency, 0f), octaves);
-            //    noiseValue = math.lerp(noiseValue, ridgeValue, ridgeWeight);
-            //}
+            float ridge;
+            float erosion;
+            float4 terrainSample = TerrainRendering.Heightmap(worldXZ, meta, out ridge, out erosion);
 
-            // Scale height: map from [0,1] to [-heightScale/2, heightScale/2]
-            float height = (noiseValue - 0.5f) * heightScale;
-
-            int index = pixel.y * resolution.x + pixel.x;
-            output[index] = height;
+            output[pixel.y * stride + pixel.x] = terrainSample;
         }
     }
 }

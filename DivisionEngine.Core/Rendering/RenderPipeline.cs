@@ -18,6 +18,8 @@ using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
 using System.Diagnostics;
 using Vortice.D3DCompiler;
+using Vortice.Direct3D11;
+using Vortice.Mathematics;
 using System.Runtime.InteropServices;
 using Window = Silk.NET.Windowing.Window;
 
@@ -154,9 +156,11 @@ namespace DivisionEngine.Rendering
         private StructuredBuffer<TextureMetadata>? textureMetaBuffer;
 
         // Terrain storage
-        private Buffer<float>? terrainHeightBuffer;
+        private Buffer<float4>? terrainHeightBuffer;
+        private Buffer<int4>? terrainChunkInfoBuffer;
         private StructuredBuffer<TerrainDTO>? terrainMetadataBuffer;
         private bool rebuildTerrainBuffer = true;
+        private readonly List<(int Offset, int Count)> terrainUploadScratch = [];
 
         // Voxelized SDF path
         private VoxelClipmapRenderer? voxelClipmap;
@@ -167,6 +171,30 @@ namespace DivisionEngine.Rendering
         // Compiled kernels, cached per shader type: compilation is expensive and the
         // shader objects are stateless between dispatches.
         private readonly Dictionary<Type, DivisionShader> shaders = [];
+
+        /// <summary>
+        /// A shader whose CPU/D3DCompile work is running on a worker thread. The D3D
+        /// shader object itself is created on the render thread once the result is
+        /// ready; meanwhile the renderer skips frames instead of stalling the whole
+        /// pipeline (and any UI thread waiting on <see cref="SyncLock"/>).
+        /// </summary>
+        private sealed class PendingShaderCompile
+        {
+            public Task<HLSLCompilationResult?>? Task { get; set; }
+            public long StartedTicks { get; set; }
+        }
+
+        private readonly Dictionary<Type, PendingShaderCompile> pendingShaderCompiles = [];
+        private readonly HashSet<Type> failedShaderCompiles = [];
+        private Task<HLSLCompilationResult?>? optimizedSdfCompileTask;
+        private bool optimizedSdfCompileStarted;
+        private bool usingOptimizedSdfShader;
+
+        /// <summary>
+        /// True while a CLI/offscreen render (which needs a complete frame and has no
+        /// UI to keep responsive) is driving the pipeline.
+        /// </summary>
+        private bool offscreenRendering;
 
         /// <summary>
         /// Rendered pixels buffer.
@@ -639,13 +667,179 @@ namespace DivisionEngine.Rendering
                 if (!System.IO.Directory.Exists(cacheDirectory) ||
                     System.IO.Directory.GetFiles(cacheDirectory).Length == 0)
                 {
-                    Debug.Warning("Renderer: shader cache is empty - the first frame compiles the raymarch " +
-                                  "shader and can take several minutes. Later runs will start quickly.");
+                    Debug.Warning("Renderer: shader cache is empty - the raymarch shader compiles in the " +
+                                  "background on first use; the editor stays responsive. The optimized " +
+                                  "variant is compiled in the background afterwards.");
                 }
             }
             catch
             {
                 // Diagnostics must never prevent startup.
+            }
+        }
+
+        /// <summary>
+        /// Makes sure one of the very large shaders is available before a frame takes
+        /// <see cref="SyncLock"/>. The translation and D3DCompile work runs on a worker
+        /// thread; in the editor (and the windowed player) the frame is skipped while it
+        /// runs so the UI thread never waits minutes on a compile. Headless/offscreen
+        /// callers wait for the result because they need a complete frame.
+        /// </summary>
+        /// <returns>True when the shader is compiled and ready to dispatch.</returns>
+        private bool EnsureShaderReady(Type shaderType, ShaderFlags flags)
+        {
+            PendingShaderCompile pending;
+            lock (SyncLock)
+            {
+                if (shaders.ContainsKey(shaderType))
+                {
+                    if (shaderType == typeof(SDFShader3D)) TrySwapOptimizedSdfShader();
+                    return true;
+                }
+
+                if (failedShaderCompiles.Contains(shaderType)) return false;
+
+                if (!pendingShaderCompiles.TryGetValue(shaderType, out PendingShaderCompile? existing))
+                {
+                    existing = new PendingShaderCompile
+                    {
+                        StartedTicks = Stopwatch.GetTimestamp(),
+                        Task = Task.Run(() => CompileShaderOnWorker(shaderType, flags))
+                    };
+                    pendingShaderCompiles[shaderType] = existing;
+                    Debug.Info($"Renderer: compiling '{shaderType.Name}' in the background");
+                }
+                pending = existing;
+            }
+
+            Task<HLSLCompilationResult?> task = pending.Task!;
+            if (!task.IsCompleted)
+            {
+                // Keep the editor's UI thread responsive: skip this frame and present the
+                // previous one. Only headless/offscreen renders can afford to wait.
+                if (!offscreenRendering) return false;
+                task.Wait();
+            }
+
+            HLSLCompilationResult? compilation = task.Status == TaskStatus.RanToCompletion ? task.Result : null;
+            if (compilation is not { IsSuccess: true })
+            {
+                lock (SyncLock)
+                {
+                    pendingShaderCompiles.Remove(shaderType);
+                    failedShaderCompiles.Add(shaderType);
+                }
+                Debug.Error($"Renderer: '{shaderType.Name}' failed to compile; frames that need it are skipped");
+                return false;
+            }
+
+            try
+            {
+                lock (SyncLock)
+                {
+                    pendingShaderCompiles.Remove(shaderType);
+                    // A reload may have installed a fresh shader while the worker ran.
+                    if (!shaders.ContainsKey(shaderType))
+                        shaders[shaderType] = Context!.CreateShader(compilation, shaderType);
+                }
+
+                double elapsedMs = (Stopwatch.GetTimestamp() - pending.StartedTicks) * 1000.0 / Stopwatch.Frequency;
+                Debug.Info($"Renderer: '{shaderType.Name}' ready in {elapsedMs:F0} ms (background compile)");
+            }
+            catch (Exception ex)
+            {
+                lock (SyncLock)
+                {
+                    pendingShaderCompiles.Remove(shaderType);
+                    failedShaderCompiles.Add(shaderType);
+                }
+                Debug.Error($"Renderer: failed to create the compiled '{shaderType.Name}'", ex);
+                return false;
+            }
+
+            if (shaderType == typeof(SDFShader3D)) StartOptimizedSdfCompile();
+            return true;
+        }
+
+        /// <summary>
+        /// Translates and compiles a shader on a worker thread. Only CPU work happens
+        /// here; creating the D3D shader object stays on the render thread.
+        /// </summary>
+        private static HLSLCompilationResult? CompileShaderOnWorker(Type shaderType, ShaderFlags flags)
+        {
+            try
+            {
+                DivisionShaderCompiler compiler = new();
+                HLSLTranslationResult translation = compiler.TranslateShader(shaderType);
+                if (!translation.IsSuccess)
+                {
+                    Debug.Error($"Renderer: '{shaderType.Name}' translation failed: {translation.ErrorMessage}");
+                    return null;
+                }
+
+                HLSLCompilationResult compilation = DivisionShaderCompiler.CompileHLSL(translation, flags);
+                if (!compilation.IsSuccess)
+                    Debug.Error($"Renderer: '{shaderType.Name}' compilation failed: {compilation.DebugMessage}");
+                return compilation;
+            }
+            catch (Exception ex)
+            {
+                Debug.Error($"Renderer: '{shaderType.Name}' compilation threw", ex);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Starts the one-time optimized compile in the background. The editor renders
+        /// with the fast (unoptimized) variant in the meantime; the optimized shader is
+        /// swapped in when ready and its bytecode is cached for the next launch.
+        /// Set DIVISION_SDF_SHADER_OD=1 to keep the fast variant (dev iteration).
+        /// </summary>
+        private void StartOptimizedSdfCompile()
+        {
+            lock (SyncLock)
+            {
+                if (optimizedSdfCompileStarted || usingOptimizedSdfShader || offscreenRendering) return;
+                if (System.Environment.GetEnvironmentVariable("DIVISION_SDF_SHADER_OD") is "1" or "true") return;
+
+                optimizedSdfCompileStarted = true;
+                Debug.Info("Renderer: compiling the optimized 'SDFShader3D' in the background (one-time; cached afterwards)");
+                optimizedSdfCompileTask = Task.Run(
+                    () => CompileShaderOnWorker(typeof(SDFShader3D), ShaderFlags.None));
+            }
+        }
+
+        /// <summary>
+        /// Swaps the finished optimized SDF shader in. Runs on the render thread before
+        /// the frame's dispatches, so disposing the previous shader is safe.
+        /// </summary>
+        private void TrySwapOptimizedSdfShader()
+        {
+            lock (SyncLock)
+            {
+                if (usingOptimizedSdfShader || optimizedSdfCompileTask is not { IsCompleted: true } task)
+                    return;
+
+                optimizedSdfCompileTask = null;
+                if (task.Status != TaskStatus.RanToCompletion || task.Result is not { IsSuccess: true } compilation)
+                {
+                    Debug.Warning("Renderer: optimized SDF shader compile failed; keeping the fast variant");
+                    return;
+                }
+
+                try
+                {
+                    DivisionShader optimized = Context!.CreateShader(compilation, typeof(SDFShader3D));
+                    if (shaders.TryGetValue(typeof(SDFShader3D), out DivisionShader? previous))
+                        previous.Dispose();
+                    shaders[typeof(SDFShader3D)] = optimized;
+                    usingOptimizedSdfShader = true;
+                    Debug.Info("Renderer: switched to the optimized SDF shader");
+                }
+                catch (Exception ex)
+                {
+                    Debug.Warning("Renderer: failed to switch to the optimized SDF shader; keeping the fast variant", ex);
+                }
             }
         }
 
@@ -665,8 +859,7 @@ namespace DivisionEngine.Rendering
             {
                 announcedShaderCompile = true;
                 previousTitle = RendererWindow?.Title ?? string.Empty;
-                if (RendererWindow != null)
-                    RendererWindow.Title = "Division Engine - compiling shaders";
+                RendererWindow?.Title = "Division Engine - compiling shaders";
             }
 
             Debug.Info($"Renderer: compiling '{shaderType.Name}'");
@@ -754,6 +947,14 @@ namespace DivisionEngine.Rendering
 
                 // The post-processing shader may have been the one that failed before.
                 divisionPostUnavailable = false;
+
+                // Large-shader state: running worker compiles are detached and their
+                // results ignored; the next frame restarts the fast/optimized chain.
+                pendingShaderCompiles.Clear();
+                failedShaderCompiles.Clear();
+                optimizedSdfCompileTask = null;
+                optimizedSdfCompileStarted = false;
+                usingOptimizedSdfShader = false;
             }
 
             Debug.Info($"Render pipeline: dropped {dropped} compiled shader(s) for reload");
@@ -783,9 +984,20 @@ namespace DivisionEngine.Rendering
             if (frameCount < 1) throw new ArgumentOutOfRangeException(nameof(frameCount), "At least one frame must be rendered.");
             if (width < 1 || height < 1) throw new ArgumentOutOfRangeException(nameof(width), "The render resolution must be positive.");
 
-            for (int i = 0; i < frameCount; i++)
-                RenderFrame(fixedDelta, width, height, presentToGL: false);
-            return Pixels;
+            // Offscreen callers need a complete frame: wait for large shaders instead
+            // of skipping frames the way the editor's embedded loop does.
+            bool wasOffscreen = offscreenRendering;
+            offscreenRendering = true;
+            try
+            {
+                for (int i = 0; i < frameCount; i++)
+                    RenderFrame(fixedDelta, width, height, presentToGL: false);
+                return Pixels;
+            }
+            finally
+            {
+                offscreenRendering = wasOffscreen;
+            }
         }
 
         /// <summary>
@@ -799,9 +1011,18 @@ namespace DivisionEngine.Rendering
             if (boundWorld == null) throw new InvalidOperationException("No world is bound.");
 
             // Render a couple of frames so lazily created buffers are warm.
-            RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
-            RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
-            return Pixels;
+            bool wasOffscreen = offscreenRendering;
+            offscreenRendering = true;
+            try
+            {
+                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+                return Pixels;
+            }
+            finally
+            {
+                offscreenRendering = wasOffscreen;
+            }
         }
 
         #region benchmark
@@ -844,20 +1065,29 @@ namespace DivisionEngine.Rendering
             if (boundWorld == null) BindCurrentWorld();
             if (boundWorld == null) throw new InvalidOperationException("No world is loaded to benchmark.");
 
-            for (int i = 0; i < warmupFrames; i++)
-            {
-                if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
-                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
-            }
-
             double[] times = new double[frames];
-            for (int i = 0; i < frames; i++)
+            bool wasOffscreen = offscreenRendering;
+            offscreenRendering = true;
+            try
             {
-                if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
-                Stopwatch sw = Stopwatch.StartNew();
-                RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
-                sw.Stop();
-                times[i] = sw.Elapsed.TotalMilliseconds;
+                for (int i = 0; i < warmupFrames; i++)
+                {
+                    if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
+                    RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+                }
+
+                for (int i = 0; i < frames; i++)
+                {
+                    if (cameraMovePerFrame != 0f) MoveActiveCamera(cameraMovePerFrame);
+                    Stopwatch sw = Stopwatch.StartNew();
+                    RenderFrame(1.0 / 60.0, width, height, presentToGL: false);
+                    sw.Stop();
+                    times[i] = sw.Elapsed.TotalMilliseconds;
+                }
+            }
+            finally
+            {
+                offscreenRendering = wasOffscreen;
             }
 
             Array.Sort(times);
@@ -1083,6 +1313,59 @@ namespace DivisionEngine.Rendering
         /// <param name="texWidth">Rendered frame width</param>
         /// <param name="texWidth">Rendered frame height</param>
         /// <param name="presentToGL">Whether or not to render to a Silk.NET OpenGL target</param>
+        /// <summary>
+        /// Uploads streamed heightmap chunks, the chunk identity table and the
+        /// per-frame terrain metadata. Called every frame; it is a no-op when
+        /// nothing changed.
+        /// </summary>
+        private void UpdateTerrainBuffers()
+        {
+            if (Context == null || terrainHeightBuffer == null || terrainChunkInfoBuffer == null
+                || terrainMetadataBuffer == null || TerrainSystem.AllTerrainData == null
+                || TerrainSystem.AllTerrainChunkInfo == null || TerrainSystem.AllTerrainMetadata == null)
+                return;
+
+            // Empty scenes bind one dummy element; compare against the dummy-adjusted
+            // sizes so they do not trigger a rebuild every frame.
+            int heightCount = System.Math.Max(1, TerrainSystem.AllTerrainData.Length);
+            int chunkInfoCount = System.Math.Max(1, TerrainSystem.AllTerrainChunkInfo.Length);
+            int metadataCount = System.Math.Max(1, TerrainSystem.AllTerrainMetadata.Length);
+
+            if (terrainHeightBuffer.Length != heightCount
+                || terrainChunkInfoBuffer.Length != chunkInfoCount
+                || terrainMetadataBuffer.Length != metadataCount)
+            {
+                rebuildTerrainBuffer = true;
+                return;
+            }
+
+            ID3D11DeviceContext context = Context.Context;
+
+            // The LOD anchor moves with the camera; the metadata is small, so it is
+            // refreshed every frame rather than tracked with a dirty flag.
+            if (TerrainSystem.AllTerrainMetadata.Length > 0)
+                terrainMetadataBuffer.SetData(context, TerrainSystem.AllTerrainMetadata);
+            if (TerrainSystem.AllTerrainChunkInfo.Length > 0)
+                context.UpdateSubresource<int4>(TerrainSystem.AllTerrainChunkInfo, terrainChunkInfoBuffer.Resource, 0, 0, 0, null);
+
+            terrainUploadScratch.Clear();
+            TerrainSystem.ConsumeTerrainUploads(terrainUploadScratch);
+
+            foreach ((int offset, int count) in terrainUploadScratch)
+            {
+                if (offset < 0 || count <= 0 || offset + count > TerrainSystem.AllTerrainData.Length)
+                    continue;
+
+                int byteOffset = offset * 16;
+                int byteCount = count * 16;
+                Box box = new Box(byteOffset, 0, 0, byteOffset + byteCount, 1, 1);
+                context.UpdateSubresource<float4>(
+                    new ReadOnlySpan<float4>(TerrainSystem.AllTerrainData, offset, count),
+                    terrainHeightBuffer.Resource, 0, 0, 0, box);
+            }
+
+        }
+
         private void RenderFrame(double delta, int texWidth, int texHeight, bool presentToGL)
         {
             DeltaTime = delta; // Track frame time
@@ -1101,6 +1384,13 @@ namespace DivisionEngine.Rendering
 
             if (boundWorld == null) return;
 
+            // Compile the large raymarch shader off the render lock. The editor skips
+            // frames until it is ready (keeping the UI responsive); headless renders
+            // wait for it. Voxel mode compiles its own (opt-in) shader the same way.
+            bool largeShaderReady = VoxelRenderingEnabled
+                ? EnsureShaderReady(typeof(VoxelSDFShader3D), ShaderFlags.OptimizationLevel3)
+                : EnsureShaderReady(typeof(SDFShader3D), ShaderFlags.SkipOptimization);
+
             try
             {
                 boundWorld.CallRender();
@@ -1112,6 +1402,9 @@ namespace DivisionEngine.Rendering
                 Debug.Error("Renderer: a system threw during Render() - skipping this frame", ex);
                 return;
             }
+
+            if (!largeShaderReady) return;
+
             int lowResWidth = math.max(1, texWidth / 4),
                 lowResHeight = math.max(1, texHeight / 4);
 
@@ -1261,14 +1554,23 @@ namespace DivisionEngine.Rendering
                     if (rebuildTerrainBuffer && TerrainSystem.AllTerrainData != null && TerrainSystem.AllTerrainMetadata != null)
                     {
                         // Scenes without terrain still need non-empty buffers to bind.
-                        float[] heights = TerrainSystem.AllTerrainData is { Length: > 0 } h ? h : new float[1];
+                        float4[] heights = TerrainSystem.AllTerrainData is { Length: > 0 } h ? h : new float4[1];
+                        int4[] chunkInfo = TerrainSystem.AllTerrainChunkInfo is { Length: > 0 } c ? c : new int4[1];
                         TerrainDTO[] metas = TerrainSystem.AllTerrainMetadata is { Length: > 0 } m ? m : new TerrainDTO[1];
 
                         terrainHeightBuffer?.Dispose();
-                        terrainHeightBuffer = Context?.CreateBuffer<float>(heights);
+                        terrainHeightBuffer = Context?.CreateBuffer<float4>(heights);
+                        terrainChunkInfoBuffer?.Dispose();
+                        terrainChunkInfoBuffer = Context?.CreateBuffer<int4>(chunkInfo);
                         terrainMetadataBuffer?.Dispose();
                         terrainMetadataBuffer = Context?.CreateStructuredBuffer(metas);
                         rebuildTerrainBuffer = false;
+                    }
+                    else if (!rebuildTerrainBuffer)
+                    {
+                        // Streamed chunks and the per-frame LOD anchor upload
+                        // incrementally instead of rebuilding the whole buffer.
+                        UpdateTerrainBuffers();
                     }
 
                     // Checkerboard rendering toggle
@@ -1293,7 +1595,8 @@ namespace DivisionEngine.Rendering
                     // dummy buffers being created during the terrain rebuild.
                     if (textureBuffer == null) textureBuffer = Context!.CreateBuffer<uint>(new uint[1]);
                     if (textureMetaBuffer == null) textureMetaBuffer = Context!.CreateStructuredBuffer(new TextureMetadata[1]);
-                    if (terrainHeightBuffer == null) terrainHeightBuffer = Context!.CreateBuffer<float>(new float[1]);
+                    if (terrainHeightBuffer == null) terrainHeightBuffer = Context!.CreateBuffer<float4>(new float4[1]);
+                    if (terrainChunkInfoBuffer == null) terrainChunkInfoBuffer = Context!.CreateBuffer<int4>(new int4[1]);
                     if (terrainMetadataBuffer == null) terrainMetadataBuffer = Context!.CreateStructuredBuffer(new TerrainDTO[1]);
 
                     bool voxelFrame = VoxelRenderingEnabled;
@@ -1302,7 +1605,7 @@ namespace DivisionEngine.Rendering
                         voxelClipmap ??= new VoxelClipmapRenderer();
                         voxelFrame = voxelClipmap.Update(
                             Context!, worldDTO, sdfObjDTO, sdfObjBuffer,
-                            terrainHeightBuffer!, terrainMetadataBuffer!,
+                            terrainHeightBuffer!, terrainChunkInfoBuffer!, terrainMetadataBuffer!,
                             TerrainSystem.DataVersion, VoxelGridResolution,
                             VoxelUpdateCellBudget);
                     }
@@ -1326,6 +1629,7 @@ namespace DivisionEngine.Rendering
                         voxelShader.SetBuffer("textureData", textureBuffer!);
                         voxelShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
                         voxelShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
+                        voxelShader.SetBuffer("terrainChunkInfo", terrainChunkInfoBuffer!);
                         voxelShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
                         voxelShader.Dispatch2D(voxelShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
                     }
@@ -1377,6 +1681,7 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetBuffer("textureData", textureBuffer!);
                         sdfShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
                         sdfShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
+                        sdfShader.SetBuffer("terrainChunkInfo", terrainChunkInfoBuffer!);
                         sdfShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
                         if (ctssEnabled)
                         {
@@ -1902,6 +2207,7 @@ namespace DivisionEngine.Rendering
             textureBuffer?.Dispose();
             textureMetaBuffer?.Dispose();
             terrainHeightBuffer?.Dispose();
+            terrainChunkInfoBuffer?.Dispose();
             terrainMetadataBuffer?.Dispose();
             voxelClipmap?.Dispose();
             voxelClipmap = null;
@@ -1919,6 +2225,14 @@ namespace DivisionEngine.Rendering
             foreach (DivisionShader shader in shaders.Values)
                 shader.Dispose();
             shaders.Clear();
+
+            // Large-shader compile state belongs to the dead device/context. Detach
+            // in-flight CPU compiles and let the next frame restart them.
+            pendingShaderCompiles.Clear();
+            failedShaderCompiles.Clear();
+            optimizedSdfCompileTask = null;
+            optimizedSdfCompileStarted = false;
+            usingOptimizedSdfShader = false;
 
             renderTex = null;
             ctssEdgeTex = null;
@@ -1938,6 +2252,7 @@ namespace DivisionEngine.Rendering
             textureBuffer = null;
             textureMetaBuffer = null;
             terrainHeightBuffer = null;
+            terrainChunkInfoBuffer = null;
             terrainMetadataBuffer = null;
             fxaaInputTex = null;
             customShapeBuffer = null;

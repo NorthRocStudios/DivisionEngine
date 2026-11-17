@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -142,9 +142,14 @@ namespace DivisionEngine
             uint terrainEntity = newDefaultWorld.CreateEntity("Terrain");
             newDefaultWorld.AddComponent(terrainEntity, new Transform
             {
-                position = new float3(0, -30, 0),
+                position = new float3(0, -90, 0),
             });
-            newDefaultWorld.AddComponent(terrainEntity, new SDFTerrain());
+            newDefaultWorld.AddComponent(terrainEntity, new SDFTerrain
+            {
+                size = 2000f,
+                height = 45f,
+                frequency = 0.0008f,
+            });
             newDefaultWorld.AddComponent(terrainEntity, new SDFMaterial
             {
                 albedoColor = ColorPalette.ForestGreen,
@@ -152,7 +157,7 @@ namespace DivisionEngine
                 metallic = 0f,
                 roughness = 1f,
             });
-            newDefaultWorld.AddComponent(terrainEntity, new Shadows());
+            newDefaultWorld.AddComponent(terrainEntity, new Shadows { maxDistance = 500f, penumbraDistance = 90f });
 
             // Rounded Box
             uint boxEntity = newDefaultWorld.CreateEntity("Rounded Box");

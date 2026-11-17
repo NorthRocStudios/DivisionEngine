@@ -6,7 +6,6 @@
 // project root for full license terms.
 //
 using DivisionEngine.MathLib;
-using DivisionEngine.Rendering.Terrain;
 
 namespace DivisionEngine.Rendering.ShaderUtilities
 {
@@ -141,42 +140,6 @@ namespace DivisionEngine.Rendering.ShaderUtilities
 
             float terrain = pt.y - terrainHeight;
             return terrain;
-        }
-
-        public static float TerrainEroded(float3 pt, float size, float heightScale, float baseGain, float lacunarity,
-            float erosionStrength, float gullyWeight, float erosionDetail, float erosionScale, int erosionOctaves,
-            float erosionLacunarity, float erosionGain, float cellScale, float normalization, int baseOctaves, float4 rounding)
-        {
-            // Base terrain using FBM
-            float2 uv = pt.xz / size;
-
-            // Calculate base height using the noised function
-            float3 baseTerrain = TerrainRendering.FractalNoiseWithDerivatives(uv, 3.0f, baseOctaves, lacunarity, baseGain);
-            float baseHeightNorm = baseTerrain.x * 0.5f + 0.5f;
-            float2 slope = new float2(baseTerrain.y, baseTerrain.z);
-
-            // Erosion filter
-            float fadeTarget = math.clamp(baseTerrain.x / 0.6f, -1.0f, 1.0f);
-            float4 onset = new float4(1.25f, 1.25f, 2.8f, 1.5f);
-            float2 assumedSlope = new float2(0.7f, 1.0f);
-
-            float ridgeMap, debug;
-            float3 heightSlope = new float3(baseHeightNorm, slope.x, slope.y);
-            float4 erosionResult = TerrainRendering.ErosionFilter(
-                uv, heightSlope, fadeTarget,
-                erosionStrength, gullyWeight, erosionDetail,
-                rounding, onset, assumedSlope,
-                erosionScale, erosionOctaves, erosionLacunarity,
-                erosionGain, cellScale, normalization,
-                out ridgeMap, out debug);
-
-            // Apply height offset
-            float heightOffset = -0.65f;
-            float offset = heightOffset * erosionResult.w;
-            float erodedHeightNorm = baseHeightNorm + erosionResult.x + offset;
-            float erodedHeight = (erodedHeightNorm - 0.5f) * heightScale;
-
-            return pt.y - erodedHeight;
         }
 
         /// <summary>

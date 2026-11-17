@@ -121,6 +121,30 @@ namespace DivisionEngine.Editor.Systems
         /// </summary>
         public override void Unload() => cancelled = true;
 
+        /// <summary>
+        /// True when a shader should be compiled eagerly by the preload (and by
+        /// "Reload All Shaders").
+        /// </summary>
+        /// <remarks>
+        /// The voxelized renderer is an opt-in path with two enormous shaders (the
+        /// raymarch shader is compiled with O3 and can take many minutes). The
+        /// renderer compiles them on the first voxel frame with flags the eager
+        /// compilers do not use, so compiling them here only burns CPU and can make
+        /// the editor look hung. They are compiled lazily when the user actually
+        /// enables the voxel path.
+        /// </remarks>
+        internal static bool ShouldCompileEagerly(Type type) =>
+            type != typeof(VoxelSDFShader3D) && type != typeof(VoxelBakeShader);
+
+        /// <summary>
+        /// True when the background preload should compile this shader. The exact SDF
+        /// raymarcher is excluded: the renderer owns its two-stage compile (fast
+        /// variant first, optimized variant in the background) and already warms the
+        /// cache, so preloading it here would duplicate minutes of work.
+        /// </summary>
+        internal static bool ShouldPreload(Type type) =>
+            ShouldCompileEagerly(type) && type != typeof(SDFShader3D);
+
         private static void PreloadShaders()
         {
             try
@@ -129,6 +153,7 @@ namespace DivisionEngine.Editor.Systems
                 // skipped so the preload does not translate them a second time.
                 List<Type> shaders = ShaderDiscovery.Discover()
                     .Where(type => !DivisionShaderCompiler.IsShaderCompiled(type.Name))
+                    .Where(ShouldPreload)
                     .ToList();
                 lock (sync) total = shaders.Count;
 

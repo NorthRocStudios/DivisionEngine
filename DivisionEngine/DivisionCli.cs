@@ -6,12 +6,14 @@
 // project root for full license terms.
 //
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using EngineEnvironment = DivisionEngine.Components.Environment;
 using DivisionEngine.Projects;
 using DivisionEngine.Components;
+using DivisionEngine.Components.SDFs;
 using DivisionEngine.Components.SDFs.Effects;
 using SkiaSharp;
 using DivisionEngine.Components.Lights;
@@ -67,6 +69,7 @@ namespace DivisionEngine.Editor
                     case "selftest": return EngineSelfTest.Run();
                     case "shadowtest": return ShadowTest.Run(args);
                     case "skyprobe": return RunSkyProbe();
+                    case "terrain": return TerrainTest.Run(args);
                     case "shot": return RunShot(args);
                     case "voxeltest": return VoxelSdfTest.Run(args);
                     case "help":
@@ -179,6 +182,16 @@ namespace DivisionEngine.Editor
 
             WorldManager.CreateDefaultWorld(makeCurrent: true);
             World world = WorldManager.CurrentWorld!;
+
+            // Regression hook: remove the terrain so captures of the rest of the
+            // default scene can be compared before and after terrain changes.
+            if (HasFlag(args, "--no-terrain"))
+            {
+                List<uint> terrainEntities = [];
+                foreach ((uint id, SDFTerrain _) in world.QueryData<SDFTerrain>())
+                    terrainEntities.Add(id);
+                foreach (uint id in terrainEntities) world.DestroyEntity(id);
+            }
 
             string sky = GetString(args, "--sky", "gradient");
             if (Enum.TryParse(sky, ignoreCase: true, out EngineEnvironment.SkyType skyType))
@@ -491,6 +504,7 @@ namespace DivisionEngine.Editor
                             Options: --scene soft|colored  (colored checks glass tints combine)
                                      --caustics  also render/compare the caustic shadow style
                   skyprobe  Print environment sun/atmosphere values for the default world
+                  terrain   Terrain tools and tests (see --cli terrain help)
                   voxeltest Run the world-stable clipmap regression test; exits 1 on failure
                             Options: --width N --height N --resolution N (32-128)
                   shot      Render one frame to a PNG
@@ -505,6 +519,7 @@ namespace DivisionEngine.Editor
                                      --no-ctss                    (force CTSS off)
                                      --sample-center              (pixel-centre primary rays for comparisons)
                                      --no-checkerboard --no-post --no-denoise --no-fxaa
+                                     --no-terrain  (remove terrain from the default scene)
                                      --reload-shaders  (drop compiled shaders mid-capture)
                   help      Show this message
 

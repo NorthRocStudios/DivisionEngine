@@ -10,6 +10,7 @@ using DivisionEngine.Editor.Tasks;
 using Material.Icons;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -63,7 +64,11 @@ namespace DivisionEngine.Editor.Systems
 
             try
             {
-                List<Type> shaders = ShaderDiscovery.Discover();
+                // Voxel shaders are opt-in and enormous; they compile lazily when the
+                // voxel path is actually enabled instead of stalling this reload.
+                List<Type> shaders = ShaderDiscovery.Discover()
+                    .Where(ShaderPreloadSystem.ShouldCompileEagerly)
+                    .ToList();
                 total = shaders.Count;
 
                 // Cache-aware: a shader whose source changed is compiled here (in the

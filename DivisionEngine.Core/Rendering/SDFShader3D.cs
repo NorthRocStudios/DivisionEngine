@@ -11,6 +11,7 @@ using DivisionEngine.Graphics;
 using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 using DivisionEngine.Rendering.ShaderUtilities;
+using DivisionEngine.Rendering.Terrain;
 
 namespace DivisionEngine
 {
@@ -79,8 +80,11 @@ namespace DivisionEngine
         /// <summary>Metadata for each texture.</summary>
         [ShaderResource] public StructuredBuffer<TextureMetadata> textureMetadata;
 
-        /// <summary>All baked terrain heightmaps.</summary>
-        [ShaderResource] public Buffer<float> terrainHeightData;
+        /// <summary>All baked terrain heightmaps, packed (height, dHdX, dHdZ, ridge01).</summary>
+        [ShaderResource] public Buffer<float4> terrainHeightData;
+
+        /// <summary>Toroidal chunk identity records for streamed terrain quadtrees.</summary>
+        [ShaderResource] public Buffer<int4> terrainChunkInfo;
 
         /// <summary>Metadata for each terrain.</summary>
         [ShaderResource] public StructuredBuffer<TerrainDTO> terrainMetadata;
@@ -347,36 +351,140 @@ namespace DivisionEngine
         #endregion triplanar
         #region sdf_sampling
 
-        private float SampleTerrainHeight(TerrainDTO meta, float2 worldXZ)
+        // Positive modulo, used by the toroidal chunk addressing.
+        private static int TerrainMod(int value, int modulus)
         {
-            // Calculate UV coordinates in the heightmap
-            float2 uv = (worldXZ / meta.size) * 0.5f + 0.5f;
-            uv = math.saturate(uv);
+            int r = value % modulus;
+            return r < 0 ? r + modulus : r;
+        }
 
-            // Get pixel coordinates with bilinear interpolation
-            float u = uv.x * (meta.resolution.x - 1);
-            float v = uv.y * (meta.resolution.y - 1);
-            int x0 = (int)u, y0 = (int)v;
-            int x1 = math.min(x0 + 1, meta.resolution.x - 1);
-            int y1 = math.min(y0 + 1, meta.resolution.y - 1);
-            float fx = u - x0, fy = v - y0;
+        private static int ClampTexel(int value, int stride)
+        {
+            if (value < 0) return 0;
+            if (value > stride - 1) return stride - 1;
+            return value;
+        }
 
-            // Sample from the height buffer
-            int idx00 = meta.bufferOffset + y0 * meta.resolution.x + x0;
-            int idx10 = meta.bufferOffset + y0 * meta.resolution.x + x1;
-            int idx01 = meta.bufferOffset + y1 * meta.resolution.x + x0;
-            int idx11 = meta.bufferOffset + y1 * meta.resolution.x + x1;
+        /// <summary>
+        /// Samples the terrain at a position relative to the terrain origin. Walks
+        /// the quadtree from the camera-distance LOD down to coarser levels until a
+        /// streamed chunk is found, then reconstructs the surface with bilinear or
+        /// Catmull-Rom filtering. Outside every loaded chunk an infinite terrain
+        /// falls back to the cheap procedural base height, so it is never empty.
+        /// </summary>
+        /// <returns>(height, dHdX, dHdZ, ridge01); <paramref name="found"/> is 0 when
+        /// a bounded terrain has no surface at this position.</returns>
+        private float4 SampleTerrainData(TerrainDTO meta, float2 localXZ, out int found)
+        {
+            found = 0;
+            int stride = meta.chunkStride;
+            int resolution = meta.resolution.x;
+            int gridSize = meta.gridSize;
+            int gridArea = gridSize * gridSize;
+            int gridHalf = gridSize / 2;
+            float2 anchor = meta.worldSpace == 1
+                ? new float2(0f, 0f)
+                : new float2(-meta.size, -meta.size);
+            // Bias the LOD by the camera's height above the terrain: an aerial
+            // camera views the ground at a distance far larger than its XZ offset.
+            float cameraDistance = math.length(localXZ - meta.lodCenter)
+                + math.max(meta.worldMin.x, 0f) * 0.7f;
 
-            float h00 = terrainHeightData[idx00];
-            float h10 = terrainHeightData[idx10];
-            float h01 = terrainHeightData[idx01];
-            float h11 = terrainHeightData[idx11];
+            int startLevel = meta.worldSpace == 1
+                ? TerrainRendering.LodLevel(cameraDistance, meta.lodBaseRadius, meta.levels)
+                : 0;
 
-            float h0 = math.lerp(h00, h10, fx);
-            float h1 = math.lerp(h01, h11, fx);
-            float height = math.lerp(h0, h1, fy);
+            for (int level = startLevel; level < meta.levels; level++)
+            {
+                float levelSize = meta.chunkSize * (1 << level);
+                int chunkX = (int)math.floor((localXZ.x - anchor.x) / levelSize);
+                int chunkZ = (int)math.floor((localXZ.y - anchor.y) / levelSize);
+                int cameraChunkX = (int)math.floor((meta.lodCenter.x - anchor.x) / levelSize);
+                int cameraChunkZ = (int)math.floor((meta.lodCenter.y - anchor.y) / levelSize);
 
-            return height;
+                if (chunkX < cameraChunkX - gridHalf || chunkX > cameraChunkX + gridHalf) continue;
+                if (chunkZ < cameraChunkZ - gridHalf || chunkZ > cameraChunkZ + gridHalf) continue;
+
+                int slot = level * gridArea + TerrainMod(chunkZ, gridSize) * gridSize + TerrainMod(chunkX, gridSize);
+                int4 info = terrainChunkInfo[meta.chunkInfoOffset + slot];
+                if (info.z == 0 || info.x != chunkX || info.y != chunkZ) continue;
+
+                float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
+                float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
+                int texelBase = meta.bufferOffset + slot * stride * stride;
+
+                if (meta.interpolation == 0)
+                {
+                    int x0 = (int)math.floor(texel.x);
+                    int z0 = (int)math.floor(texel.y);
+                    if (x0 < 0) x0 = 0;
+                    if (z0 < 0) z0 = 0;
+                    if (x0 > stride - 2) x0 = stride - 2;
+                    if (z0 > stride - 2) z0 = stride - 2;
+                    int x1 = x0 + 1;
+                    int z1 = z0 + 1;
+                    float fx = texel.x - (float)x0;
+                    float fz = texel.y - (float)z0;
+
+                    float4 c00 = terrainHeightData[texelBase + z0 * stride + x0];
+                    float4 c10 = terrainHeightData[texelBase + z0 * stride + x1];
+                    float4 c01 = terrainHeightData[texelBase + z1 * stride + x0];
+                    float4 c11 = terrainHeightData[texelBase + z1 * stride + x1];
+                    found = 1;
+                    return TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                }
+
+                // Cubic Hermite reconstruction: four texels plus the stored
+                // analytic slopes give a C1 surface without the sixteen-texel
+                // Catmull-Rom footprint.
+                int hx0 = (int)math.floor(texel.x);
+                int hz0 = (int)math.floor(texel.y);
+                if (hx0 < 0) hx0 = 0;
+                if (hz0 < 0) hz0 = 0;
+                if (hx0 > stride - 2) hx0 = stride - 2;
+                if (hz0 > stride - 2) hz0 = stride - 2;
+                float tx = texel.x - (float)hx0;
+                float tz = texel.y - (float)hz0;
+
+                float4 p00 = terrainHeightData[texelBase + hz0 * stride + hx0];
+                float4 p10 = terrainHeightData[texelBase + hz0 * stride + hx0 + 1];
+                float4 p01 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0];
+                float4 p11 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0 + 1];
+                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
+                float4 terrainSample = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
+                    texelWorldSize, texelWorldSize);
+
+                // Fade the outermost ring to sea level so the clipmap does not end
+                // in a visible cliff. This is deliberately cheap: adding the
+                // procedural base height here would duplicate the whole FBM (three
+                // noise octaves) at every terrain sample in the raymarcher.
+                if (meta.worldSpace == 1)
+                {
+                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
+                    float fadeStart = maxRadius * 0.85f;
+                    float fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
+                    terrainSample.x *= fade;
+                    terrainSample.y *= fade;
+                    terrainSample.z *= fade;
+                }
+
+                found = 1;
+                return terrainSample;
+            }
+
+            // No streamed chunk: bounded terrains end here.
+            if (meta.worldSpace == 0)
+            {
+                found = 0;
+                return new float4(0f, 0f, 0f, 0f);
+            }
+
+            // Infinite terrain without a loaded chunk: a flat sea-level plane keeps
+            // the world solid while the quadtree streams in. (Evaluating the base
+            // FBM here would inline the whole noise function into every terrain
+            // sample of the raymarcher and dominate shader compile time.)
+            found = 1;
+            return new float4(0f, 0f, 0f, 0.5f);
         }
 
         private float ObjectSDF(float3 pt, SDFObjectDTO obj)
@@ -386,19 +494,41 @@ namespace DivisionEngine
             curPoint = ShaderMath.InverseRotateVector(curPoint, obj.rotation);
             curPoint *= obj.scaling;
 
-            if (obj.type == 9) // Get terrain height at this point
+            if (obj.type == 9) // Terrain heightfield
             {
-                float height = 0f;
-                TerrainDTO meta = new TerrainDTO();
-                meta.heightScale = 20f;
-                if (obj.terrainDataIndex >= 0 && obj.terrainDataIndex < terrainMetadata.Length)
+                if (obj.terrainDataIndex < 0 || obj.terrainDataIndex >= terrainMetadata.Length)
+                    return 1e8f;
+
+                TerrainDTO meta = terrainMetadata[obj.terrainDataIndex];
+
+                // Fixed terrains are a heightfield clipped to a square prism. Outside
+                // the square the heightfield lookup would miss the chunk entirely, so
+                // the sample point is clamped to the edge and the XZ rectangle
+                // distance supplies the solid's exterior distance.
+                float2 sampleXZ = curPoint.xz;
+                float2 outside = new float2(0f, 0f);
+                if (meta.worldSpace == 0)
                 {
-                    meta = terrainMetadata[obj.terrainDataIndex];
-                    height = math.abs(SampleTerrainHeight(meta, curPoint.xz));
+                    float limit = math.max(meta.size - 0.01f, 0f);
+                    sampleXZ = new float2(math.clamp(curPoint.x, -limit, limit),
+                        math.clamp(curPoint.z, -limit, limit));
+                    outside = math.abs(curPoint.xz) - new float2(meta.size, meta.size);
                 }
-                float halfSize = obj.parameters.x * 0.5f;
-                return SDFPrimitives.Box(new float3(curPoint.x, curPoint.y - height, curPoint.z), 
-                    new float3(halfSize, meta.heightScale + height, halfSize));
+
+                float4 terrainSample = SampleTerrainData(meta, sampleXZ, out int found);
+                if (found == 0) return 1e8f;
+
+                float distance = TerrainRendering.HeightfieldDistance(curPoint.y, terrainSample);
+
+                if (meta.worldSpace == 0)
+                {
+                    distance = math.max(distance, math.max(outside.x, outside.y));
+                    // Close the slab at the bottom so a bounded terrain reads as a
+                    // floating block instead of an infinitely deep curtain.
+                    distance = math.max(distance, -meta.heightScale * 3.0f - curPoint.y);
+                }
+
+                return distance;
             }
             else
             {
@@ -519,6 +649,98 @@ namespace DivisionEngine
                               k3 * ObjectSDF(pos + k3 * h, sdf));
         }
 
+        /// <summary>
+        /// Terrain surface sample used for both shading and the analytic normal. It
+        /// reads the height field exactly once per hit, which keeps the inlined
+        /// shader graph (and its compile time) under control.
+        /// </summary>
+        private void TerrainSurface(SDFObjectDTO sdf, TerrainDTO meta, float3 localPos,
+            out float3 albedo, out float3 normal, out float roughness, out float ambientOcclusion)
+        {
+            // The clipped sides of a bounded terrain are a layered rock section.
+            if (meta.worldSpace == 0)
+            {
+                float sideX = math.abs(localPos.x) - meta.size;
+                float sideZ = math.abs(localPos.z) - meta.size;
+                if (sideX > -0.05f || sideZ > -0.05f)
+                {
+                    float3 wallNormal = math.abs(sideX) < math.abs(sideZ)
+                        ? new float3(math.sign(localPos.x), 0f, 0f)
+                        : new float3(0f, 0f, math.sign(localPos.z));
+                    normal = math.normalize(ShaderMath.RotateVector(wallNormal, sdf.rotation));
+
+                    // Wavy sedimentary bands: a slow horizontal warp on the layer
+                    // frequency reads as tilted strata instead of ruler stripes.
+                    float warp = math.sin(localPos.x * 0.011f + 1.3f) * 0.9f
+                        + math.sin(localPos.z * 0.017f + 0.4f) * 0.7f;
+                    float band = 0.5f + 0.5f * math.sin(localPos.y * 0.22f + warp);
+                    albedo = math.lerp(new float3(0.17f, 0.17f, 0.18f),
+                        new float3(0.38f, 0.36f, 0.33f), band);
+                    float depth = math.saturate((localPos.y + meta.heightScale * 3f) / (meta.heightScale * 6f));
+                    albedo *= 0.7f + 0.3f * depth;
+                    roughness = 0.95f;
+                    ambientOcclusion = 0.8f;
+                    return;
+                }
+            }
+
+            float4 terrainSample = SampleTerrainData(meta, localPos.xz, out int found);
+            if (found == 0)
+            {
+                albedo = sdf.color.rgb;
+                normal = new float3(0f, 1f, 0f);
+                roughness = 1f;
+                ambientOcclusion = 1f;
+                return;
+            }
+
+            normal = ShaderMath.RotateVector(TerrainRendering.HeightfieldNormal(terrainSample), sdf.rotation);
+
+            float2 slope = new float2(terrainSample.y, terrainSample.z);
+            float normalY = 1.0f / math.sqrt(1.0f + math.dot(slope, slope));
+            float altitude = math.saturate(terrainSample.x / math.max(meta.heightScale * 1.6f, 1e-3f) * 0.5f + 0.5f);
+
+            // The ridge map doubles as an occlusion/provenance term: ridges are
+            // exposed, creases collect detritus. Using it instead of re-evaluating
+            // the un-eroded base keeps the shader small.
+            float erosion = (terrainSample.w - 0.5f) * 2.0f;
+            float occlusion = math.saturate(terrainSample.w * 1.2f);
+
+            // Blend the material tint toward the reference's mossy olive so the
+            // default forest-green material does not read as neon.
+            float3 grassColor = math.lerp(sdf.color.rgb, new float3(0.26f, 0.30f, 0.12f), 0.55f);
+            float grassMix = math.saturate((1.0f - terrainSample.w) * 1.4f + (0.5f - erosion) * 0.6f + occlusion * 0.2f);
+            float3 grass = math.lerp(grassColor * 0.55f, grassColor * 1.25f, grassMix);
+
+            float3 rock = math.lerp(new float3(0.14f, 0.16f, 0.20f), new float3(0.32f, 0.35f, 0.40f),
+                math.saturate(terrainSample.w * 1.3f - 0.15f));
+            float3 dirt = new float3(0.36f, 0.31f, 0.24f);
+            float3 snow = new float3(0.93f, 0.95f, 0.98f);
+
+            float steep = math.saturate((0.86f - normalY) * 3.2f);
+            float3 color = math.lerp(grass, dirt, math.saturate(steep * 0.55f));
+            color = math.lerp(color, rock, steep);
+
+            float snowLine = 0.72f;
+            float snowAmount = math.smoothstep(snowLine, snowLine + 0.1f, altitude + normalY * 0.05f - 0.02f);
+            color = math.lerp(color, snow, snowAmount);
+
+            float drainage = math.saturate((1.0f - math.saturate(terrainSample.w / 0.34f)) * 1.5f);
+            color = math.lerp(color, new float3(0.045f, 0.07f, 0.06f), drainage * 0.65f);
+
+            color *= 0.62f + 0.38f * occlusion;
+
+            albedo = color;
+            roughness = math.lerp(math.max(sdf.roughness, 0.6f), 0.95f, snowAmount);
+
+            // Terrain self-occlusion. The engine's screen-space AO estimates the
+            // second-closest object and therefore cannot occlude an object with
+            // itself; the baked ridge map is exactly the missing terrain
+            // self-occlusion term (creases shadowed, ridges exposed).
+            ambientOcclusion = math.saturate(0.40f + 0.78f * terrainSample.w)
+                * (0.78f + 0.22f * altitude);
+        }
+
         #endregion normals
         #region lighting
 
@@ -546,7 +768,7 @@ namespace DivisionEngine
             {
                 SDFObjectDTO sdf = sdfObjects[k];
                 if (sdf.shadowEffects.x == 0) continue;
-                if (sdf.entityID == excludeID) continue;
+                if (sdf.entityID == excludeID && sdf.type != 9) continue;
 
                 depth = sdf.shadowDistances.x;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
@@ -571,7 +793,7 @@ namespace DivisionEngine
             {
                 SDFObjectDTO sdf = sdfObjects[k];
                 if (sdf.shadowEffects.x == 0) continue;
-                if (sdf.entityID == excludeID) continue;
+                if (sdf.entityID == excludeID && sdf.type != 9) continue;
 
                 bool isGlass = sdf.hasRefraction == 1;
                 float depth = sdf.shadowDistances.x;
@@ -611,7 +833,7 @@ namespace DivisionEngine
                 SDFObjectDTO sdf = sdfObjects[k];
                 depth = sdf.shadowDistances.x;
                 if (sdf.shadowEffects.x == 0) continue;
-                if (sdf.entityID == excludeID) continue;
+                if (sdf.entityID == excludeID && sdf.type != 9) continue;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
                     dist = ObjectSDF(pt + depth * dir, sdf);
@@ -626,9 +848,12 @@ namespace DivisionEngine
         /// <summary>
         /// Unified shadow function that selects the appropriate shadow type.
         /// </summary>
-        private float3 CalculateShadow(float3 hitPoint, float3 normal, float3 lightDir, int shadowType, uint excludeID)
+        private float3 CalculateShadow(float3 hitPoint, float3 normal, float3 lightDir, int shadowType,
+            uint excludeID, float shadowBias)
         {
-            float3 shadowOrigin = hitPoint + normal * EPSILON * REFLECTION_BIAS;
+            // Terrain passes a larger bias: its height field can shadow itself, and
+            // a sub-millimetre offset would produce self-intersection acne.
+            float3 shadowOrigin = hitPoint + normal * shadowBias;
             switch (shadowType)
             {
                 case 0: // Hard shadows
@@ -649,7 +874,7 @@ namespace DivisionEngine
         /// </summary>
         private float3 CalculateLighting(float3 hitPoint, float3 geoNormal, float3 finalNormal, float3 viewDir,
             int2 shadowEffects, int shadowType, float specular, float reflectance,
-            float3 baseCol, float metallic, float roughAlpha, uint excludeID)
+            float3 baseCol, float metallic, float roughAlpha, uint excludeID, float shadowBias)
         {
             float3 totalLight = new float3(0f);
 
@@ -668,7 +893,7 @@ namespace DivisionEngine
                     if (NoL <= 0f) continue;
 
                     // Shadows
-                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID);
+                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias);
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
                         finalNormal, baseCol, metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
 
@@ -690,7 +915,7 @@ namespace DivisionEngine
 
                     // Calculate shadow for point light
                     if (shadowEffects.y != 0 && distance < light.radius * 2f)
-                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID);
+                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias);
 
                     // Apply shadow to the entire BRDF result
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
@@ -803,7 +1028,7 @@ namespace DivisionEngine
                 {
                     SDFObjectDTO sdf = sdfObjects[k];
                     if (sdf.shadowEffects.x == 0) continue;
-                    if (sdf.entityID == excludeID) continue;
+                    if (sdf.entityID == excludeID && sdf.type != 9) continue;
 
                     float td = sdf.shadowDistances.x;
                     for (int i = 0; i < maxShadowRaySteps; i++)
@@ -1275,7 +1500,8 @@ namespace DivisionEngine
             if (sdf.aoValues.x > 0f) aoValue = math.lerp(1f, CalculateAO(hitPoint, normal, sdf.entityID, sdf.aoValues), sdf.aoValues.x);
 
             float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
-                new int2(sdf.shadowEffects.x, 0), sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha, sdf.entityID);
+                new int2(sdf.shadowEffects.x, 0), sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha,
+                sdf.entityID, EPSILON * REFLECTION_BIAS);
             float3 ambientLight = ambientBase * aoValue;
             finalColor += ambientLight + directLight;
             return finalColor;
@@ -1298,6 +1524,7 @@ namespace DivisionEngine
             float cosTheta = 0f;
 
             float3 refractedLight = new float3(0f);
+            float hitTerrainAO = 1f;
             SDFObjectDTO mainMat = default;
             outputNormal = new float3(0f);
             totalDist = 0f;
@@ -1330,12 +1557,33 @@ namespace DivisionEngine
                 }
 
                 SDFObjectDTO sdf = sdfObjects[closestObjIndex];
-                float3 normal = FastNormalSingleObject(hitPoint, sdf);
-                if (math.dot(normal, rayDir) > 0f) normal = -normal;
+                float3 normal;
+                float3 albedo;
+                float metallic;
+                float roughness;
+                float3 finalNormal;
                 float3 viewDir = -rayDir;
 
-                SampleSurfaceMaterial(hitPoint, normal, sdf, depth,
-                    out _, out _, out float3 albedo, out float metallic, out float roughness, out float3 finalNormal);
+                if (sdf.type == 9 && sdf.terrainDataIndex >= 0 && sdf.terrainDataIndex < terrainMetadata.Length)
+                {
+                    // Terrain reads its height field once and derives both the normal
+                    // and the material from that sample.
+                    TerrainDTO terrainMeta = terrainMetadata[sdf.terrainDataIndex];
+                    float3 localPoint = ShaderMath.InverseRotateVector(hitPoint - sdf.position, sdf.rotation);
+                    TerrainSurface(sdf, terrainMeta, localPoint, out albedo, out normal, out roughness, out float terrainAO);
+                    metallic = 0f;
+                    hitTerrainAO = terrainAO;
+                    finalNormal = normal;
+                    if (math.dot(normal, rayDir) > 0f) normal = -normal;
+                    finalNormal = normal;
+                }
+                else
+                {
+                    normal = FastNormalSingleObject(hitPoint, sdf);
+                    if (math.dot(normal, rayDir) > 0f) normal = -normal;
+                    SampleSurfaceMaterial(hitPoint, normal, sdf, depth,
+                        out _, out _, out albedo, out metallic, out roughness, out finalNormal);
+                }
                 float roughAlpha = roughness * roughness;
 
                 float aoStrength = sdf.aoValues.x;
@@ -1351,6 +1599,7 @@ namespace DivisionEngine
                     // AO
                     ambientBase = math.lerp(albedo, worldData[0].skyColor.rgb, worldData[0].ambientStrength) * worldData[0].ambientStrength;
                     if (aoStrength > 0f) aoValue = math.lerp(1f, CalculateAO(hitPoint, normal, sdf.entityID, sdf.aoValues), aoStrength);
+                    if (sdf.type == 9) aoValue = math.min(aoValue, hitTerrainAO);
 
                     // Refraction
                     if (sdf.hasRefraction == 1)
@@ -1363,8 +1612,10 @@ namespace DivisionEngine
                     firstHit = false;
                 }
 
+                float shadowBias = sdf.type == 9 ? 0.15f : EPSILON * REFLECTION_BIAS;
                 float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
-                    sdf.shadowEffects, sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha, sdf.entityID);
+                    sdf.shadowEffects, sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha,
+                    sdf.entityID, shadowBias);
                 // Ambient is scaled by AO only. The previous line overwrote aoValue with the
                 // *direct* light magnitude whenever it exceeded 0.5, which made ambient jump back
                 // up exactly where the shadow term pulled directLight down: a bright band hugging

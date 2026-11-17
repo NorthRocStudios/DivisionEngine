@@ -151,13 +151,47 @@ namespace DivisionEngine.Rendering
     {
         public float3 worldMin;
         public float3 worldMax;
-        public int2 resolution;   // Width, Height
-        public int bufferOffset;  // Starting index in the big buffer
-        public float heightScale;
-        public float heightOffset;
-        public int worldSpace;    // Is terrain in world space (infinite)
+        public int2 resolution;   // Texels per chunk (R), excluding the 1-texel apron
+        public int bufferOffset;  // Starting index of this terrain's chunk block in the height buffer
+        public float heightScale; // World height of the base terrain amplitude
+        public float heightOffset; // Vertical offset applied to sampled heights (world units)
+        public int worldSpace;    // 1 = infinite LOD clipmap, 0 = fixed bounds
         public int terrainIndex;  // Which terrain this is
-        public float size;        // Original terrain scale
+        public float size;        // Fixed terrain half extent in world units
+
+        // --- Placement and sampling -------------------------------------------
+        public float3 position;      // Terrain entity world position
+        public float2 lodCenter;     // XZ anchor of the LOD clipmap (camera), relative to position
+        public int interpolation;    // 0 = bilinear, 1 = bicubic Catmull-Rom
+        public int levels;           // LOD level count (1 for fixed terrain)
+        public int gridSize;         // Chunks per level side (1 for fixed terrain)
+        public float chunkSize;      // World size of a level-0 chunk
+        public int chunkStride;      // (resolution + 2): stored texels per row including apron
+        public int chunkInfoOffset;  // First chunk identity record in the chunk-info buffer
+        public float lodBaseRadius;  // World radius covered by level 0
+        public int hasErosion;       // 0 = base noise only, 1 = erosion filter enabled
+        public float normalStrength; // Terrain shading normal scale (1 = geometric)
+
+        // --- Base height function (Rune Skovbo Johansen erosion demo values) ---
+        public float frequency;         // World -> height-function domain scale
+        public float heightFrequency;   // Noise cells per domain unit (3)
+        public float heightAmp;         // Noise amplitude in domain space (0.125)
+        public int heightOctaves;       // Base noise octaves (3)
+        public float heightLacunarity;  // 2
+        public float heightGain;        // 0.1
+        public float erosionStrength;   // 0.22
+        public float erosionGullyWeight;// 0.5
+        public float erosionDetail;     // 1.5
+        public float erosionScale;      // 0.15
+        public int erosionOctaves;      // 5
+        public float erosionLacunarity; // 2
+        public float erosionGain;       // 0.5
+        public float erosionCellScale;  // 0.7
+        public float erosionNormalization; // 0.5
+        public float4 erosionRounding;   // (ridgeRounding, creaseRounding, inputMul, octaveMul)
+        public float4 erosionOnset;      // (input onset, octave onset, ridge onset, ridge octave onset)
+        public float2 erosionAssumedSlope;// (assumed slope, blend)
+        public float2 terrainHeightOffset;// (offset, fade-target overrides offset)
     }
 }
 

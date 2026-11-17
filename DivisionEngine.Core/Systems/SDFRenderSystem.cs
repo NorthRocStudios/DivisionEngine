@@ -398,7 +398,7 @@ namespace DivisionEngine.Systems
                     SDFTerrain terrain = W.GetComponent<SDFTerrain>(id)!;
                     curSDF.type = 9;
                     curSDF.terrainDataIndex = TerrainSystem.GetTerrainMetadataIndex(id);
-                    curSDF.parameters = new float4(terrain.scale, terrain.height, terrain.frequency, terrain.lacunarity);
+                    curSDF.parameters = new float4(terrain.size, terrain.height, terrain.frequency, terrain.heightmapSize);
                     curSDF.bounds = Bounds(curSDF.position, 1e9f, transform.scaling);
                     sdfObjects.Add(curSDF);
                 }

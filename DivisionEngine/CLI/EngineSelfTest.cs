@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -6,7 +6,9 @@
 // project root for full license terms.
 //
 using DivisionEngine.Components;
+using DivisionEngine.Editor.Systems;
 using DivisionEngine.Editor.Undo;
+using DivisionEngine.Settings;
 using DivisionEngine.Projects.Assets;
 using DivisionEngine.Serialization;
 using System;
@@ -51,6 +53,8 @@ namespace DivisionEngine.Editor
             Check("Restore keeps entity ids stable", CheckRestoreIds);
             Check("Undo keeps the newest commands on top", CheckUndoTrimming);
             Check("Undo coalesces repeated edits of one field", CheckUndoCoalescing);
+            Check("Voxelized rendering defaults off", () => !new EngineSettings().VoxelSdfRendering);
+            Check("Voxel shaders are skipped by the background preload", CheckVoxelPreloadSkip);
             Check("Terrain noise spans a usable range", CheckTerrainNoise);
             Check("Asset types: .cs/.hlsl/.sdfLib", CheckAssetTypes);
             Check("World queries survive mutation while enumerating", CheckQuerySnapshot);
@@ -286,6 +290,22 @@ namespace DivisionEngine.Editor
                     WorldManager.SwitchWorld(previousWorld.Name);
                 }
             }
+        }
+
+        /// <summary>
+        /// The voxel renderer's shaders take minutes to compile and are opt-in, so the
+        /// background preload must leave them for the renderer to compile lazily.
+        /// </summary>
+        private static bool CheckVoxelPreloadSkip()
+        {
+            // "Reload All Shaders" still reloads the exact SDF shader, but the startup
+            // preload leaves its two-stage compile to the renderer.
+            return ShaderPreloadSystem.ShouldCompileEagerly(typeof(SDFShader3D))
+                && !ShaderPreloadSystem.ShouldPreload(typeof(SDFShader3D))
+                && !ShaderPreloadSystem.ShouldCompileEagerly(typeof(VoxelSDFShader3D))
+                && !ShaderPreloadSystem.ShouldCompileEagerly(typeof(VoxelBakeShader))
+                && !ShaderPreloadSystem.ShouldPreload(typeof(VoxelSDFShader3D))
+                && !ShaderPreloadSystem.ShouldPreload(typeof(VoxelBakeShader));
         }
 
         /// <summary>

@@ -102,7 +102,8 @@ namespace DivisionEngine.Rendering.VoxelSDF
             SDFWorldDTO world,
             SDFObjectDTO[] objects,
             StructuredBuffer<SDFObjectDTO> objectBuffer,
-            Buffer<float> terrainHeights,
+            Buffer<float4> terrainHeights,
+            Buffer<int4> terrainChunkInfo,
             StructuredBuffer<TerrainDTO> terrainMetadata,
             int terrainVersion,
             int requestedResolution,
@@ -113,7 +114,7 @@ namespace DivisionEngine.Rendering.VoxelSDF
             try
             {
                 return UpdateCore(context, world, objects, objectBuffer, terrainHeights,
-                    terrainMetadata, terrainVersion, requestedResolution, cellBudget);
+                    terrainChunkInfo, terrainMetadata, terrainVersion, requestedResolution, cellBudget);
             }
             catch (Exception ex)
             {
@@ -135,7 +136,8 @@ namespace DivisionEngine.Rendering.VoxelSDF
             SDFWorldDTO world,
             SDFObjectDTO[] objects,
             StructuredBuffer<SDFObjectDTO> objectBuffer,
-            Buffer<float> terrainHeights,
+            Buffer<float4> terrainHeights,
+            Buffer<int4> terrainChunkInfo,
             StructuredBuffer<TerrainDTO> terrainMetadata,
             int terrainVersion,
             int requestedResolution,
@@ -200,7 +202,7 @@ namespace DivisionEngine.Rendering.VoxelSDF
             }
 
             int budget = firstUpdate ? int.MaxValue : System.Math.Max(1, cellBudget);
-            ProcessJobs(context, objectBuffer, terrainHeights, terrainMetadata, budget);
+            ProcessJobs(context, objectBuffer, terrainHeights, terrainChunkInfo, terrainMetadata, budget);
 
             previousObjects = (SDFObjectDTO[])objects.Clone();
             previousTerrainVersion = terrainVersion;
@@ -399,7 +401,8 @@ namespace DivisionEngine.Rendering.VoxelSDF
 
         private void ProcessJobs(DivisionComputeContext context,
             StructuredBuffer<SDFObjectDTO> objectBuffer,
-            Buffer<float> terrainHeights,
+            Buffer<float4> terrainHeights,
+            Buffer<int4> terrainChunkInfo,
             StructuredBuffer<TerrainDTO> terrainMetadata,
             int cellBudget)
         {
@@ -430,7 +433,7 @@ namespace DivisionEngine.Rendering.VoxelSDF
                     clippedMax.y - clippedMin.y + 1,
                     clippedMax.z - clippedMin.z + 1);
 
-                DispatchBake(context, level, clippedMin, count, objectBuffer, terrainHeights, terrainMetadata);
+                DispatchBake(context, level, clippedMin, count, objectBuffer, terrainHeights, terrainChunkInfo, terrainMetadata);
                 bakedCells += count.x * count.y * count.z;
                 dispatched++;
                 CompleteJob(level);
@@ -456,7 +459,8 @@ namespace DivisionEngine.Rendering.VoxelSDF
         private void DispatchBake(DivisionComputeContext context, VoxelClipmapLevel level,
             int3 minCell, int3 count,
             StructuredBuffer<SDFObjectDTO> objectBuffer,
-            Buffer<float> terrainHeights,
+            Buffer<float4> terrainHeights,
+            Buffer<int4> terrainChunkInfo,
             StructuredBuffer<TerrainDTO> terrainMetadata)
         {
             bakeShader!.SetVector("cellOrigin", minCell);
@@ -467,6 +471,7 @@ namespace DivisionEngine.Rendering.VoxelSDF
             bakeShader.SetInt("atlasZOffset", level.Index * resolution);
             bakeShader.SetStructuredBuffer("sdfObjects", objectBuffer);
             bakeShader.SetBuffer("terrainHeightData", terrainHeights);
+            bakeShader.SetBuffer("terrainChunkInfo", terrainChunkInfo);
             bakeShader.SetStructuredBuffer("terrainMetadata", terrainMetadata);
             bakeShader.SetRWTexture3D("outputDistance", distanceAtlas!);
             bakeShader.SetRWTexture3D("outputObjectId", objectAtlas!);

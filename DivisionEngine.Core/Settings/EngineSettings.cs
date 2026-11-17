@@ -245,6 +245,23 @@ namespace DivisionEngine.Settings
         {
             if (ResolutionWidth < 640) ResolutionWidth = 640;
             if (ResolutionHeight < 480) ResolutionHeight = 480;
+
+            // Voxelized SDF rendering used to be opt-out; its render and bake shaders
+            // take minutes to compile, so it is now off by default. Reset the
+            // persisted value once for settings files written by older builds, then
+            // leave the user's choice alone.
+            const int currentSettingsVersion = 2;
+            const string settingsVersionKey = "SettingsVersion";
+            int version = Get(settingsVersionKey, 1);
+            if (version < currentSettingsVersion)
+            {
+                VoxelSdfRendering = false;
+                Set(settingsVersionKey, currentSettingsVersion);
+
+                // Persist the migration immediately: the toggle is expensive enough
+                // that a crash before the periodic settings save should not revive it.
+                SettingsManager.SaveSettings(this);
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ using DivisionEngine.Graphics;
 using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 using DivisionEngine.Rendering.ShaderUtilities;
+using DivisionEngine.Rendering.Terrain;
 
 namespace DivisionEngine
 {
@@ -31,7 +32,8 @@ namespace DivisionEngine
         public float maxDistance;
 
         [ShaderResource] public StructuredBuffer<SDFObjectDTO> sdfObjects;
-        [ShaderResource] public Buffer<float> terrainHeightData;
+        [ShaderResource] public Buffer<float4> terrainHeightData;
+        [ShaderResource] public Buffer<int4> terrainChunkInfo;
         [ShaderResource] public StructuredBuffer<TerrainDTO> terrainMetadata;
         [ShaderResource] public RWTexture3D<float> outputDistance;
         [ShaderResource] public RWTexture3D<uint> outputObjectId;
@@ -73,26 +75,129 @@ namespace DivisionEngine
             outputObjectId[texel] = closest < 0 ? uint.MaxValue : (uint)closest;
         }
 
-        private float SampleTerrainHeight(TerrainDTO meta, float2 worldXZ)
+        // Positive modulo, used by the toroidal chunk addressing.
+        private static int TerrainMod(int value, int modulus)
         {
-            float2 uv = (worldXZ / meta.size) * 0.5f + 0.5f;
-            uv = math.saturate(uv);
+            int r = value % modulus;
+            return r < 0 ? r + modulus : r;
+        }
 
-            float u = uv.x * (meta.resolution.x - 1);
-            float v = uv.y * (meta.resolution.y - 1);
-            int x0 = (int)u, y0 = (int)v;
-            int x1 = math.min(x0 + 1, meta.resolution.x - 1);
-            int y1 = math.min(y0 + 1, meta.resolution.y - 1);
-            float fx = u - x0, fy = v - y0;
+        private static int ClampTexel(int value, int stride)
+        {
+            if (value < 0) return 0;
+            if (value > stride - 1) return stride - 1;
+            return value;
+        }
 
-            int idx00 = meta.bufferOffset + y0 * meta.resolution.x + x0;
-            int idx10 = meta.bufferOffset + y0 * meta.resolution.x + x1;
-            int idx01 = meta.bufferOffset + y1 * meta.resolution.x + x0;
-            int idx11 = meta.bufferOffset + y1 * meta.resolution.x + x1;
+        /// <summary>
+        /// Samples the streamed terrain quadtree at a position relative to the
+        /// terrain origin. Falls back to the procedural base height for infinite
+        /// terrains whose chunk has not streamed in yet.
+        /// </summary>
+        /// <returns>(height, dHdX, dHdZ, ridge01), with <paramref name="found"/> = 0
+        /// outside a bounded terrain.</returns>
+        private float4 SampleTerrainData(TerrainDTO meta, float2 localXZ, out int found)
+        {
+            found = 0;
+            int stride = meta.chunkStride;
+            int resolution = meta.resolution.x;
+            int gridSize = meta.gridSize;
+            int gridArea = gridSize * gridSize;
+            int gridHalf = gridSize / 2;
+            float2 anchor = meta.worldSpace == 1
+                ? new float2(0f, 0f)
+                : new float2(-meta.size, -meta.size);
+            // Bias the LOD by the camera's height above the terrain: an aerial
+            // camera views the ground at a distance far larger than its XZ offset.
+            float cameraDistance = math.length(localXZ - meta.lodCenter)
+                + math.max(meta.worldMin.x, 0f) * 0.7f;
 
-            float h0 = math.lerp(terrainHeightData[idx00], terrainHeightData[idx10], fx);
-            float h1 = math.lerp(terrainHeightData[idx01], terrainHeightData[idx11], fx);
-            return math.lerp(h0, h1, fy);
+            int startLevel = meta.worldSpace == 1
+                ? TerrainRendering.LodLevel(cameraDistance, meta.lodBaseRadius, meta.levels)
+                : 0;
+
+            for (int level = startLevel; level < meta.levels; level++)
+            {
+                float levelSize = meta.chunkSize * (1 << level);
+                int chunkX = (int)math.floor((localXZ.x - anchor.x) / levelSize);
+                int chunkZ = (int)math.floor((localXZ.y - anchor.y) / levelSize);
+                int cameraChunkX = (int)math.floor((meta.lodCenter.x - anchor.x) / levelSize);
+                int cameraChunkZ = (int)math.floor((meta.lodCenter.y - anchor.y) / levelSize);
+
+                if (chunkX < cameraChunkX - gridHalf || chunkX > cameraChunkX + gridHalf) continue;
+                if (chunkZ < cameraChunkZ - gridHalf || chunkZ > cameraChunkZ + gridHalf) continue;
+
+                int slot = level * gridArea + TerrainMod(chunkZ, gridSize) * gridSize + TerrainMod(chunkX, gridSize);
+                int4 info = terrainChunkInfo[meta.chunkInfoOffset + slot];
+                if (info.z == 0 || info.x != chunkX || info.y != chunkZ) continue;
+
+                float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
+                float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
+                int texelBase = meta.bufferOffset + slot * stride * stride;
+
+                if (meta.interpolation == 0)
+                {
+                    int x0 = (int)math.floor(texel.x);
+                    int z0 = (int)math.floor(texel.y);
+                    if (x0 < 0) x0 = 0;
+                    if (z0 < 0) z0 = 0;
+                    if (x0 > stride - 2) x0 = stride - 2;
+                    if (z0 > stride - 2) z0 = stride - 2;
+                    int x1 = x0 + 1;
+                    int z1 = z0 + 1;
+                    float fx = texel.x - (float)x0;
+                    float fz = texel.y - (float)z0;
+
+                    float4 c00 = terrainHeightData[texelBase + z0 * stride + x0];
+                    float4 c10 = terrainHeightData[texelBase + z0 * stride + x1];
+                    float4 c01 = terrainHeightData[texelBase + z1 * stride + x0];
+                    float4 c11 = terrainHeightData[texelBase + z1 * stride + x1];
+                    found = 1;
+                    return TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                }
+
+                // Cubic Hermite reconstruction: four texels plus the stored
+                // analytic slopes give a C1 surface without the sixteen-texel
+                // Catmull-Rom footprint.
+                int hx0 = (int)math.floor(texel.x);
+                int hz0 = (int)math.floor(texel.y);
+                if (hx0 < 0) hx0 = 0;
+                if (hz0 < 0) hz0 = 0;
+                if (hx0 > stride - 2) hx0 = stride - 2;
+                if (hz0 > stride - 2) hz0 = stride - 2;
+                float tx = texel.x - (float)hx0;
+                float tz = texel.y - (float)hz0;
+
+                float4 p00 = terrainHeightData[texelBase + hz0 * stride + hx0];
+                float4 p10 = terrainHeightData[texelBase + hz0 * stride + hx0 + 1];
+                float4 p01 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0];
+                float4 p11 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0 + 1];
+                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
+                float4 terrainSample = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
+                    texelWorldSize, texelWorldSize);
+
+                if (meta.worldSpace == 1)
+                {
+                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
+                    float fadeStart = maxRadius * 0.85f;
+                    float fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
+                    terrainSample.x *= fade;
+                    terrainSample.y *= fade;
+                    terrainSample.z *= fade;
+                }
+
+                found = 1;
+                return terrainSample;
+            }
+
+            if (meta.worldSpace == 0)
+            {
+                found = 0;
+                return new float4(0f, 0f, 0f, 0f);
+            }
+
+            found = 1;
+            return new float4(0f, 0f, 0f, 0.5f);
         }
 
         private float ObjectSDF(float3 pt, SDFObjectDTO obj)
@@ -101,21 +206,35 @@ namespace DivisionEngine
             curPoint = ShaderMath.InverseRotateVector(curPoint, obj.rotation);
             curPoint *= obj.scaling;
 
-            if (obj.type == 9) // terrain
+            if (obj.type == 9) // Terrain heightfield
             {
-                float height = 0f;
-                TerrainDTO meta = new TerrainDTO();
-                meta.heightScale = 20f;
-                if (obj.terrainDataIndex >= 0 && obj.terrainDataIndex < terrainMetadata.Length)
-                {
-                    meta = terrainMetadata[obj.terrainDataIndex];
-                    height = math.abs(SampleTerrainHeight(meta, curPoint.xz));
-                }
-                float halfSize = obj.parameters.x * 0.5f;
-                return SDFPrimitives.Box(new float3(curPoint.x, curPoint.y - height, curPoint.z),
-                    new float3(halfSize, meta.heightScale + height, halfSize));
-            }
+                if (obj.terrainDataIndex < 0 || obj.terrainDataIndex >= terrainMetadata.Length)
+                    return 1e8f;
 
+                TerrainDTO meta = terrainMetadata[obj.terrainDataIndex];
+                float2 sampleXZ = curPoint.xz;
+                float2 outside = new float2(0f, 0f);
+                if (meta.worldSpace == 0)
+                {
+                    float limit = math.max(meta.size - 0.01f, 0f);
+                    sampleXZ = new float2(math.clamp(curPoint.x, -limit, limit),
+                        math.clamp(curPoint.z, -limit, limit));
+                    outside = math.abs(curPoint.xz) - new float2(meta.size, meta.size);
+                }
+
+                float4 terrainSample = SampleTerrainData(meta, sampleXZ, out int found);
+                if (found == 0) return 1e8f;
+
+                float distance = TerrainRendering.HeightfieldDistance(curPoint.y, terrainSample);
+
+                if (meta.worldSpace == 0)
+                {
+                    distance = math.max(distance, math.max(outside.x, outside.y));
+                    distance = math.max(distance, -meta.heightScale * 3.0f - curPoint.y);
+                }
+
+                return distance;
+            }
             float dist = math.min(obj.scaling.x, math.min(obj.scaling.y, obj.scaling.z));
             dist *= EvaluatePrimitiveDistanceFast(obj.type, obj.parameters, curPoint);
             return dist * obj.stepBias;
