@@ -61,6 +61,7 @@ namespace DivisionEngine.Editor
                     case "bench": return RunBench(args);
                     case "compare": return RunCompare(args);
                     case "compute": return DivisionComputeCLI.TryRun(args);
+                    case "ctsstest": return CtssTest.Run(args);
                     case "info": return RunInfo();
                     case "nodetest": return NodeGraphTest.Run(args);
                     case "selftest": return EngineSelfTest.Run();
@@ -477,6 +478,10 @@ namespace DivisionEngine.Editor
                   compare   Compare two PNG renders per channel (golden-image gate)
                             Options: --a <golden.png> --b <candidate.png> [--tolerance N] [--diff file.png]
                   compute   DivisionCompute tooling (see --cli compute help)
+                  ctsstest  Render no-AA, CTSS and a 4x-SSAA reference; compare edge error
+                            Options: --width N --height N --fixed-frame N --out <dir>
+                            Exits 1 when CTSS touches <0.2% of pixels or does not
+                            reduce their error against the reference by 25%
                   info      Print engine/runtime information
                   nodetest  Run headless node graph model checks (registry, typed connections,
                             evaluation, cycle rejection, serialization); exits 1 on failure
@@ -494,6 +499,11 @@ namespace DivisionEngine.Editor
                                      --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels, 10 = LOD levels)
                                      --voxel --voxel-resolution N  (de-voxelized SDF path)
                                      --no-voxel                   (force the exact SDF path)
+                                     --ctss                       (cone-traced adaptive AA)
+                                     --ctss-coverage N            (cone radius in pixels, default 1)
+                                     --ctss-debug N               (1 = edge map, 2 = coverage)
+                                     --no-ctss                    (force CTSS off)
+                                     --sample-center              (pixel-centre primary rays for comparisons)
                                      --no-checkerboard --no-post --no-denoise --no-fxaa
                                      --reload-shaders  (drop compiled shaders mid-capture)
                   help      Show this message
@@ -528,15 +538,61 @@ namespace DivisionEngine.Editor
             RenderPipeline.VoxelResolutionOverride = GetOptionalInt(args, "--voxel-resolution");
         }
 
+        /// <summary>
+        /// Applies the camera's CTSS switches for headless captures and benchmarks.
+        /// </summary>
+        private static void ApplyCtssOptions(string[] args)
+        {
+            if (HasFlag(args, "--sample-center")) RenderPipeline.ForceCenteredSampling = true;
+
+            if (WorldManager.CurrentWorld is null) return;
+
+            Camera? camera = null;
+            foreach ((uint _, Camera candidate) in WorldManager.CurrentWorld.QueryData<Camera>())
+            {
+                camera = candidate;
+                break;
+            }
+            if (camera is null) return;
+
+            if (HasFlag(args, "--ctss")) camera.antiAliasing = Camera.AntiAliasingMode.CTSS;
+            if (HasFlag(args, "--no-ctss") && camera.antiAliasing == Camera.AntiAliasingMode.CTSS)
+                camera.antiAliasing = Camera.AntiAliasingMode.FXAA;
+
+            float? coverage = GetOptionalFloat(args, "--ctss-coverage");
+            if (coverage.HasValue && coverage.Value > 0f)
+            {
+                camera.antiAliasing = Camera.AntiAliasingMode.CTSS;
+                camera.ctssConeCoverage = coverage.Value;
+            }
+
+            int? debug = GetOptionalInt(args, "--ctss-debug");
+            if (debug.HasValue)
+            {
+                camera.antiAliasing = Camera.AntiAliasingMode.CTSS;
+                camera.debugCTSS = debug.Value switch
+                {
+                    1 => Camera.AntiAliasingDebugMode.CtssSamples,
+                    2 => Camera.AntiAliasingDebugMode.CtssCoverage,
+                    _ => Camera.AntiAliasingDebugMode.Disabled,
+                };
+            }
+        }
+
         private static void ApplyTestRenderOptions(string[] args)
         {
+            ApplyCtssOptions(args);
+
             // --no-post disables every post-processing stage (denoisers, FXAA and the
             // colour effects) so a capture shows exactly what the SDF pass wrote.
             if (HasFlag(args, "--no-post") && WorldManager.CurrentWorld is not null)
             {
                 foreach ((uint _, Camera camera) in WorldManager.CurrentWorld.QueryData<Camera>())
                 {
-                    camera.enableFxaa = false;
+                    // --no-post removes the post chain (including FXAA) so a capture
+                    // shows the raw SDF pass. CTSS runs inside that pass and stays on.
+                    if (camera.antiAliasing == Camera.AntiAliasingMode.FXAA)
+                        camera.antiAliasing = Camera.AntiAliasingMode.None;
                     camera.enableDivisionDenoise = false;
                     camera.enableATrousDenoise = false;
                     break;
@@ -566,7 +622,8 @@ namespace DivisionEngine.Editor
                         camera.enableDivisionDenoise = false;
                         camera.enableATrousDenoise = false;
                     }
-                    if (HasFlag(args, "--no-fxaa")) camera.enableFxaa = false;
+                    if (HasFlag(args, "--no-fxaa") && camera.antiAliasing == Camera.AntiAliasingMode.FXAA)
+                        camera.antiAliasing = Camera.AntiAliasingMode.None;
                     break;
                 }
             }
@@ -630,6 +687,15 @@ namespace DivisionEngine.Editor
                 float.TryParse(args[index + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
                 return value;
             return fallback;
+        }
+
+        private static float? GetOptionalFloat(string[] args, string name)
+        {
+            int index = Array.IndexOf(args, name);
+            if (index >= 0 && index + 1 < args.Length &&
+                float.TryParse(args[index + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+                return value;
+            return null;
         }
     }
 }

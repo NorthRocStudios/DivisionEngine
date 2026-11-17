@@ -61,7 +61,7 @@ namespace DivisionEngine.Rendering
         {
             if (settings is null || camera is null) return false;
 
-            return camera.enableFxaa
+            return camera.antiAliasing == Camera.AntiAliasingMode.FXAA
                 || settings.enableDepthOfField
                 || settings.enableBlur
                 || settings.enableBloom
@@ -127,7 +127,7 @@ namespace DivisionEngine.Rendering
                 current = target;
             }
 
-            if (camera.enableFxaa)
+            if (camera.antiAliasing == Camera.AntiAliasingMode.FXAA)
             {
                 RWTexture2D<float4> target = Target();
                 DivisionShader shader = GetShader(typeof(FXAAShader));
@@ -136,7 +136,13 @@ namespace DivisionEngine.Rendering
                 shader.SetFloat("edgeThreshold", camera.fxaaThreshold);
                 shader.SetFloat("strength", camera.fxaaStrength);
                 shader.SetInt("area", camera.fxaaKernelSize);
-                shader.SetInt("debug", (int)camera.debugFxaa);
+                int fxaaDebug = camera.debugCTSS switch
+                {
+                    Camera.AntiAliasingDebugMode.FxaaThreshold => 1,
+                    Camera.AntiAliasingDebugMode.FxaaDirection => 2,
+                    _ => 0,
+                };
+                shader.SetInt("debug", fxaaDebug);
                 shader.SetRWTexture2D("inputTexture", current);
                 shader.SetRWTexture2D("outputTexture", target);
                 shader.Dispatch2D(shader.FindKernel("Execute"), frameWidth, frameHeight);

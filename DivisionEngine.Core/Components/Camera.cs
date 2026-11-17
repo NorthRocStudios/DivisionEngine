@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -14,9 +14,26 @@ namespace DivisionEngine.Components
     /// </summary>
     public class Camera : IComponent
     {
-        public enum FXAADebugMode
+        /// <summary>
+        /// Anti-aliasing method used for this camera.
+        /// </summary>
+        public enum AntiAliasingMode
         {
-            Disabled = 0, Threshold = 1, Direction = 2,
+            None = 0,
+            FXAA = 1,
+            CTSS = 2,
+        }
+
+        /// <summary>
+        /// Debug visualization for the selected anti-aliasing method.
+        /// </summary>
+        public enum AntiAliasingDebugMode
+        {
+            Disabled = 0,
+            FxaaThreshold = 1,
+            FxaaDirection = 2,
+            CtssSamples = 3,
+            CtssCoverage = 4,
         }
 
         /// <summary>
@@ -81,11 +98,11 @@ namespace DivisionEngine.Components
         public int aTrousStepCount = 2;
 
         /// <summary>
-        /// Enable Fast Approximate Anti-Aliasing.
+        /// Anti-aliasing method: none, FXAA, or SDF-specific cone-traced supersampling.
         /// </summary>
         [Header("Anti-Aliasing")]
-        [Tooltip("Fast Approximate Anti-Aliasing")]
-        public bool enableFxaa = true;
+        [Tooltip("Anti-aliasing method (FXAA or cone-traced supersampling)")]
+        public AntiAliasingMode antiAliasing = AntiAliasingMode.FXAA;
         /// <summary>
         /// FXAA edge detection luminance threshold.
         /// </summary>
@@ -101,10 +118,19 @@ namespace DivisionEngine.Components
         [Tooltip("The size of the area edge blur")]
         public int fxaaKernelSize = 2;
         /// <summary>
-        /// Debug mode for FXAA (0 = off, 1 = threshold, 2 = direction).
+        /// Combined debug view for the selected anti-aliasing method.
         /// </summary>
         [Space(6f)]
-        public FXAADebugMode debugFxaa = FXAADebugMode.Disabled;
+        [Tooltip("Anti-aliasing debug view (FXAA threshold/direction or CTSS samples/coverage)")]
+        public AntiAliasingDebugMode debugCTSS = AntiAliasingDebugMode.Disabled;
+
+        /// <summary>
+        /// Radius of the cone in pixels. 1 covers the pixel corners.
+        /// </summary>
+        [Range(0.25f, 4f)]
+        [Tooltip("CTSS cone coverage in pixels (1 = pixel corners)")]
+        public float ctssConeCoverage = 1f;
+
 
         public IComponent Clone() => new Camera
         {
@@ -123,11 +149,13 @@ namespace DivisionEngine.Components
             divisionDenoiseDomain = divisionDenoiseDomain,
             aTrousStepCount = aTrousStepCount,
 
-            enableFxaa = enableFxaa,
+            antiAliasing = antiAliasing,
             fxaaThreshold = fxaaThreshold,
             fxaaStrength = fxaaStrength,
             fxaaKernelSize = fxaaKernelSize,
-            debugFxaa = debugFxaa,
+            debugCTSS = debugCTSS,
+
+            ctssConeCoverage = ctssConeCoverage,
         };
     }
 }

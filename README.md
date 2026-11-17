@@ -166,6 +166,94 @@ DivisionEngine.Editor.exe --cli bench --voxel --move 0.4 --frames 60
 DivisionEngine.Editor.exe --cli bench --no-voxel --move 0.4 --frames 60
 ```
 
+## Cone-Traced Supersampling (CTSS)
+
+The exact SDF path supports **cone-traced supersampling**, an SDF-specific
+anti-aliasing technique from [Cone-Traced Supersampling for Signed Distance Field
+Rendering](https://cim.mcgill.ca/~derek/files/publication-files/chubarau-zhao-rao-nowrouzezahrai-kry-cone-traced-supersampling-with-subpixel-edge-reconstruction-ieee-trans-vis-comput-graph-2024.pdf).
+Instead of casting a grid of extra rays for every pixel, CTSS traces the primary
+ray as a cone whose base covers the pixel. Pixels whose cone is only partially
+covered by geometry are resolved with a 2x2 subpixel grid (the paper's CTSS +
+supersampling combination, applied adaptively); fully occluded interior pixels
+keep the ordinary single-sample trace. The extra shading is therefore
+concentrated on geometric edges.
+
+The pure paper formulation was evaluated first: its local half-space visibility
+mask over-covers large curved silhouettes, because a ray that only clips an edge
+can still penetrate deeply into the object. The adaptive subpixel grid replaces
+that approximation and is what this engine ships.
+
+Anti-aliasing is a per-camera choice: select the camera and pick **Anti-Aliasing ->
+Anti-Aliasing Method -> CTSS** (or **FXAA** / **None**) in the inspector.
+Per-camera CTSS knobs appear below it:
+
+- **Cone Coverage** - cone radius in pixels; 1 traces through the pixel corners.
+- **Debug CTSS** - one dropdown for both methods: FXAA threshold/direction and
+  CTSS sample-count/coverage visualisations. Options that do not apply to the
+  selected method render normally.
+
+Command line:
+
+```bash
+# Deterministic CTSS capture (post-processing off to show the raw SDF pass)
+DivisionEngine.Editor.exe --cli shot --ctss --no-post --fixed-frame 8 \
+    --width 1280 --height 720 --out ctss.png
+
+# Compare coverage / isolate the edge detector
+DivisionEngine.Editor.exe --cli shot --ctss --ctss-coverage 0.5 --no-post --out ctss-half.png
+DivisionEngine.Editor.exe --cli shot --ctss --ctss-debug 1 --no-post --out edges.png
+
+# Headless quality gate: no-AA vs CTSS against a 4x-SSAA reference
+DivisionEngine.Editor.exe --cli ctsstest --width 640 --height 360
+```
+
+CTSS is geometric anti-aliasing: it cannot resolve colour discontinuities from
+textures, shadows, or specular highlights inside a hit group. The iterated
+fractals (Mandelbulb, Menger sponge, Mandelbox) use conservative distance
+estimators rather than true Eikonal SDFs. Tracing a cone against them finds false
+partial hits, so CTSS detects such objects and falls back to the ordinary
+single-sample trace for those pixels: their silhouettes stay aliased, but their
+fine detail is preserved. CTSS applies to the exact SDF renderer, not the voxel
+clipmap.
+
+### Measured results
+
+Quality gate (`--cli ctsstest`, 640x360, 4x-SSAA reference, reflections and
+refractions disabled to isolate geometric edges):
+
+- CTSS changes **0.97% of pixels** (the detected edges).
+- On those pixels the mean luminance error drops from **0.0559 to 0.0364**
+  (**35% lower**).
+- The sphere silhouette improves by **39%**; the full edge mask by 1.1%
+  (fractal/texture edges are deliberately left untouched).
+- No NaN/Inf pixels.
+
+Performance at 1280x720 with post-processing off (60 measured frames, 10 warmup):
+
+| Renderer | Median (steady state) | FPS |
+| --- | ---: | ---: |
+| Pre-change renderer (no AA) | 30.3 ms | 32.9 |
+| This build, Anti-Aliasing = None | 34.4 ms | 29.1 |
+| This build, Anti-Aliasing = CTSS | 28.7 ms | 34.9 |
+
+CTSS is **about 1.2x faster than this build's None path**: interior pixels
+take one primary sample instead of the renderer's two, and only detected edges
+take four. It runs at parity with (even slightly ahead of) the original renderer,
+well inside the paper's 15-30% overhead. Frame times vary by a few milliseconds
+with GPU clocks; the table uses the median of repeated 60-frame runs after a
+warm-up. The None path still carries a little of the larger shader's register
+cost, which is why CTSS is the recommended exact-SDF anti-aliasing choice.
+
+The first optimized shader compile takes about 15 minutes on this machine
+(roughly 4 minutes unoptimized); it is cached on disk and later runs start in
+under a second.
+
+Cone-edge detection runs in a separate small kernel that writes a mask; the main
+SDF kernel reads an SRV copy. That keeps `None`/`FXAA` on their original register
+budget. Multi-kernel shaders require DivisionCompute to emit explicit
+`register(tN/uN)` slots (the translator change lives in the sibling
+`DivisionTranslate/DivisionCompute` checkout this project builds against).
+
 ### What about the planned marketplace?
 
 In the future there will be a Division Engine marketplace, completely separate with its own terms. The engine remains free and GPL-licensed. The marketplace will be where creators can buy/sell assets, projects, etc. with revenue supporting ongoing development.

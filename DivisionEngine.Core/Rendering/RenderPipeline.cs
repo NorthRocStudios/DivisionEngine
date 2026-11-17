@@ -141,6 +141,8 @@ namespace DivisionEngine.Rendering
         private RWTexture2D<float>? lowResDepthTex;
         private RWTexture2D<float4>? lowResRenderTex; // Optional, for debugging
         private RWTexture2D<float4>? renderTex;
+        private RWTexture2D<float4>? ctssEdgeTex;
+        private RWTexture2D<float4>? ctssEdgeReadTex;
         private RWTexture2D<float4>? depthNormalsTex;
         private RWBuffer<uint2>? objectIdBuffer;
         private RWBuffer<uint>? handleIdBuffer;
@@ -182,6 +184,13 @@ namespace DivisionEngine.Rendering
         /// step. Set by <c>--cli shot --fixed-frame</c> before rendering.
         /// </summary>
         public static bool DeterministicCapture { get; set; }
+
+        /// <summary>
+        /// Test-only switch that samples every primary ray through the pixel centre
+        /// instead of the usual corner. CTSS always centres its own cone; this flag
+        /// lets comparison renders use the same pixel phase.
+        /// </summary>
+        public static bool ForceCenteredSampling { get; set; }
 
         /// <summary>
         /// Is checkerboard rendering enabled (renders half the pixels each frame).
@@ -688,6 +697,26 @@ namespace DivisionEngine.Rendering
         /// </summary>
         private DivisionShader CompileShaderWithFlags(Type shaderType)
         {
+            // Development hook: the CTSS shader is large and D3DCompile's default
+            // optimization can take many minutes. Compiling it unoptimized is much
+            // faster and is enough to inspect a frame; set DIVISION_SDF_SHADER_OD=1.
+            // The flag participates in the bytecode cache key, so this never silently
+            // replaces the optimized binary used for performance measurements.
+            if (shaderType == typeof(SDFShader3D) &&
+                (System.Environment.GetEnvironmentVariable("DIVISION_SDF_SHADER_OD") is "1" or "true"))
+            {
+                HLSLTranslationResult odTranslation = Context!.Compiler.TranslateShader(shaderType);
+                if (!odTranslation.IsSuccess)
+                    throw new InvalidOperationException(odTranslation.ErrorMessage);
+
+                HLSLCompilationResult odCompilation = DivisionShaderCompiler.CompileHLSL(
+                    odTranslation, ShaderFlags.SkipOptimization);
+                if (!odCompilation.IsSuccess)
+                    throw new InvalidOperationException(odCompilation.DebugMessage);
+
+                return Context.CreateShader(odCompilation, shaderType);
+            }
+
             if (shaderType != typeof(VoxelSDFShader3D))
                 return Context!.CompileShader(shaderType);
 
@@ -1109,6 +1138,20 @@ namespace DivisionEngine.Rendering
                         Pixels = new float4[texWidth * texHeight];
                     }
 
+                    // Cone-edge mask for CTSS. ExecuteEdge writes the UAV; CopyTo makes
+                    // an SRV copy for Execute (D3D11 disallows consuming the same texture
+                    // as a UAV and an SRV in one dispatch).
+                    if (ctssEdgeTex == null || ctssEdgeTex.Width != texWidth || ctssEdgeTex.Height != texHeight)
+                    {
+                        ctssEdgeTex?.Dispose();
+                        ctssEdgeTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
+                    }
+                    if (ctssEdgeReadTex == null || ctssEdgeReadTex.Width != texWidth || ctssEdgeReadTex.Height != texHeight)
+                    {
+                        ctssEdgeReadTex?.Dispose();
+                        ctssEdgeReadTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
+                    }
+
                     // Build low res depth prepass buffer
                     if (lowResDepthTex == null || lowResDepthTex.Width != lowResWidth || lowResDepthTex.Height != lowResHeight)
                     {
@@ -1288,6 +1331,24 @@ namespace DivisionEngine.Rendering
                     }
                     else
                     {
+                        // CTSS settings live on the camera, like the other AA options. Pick
+                        // the same camera the post chain will use.
+                        Camera? sdfCamera = null;
+                        foreach (var (_, _, camera, _) in boundWorld?.QueryData<Transform, Camera, PostProcessing>() ?? [])
+                        {
+                            sdfCamera = camera;
+                            break;
+                        }
+                        if (sdfCamera is null)
+                        {
+                            foreach (var (_, camera) in boundWorld?.QueryData<Camera>() ?? [])
+                            {
+                                sdfCamera = camera;
+                                break;
+                            }
+                        }
+                        bool ctssEnabled = sdfCamera?.antiAliasing == Camera.AntiAliasingMode.CTSS;
+
                         DivisionShader sdfShader = GetShader(typeof(SDFShader3D));
                         sdfShader.SetFloat("width", texWidth);
                         sdfShader.SetFloat("height", texHeight);
@@ -1295,8 +1356,20 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetInt("frameCount", TimeSystem.FrameCount);
                         sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
                         sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
+                        sdfShader.SetInt("enableCtss", ctssEnabled ? 1 : 0);
+                        sdfShader.SetInt("sampleCenter", ForceCenteredSampling ? 1 : 0);
+                        sdfShader.SetFloat("ctssConeCoverage", math.max(sdfCamera?.ctssConeCoverage ?? 1f, 0.05f));
+                        int ctssDebug = sdfCamera?.debugCTSS switch
+                        {
+                            Camera.AntiAliasingDebugMode.CtssSamples => 1,
+                            Camera.AntiAliasingDebugMode.CtssCoverage => 2,
+                            _ => 0,
+                        };
+                        sdfShader.SetInt("ctssDebug", ctssEnabled ? ctssDebug : 0);
                         sdfShader.SetStructuredBuffer("worldData", SDFRenderSystem.WorldDataBuffer!);
                         sdfShader.SetRWTexture2D("outputTexture", renderTex!);
+                        sdfShader.SetRWTexture2D("edgeMaskWrite", ctssEdgeTex!);
+                        sdfShader.SetTexture2D("edgeMaskRead", ctssEdgeReadTex!);
                         sdfShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
                         sdfShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
                         sdfShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
@@ -1305,6 +1378,11 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetStructuredBuffer("textureMetadata", textureMetaBuffer!);
                         sdfShader.SetBuffer("terrainHeightData", terrainHeightBuffer!);
                         sdfShader.SetStructuredBuffer("terrainMetadata", terrainMetadataBuffer!);
+                        if (ctssEnabled)
+                        {
+                            sdfShader.Dispatch2D(sdfShader.FindKernel("ExecuteEdge"), dispatchWidth, dispatchHeight);
+                            ctssEdgeTex!.CopyTo(Context!.Context, ctssEdgeReadTex!);
+                        }
                         sdfShader.Dispatch2D(sdfShader.FindKernel("Execute"), dispatchWidth, dispatchHeight);
                     }
                 }
@@ -1833,6 +1911,8 @@ namespace DivisionEngine.Rendering
                 inputContext = null;
             }
             fxaaInputTex?.Dispose();
+            ctssEdgeTex?.Dispose();
+            ctssEdgeReadTex?.Dispose();
             customShapeBuffer?.Dispose();
             divisionPostProcess?.Dispose();
 
@@ -1841,6 +1921,8 @@ namespace DivisionEngine.Rendering
             shaders.Clear();
 
             renderTex = null;
+            ctssEdgeTex = null;
+            ctssEdgeReadTex = null;
             postProcessTex = null;
             aTrousPongTex = null;
             depthNormalsTex = null;

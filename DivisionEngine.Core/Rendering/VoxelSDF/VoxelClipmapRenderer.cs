@@ -7,7 +7,6 @@
 //
 using DivisionEngine.Graphics;
 using DivisionEngine.MathLib;
-using DivisionEngine.Rendering;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 

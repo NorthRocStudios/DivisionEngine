@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -516,7 +516,7 @@ namespace DivisionEngine.Editor
             {
                 fieldOfView = fov,
                 isActive = true,
-                enableFxaa = false,
+                antiAliasing = Camera.AntiAliasingMode.None,
                 enableDivisionDenoise = false,
                 enableATrousDenoise = false,
             });

@@ -1,4 +1,4 @@
-﻿
+
 //
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
@@ -37,11 +37,29 @@ namespace DivisionEngine
         /// <summary>1 when the checkerboard half-resolution path is active.</summary>
         public int enableCheckerboard;
 
+        /// <summary>1 when cone-traced supersampling replaces the single-sample primary trace.</summary>
+        public int enableCtss;
+
+        /// <summary>1 to put the primary ray through the pixel centre (test/comparison mode).</summary>
+        public int sampleCenter;
+
+        /// <summary>CTSS cone coverage in pixels; 1 traces a cone through the pixel corners.</summary>
+        public float ctssConeCoverage;
+
+        /// <summary>CTSS debug visualization (0 = off, 1 = samples, 2 = coverage).</summary>
+        public int ctssDebug;
+
         /// <summary>World/scene uniforms.</summary>
         [ShaderResource] public StructuredBuffer<SDFWorldDTO> worldData;
 
         /// <summary>Colour target. Named outputTexture because 'texture' is reserved in HLSL.</summary>
         [ShaderResource] public RWTexture2D<float4> outputTexture;
+
+        /// <summary>Per-pixel cone-edge mask written by the ExecuteEdge kernel (1 = supersample).</summary>
+        [ShaderResource] public RWTexture2D<float4> edgeMaskWrite;
+
+        /// <summary>Read-side copy of the cone-edge mask (separate texture for the SRV).</summary>
+        [ShaderResource] public Texture2D<float4> edgeMaskRead;
 
         /// <summary>Depth (r) and world normals (gba) target.</summary>
         [ShaderResource] public RWTexture2D<float4> depthNormals;
@@ -1398,6 +1416,86 @@ namespace DivisionEngine
             return outputColor;
         }
 
+        // --------------------
+        // Cone-traced supersampling (CTSS)
+        // --------------------
+
+        /// <summary>
+        /// CTSS assumes f is a true signed distance field (‖∇f‖ = 1). The iterated
+        /// fractals only provide conservative distance estimates; tracing a cone against
+        /// them finds false partial hits and shades the wrong surface (the Menger sponge
+        /// loses its holes entirely at one-pixel cone coverage). Those objects fall back
+        /// to the ordinary single-sample trace. Terrain and ordinary primitives are fine.
+        /// </summary>
+        private bool IsApproximateObject(int objectIndex)
+        {
+            if (objectIndex < 0 || objectIndex >= sdfObjects.Length) return true;
+
+            SDFObjectDTO obj = sdfObjects[objectIndex];
+            if (obj.type == 10 || obj.type == 11 || obj.type == 12) return true;
+
+            // Non-uniform object scaling turns the local distance into a conservative
+            // estimate too. Uniform scaling (including the terrain's unit scale) is exact.
+            float3 s = obj.scaling;
+            float smallest = math.min(s.x, math.min(s.y, s.z));
+            float largest = math.max(s.x, math.max(s.y, s.z));
+            return largest > smallest * 1.02f;
+        }
+
+        /// <summary>
+        /// Classifies a pixel by tracing its cone. Returns true when the cone only
+        /// partially covers geometry: a soft-only hit group (the outside fringe of a
+        /// silhouette) or a hard hit that exits without fully occluding the cone (a
+        /// grazing chord along a large curved surface). Fully occluded interior pixels
+        /// return false. Objects whose distance estimators are not Eikonal are never
+        /// classified as edges, so their detail is left to the ordinary trace.
+        /// </summary>
+        private bool ConeEdgePixel(float3 rayOrigin, float3 rayDir)
+        {
+            float tanTheta = math.max(ctssConeCoverage, 0.05f) * 1.41421356f
+                * worldData[0].camScreenDist / math.max(height, 1f);
+            float farPlane = worldData[0].farPlane;
+            int maxSteps = worldData[0].maxRaySteps;
+            float t = math.max(worldData[0].nearPlane, EPSILON);
+            bool inGroup = false;
+            bool groupHasHard = false;
+
+            for (int step = 0; step < maxSteps && t < farPlane; step++)
+            {
+                float d = WorldSDF(rayOrigin + rayDir * t, out int obj);
+                float coneRadius = math.max(t * tanTheta, 1e-6f);
+                float omega = (1f - d / coneRadius) * 0.5f;
+                bool softHit = omega > 0f;
+                bool fullOcclusion = omega >= 1f - 1e-4f;
+
+                if (softHit)
+                {
+                    if (!inGroup)
+                    {
+                        inGroup = true;
+                        groupHasHard = false;
+                        if (IsApproximateObject(obj)) return false;
+                    }
+                    if (omega > 0.5f) groupHasHard = true;
+                }
+
+                if (inGroup && (!softHit || fullOcclusion))
+                {
+                    if (!groupHasHard || !fullOcclusion) return true;
+                    // A hard hit that fully occludes the cone is an interior pixel;
+                    // no later surface in this cone can be visible.
+                    return false;
+                }
+
+                // The paper's adaptive minimum step, so a hard hit cannot stall tracing.
+                float advance = math.max(d, coneRadius * 0.5f);
+                if (advance < EPSILON) advance = EPSILON;
+                t += advance;
+            }
+
+            return false;
+        }
+
         #endregion raymarching
         #region debug
 
@@ -1483,6 +1581,31 @@ namespace DivisionEngine
         #region main
 
         /// <summary>
+        /// Writes the per-pixel cone-edge mask. This is a separate kernel so the large
+        /// shading kernel below does not pay its register cost when CTSS is off.
+        /// </summary>
+        [Kernel(8, 8, 1)]
+        public void ExecuteEdge(uint3 id)
+        {
+            int2 localPixel = new int2((int)id.x, (int)id.y);
+            int2 pixel;
+            if (enableCheckerboard == 1)
+            {
+                int framePass = frameCount & 1;
+                pixel = new int2(localPixel.x * 2 + (framePass ^ (localPixel.y & 1)), localPixel.y);
+            }
+            else pixel = localPixel;
+            if (pixel.x >= width || pixel.y >= height) return;
+
+            float2 uv = (new float2((float)pixel.x + 0.5f, (float)pixel.y + 0.5f)
+                / new float2(width, height)) * 2f - 1f;
+            float3 rayDir = ShaderMath.GetCameraRayDirNew(aspect, uv,
+                worldData[0].camScreenDist, worldData[0].camForward, worldData[0].camRight, worldData[0].camUp);
+            bool edge = ConeEdgePixel(worldData[0].cameraOrigin, rayDir);
+            edgeMaskWrite[pixel] = new float4(edge ? 1f : 0f, 0f, 0f, 1f);
+        }
+
+        /// <summary>
         /// Executes the raymarching sequence.
         /// </summary>
         /// <summary>Raymarches one pixel per thread.</summary>
@@ -1514,14 +1637,45 @@ namespace DivisionEngine
             float3 rayDir = new float3(0f);
             float accumulatedDistance = 0f;
             int steps = 0;
+            int ctssSamples = 0;
+            float ctssCoverage = 0f;
 
-            for (int sample = 0; sample < SAMPLES_PER_PIXEL; sample++)
+            // The primary renderer samples on pixel corners. Cone-traced pixels sample
+            // through the pixel centre so the 2x2 subpixel grid is aligned with the
+            // pixel footprint.
+            float2 sampleUv = uv;
+            if (enableCtss == 1 || sampleCenter == 1)
+                sampleUv = (new float2((float)pixel.x + 0.5f, (float)pixel.y + 0.5f) / new float2(width, height)) * 2f - 1f;
+
+            rayDir = ShaderMath.GetCameraRayDirNew(aspect, sampleUv,
+                worldData[0].camScreenDist, worldData[0].camForward, worldData[0].camRight, worldData[0].camUp);
+
+            // Cone tracing only classifies the pixel: partially covered pixels get the
+            // 2x2 supersampling grid the paper pairs with CTSS, everything else keeps a
+            // single sample. Keeping one TraceRay call site is important: this shader's
+            // inlined shading graph is what made naive CTSS variants take an hour to
+            // compile.
+            bool ctssEdge = enableCtss == 1 && edgeMaskRead[pixel].r > 0.5f;
+            bool subpixelGrid = enableCtss == 1 && ctssEdge;
+            int sampleCount = enableCtss == 1 ? (ctssEdge ? 4 : 1) : SAMPLES_PER_PIXEL;
+            ctssSamples = enableCtss == 1 ? sampleCount : 0;
+            ctssCoverage = ctssEdge ? 1f : 0f;
+
+            for (int sample = 0; sample < sampleCount; sample++)
             {
-                rayDir = ShaderMath.GetCameraRayDirNew(aspect, uv,
+                float2 subUv = sampleUv;
+                if (subpixelGrid)
+                {
+                    int sx = sample & 1;
+                    int sy = sample >> 1;
+                    subUv += new float2(((float)sx - 0.5f) / width, ((float)sy - 0.5f) / height);
+                }
+
+                float3 sampleDir = ShaderMath.GetCameraRayDirNew(aspect, subUv,
                     worldData[0].camScreenDist, worldData[0].camForward, worldData[0].camRight, worldData[0].camUp);
 
                 // Automatically skip reflection bounces for non-reflective materials
-                float3 color = TraceRay(pixel, rayOrigin, rayDir, sample,
+                float3 color = TraceRay(pixel, rayOrigin, sampleDir, sample,
                     out float3 outputNormal, out float dist, out int tracedSteps);
                 steps += tracedSteps;
                 accumulatedColor += color;
@@ -1530,12 +1684,18 @@ namespace DivisionEngine
             }
 
             float maxPossibleDistance = worldData[0].farPlane - worldData[0].nearPlane;
-            float3 finalColor = accumulatedColor / SAMPLES_PER_PIXEL;
-            float3 finalNormal = accumulatedNormal / SAMPLES_PER_PIXEL;
-            float finalDist = accumulatedDistance / SAMPLES_PER_PIXEL;
+            float invSamples = 1f / (float)sampleCount;
+            float3 finalColor = accumulatedColor * invSamples;
+            float3 finalNormal = accumulatedNormal * invSamples;
+            float finalDist = accumulatedDistance * invSamples;
 
+            // Debug visualization is shown linearly so the colours are readable.
+            if (enableCtss == 1 && ctssDebug == 1)
+                finalColor = new float3(math.saturate((float)ctssSamples / 8f), math.saturate(ctssCoverage), 0f);
+            else if (enableCtss == 1 && ctssDebug == 2)
+                finalColor = new float3(ctssCoverage, ctssCoverage, ctssCoverage);
             // ACES tonemapping
-            if (worldData[0].enableAces == 1)
+            else if (worldData[0].enableAces == 1)
                 finalColor = math.saturate(finalColor * (2.51f * finalColor + 0.03f) / (finalColor * (2.43f * finalColor + 0.59f) + 0.14f));
 
             // Final

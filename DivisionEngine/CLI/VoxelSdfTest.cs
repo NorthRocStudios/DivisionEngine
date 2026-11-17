@@ -7,7 +7,6 @@
 //
 using DivisionEngine.Components;
 using DivisionEngine.Components.SDFs.Primitives;
-using DivisionEngine.MathLib;
 using DivisionEngine.Rendering;
 using DivisionEngine.Rendering.VoxelSDF;
 using System;
