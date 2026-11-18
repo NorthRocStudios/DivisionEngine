@@ -100,6 +100,12 @@ namespace DivisionEngine
         const float MIN_REFLECTION_CHANCE = 0.01f;
         const float MIN_THROUGHPUT = 0.01f;
         const float REFLECTION_BIAS = 2f; // Multiplier for normal offset
+        /// <summary>
+        /// Maximum shadow-ray length passed for directional lights. Point lights pass the
+        /// distance to the light instead, so their shadow rays stop at the light and do not
+        /// get occluded by geometry behind it.
+        /// </summary>
+        const float SHADOW_RAY_UNLIMITED = 1e30f;
 
         #region textures
 
@@ -412,6 +418,21 @@ namespace DivisionEngine
                 float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
                 float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
                 int texelBase = meta.bufferOffset + slot * stride * stride;
+                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
+
+                // Fade the outermost ring to sea level so the clipmap does not end
+                // in a visible cliff. This is deliberately cheap: adding the
+                // procedural base height here would duplicate the whole FBM (three
+                // noise octaves) at every terrain sample in the raymarcher. The fade
+                // applies to every interpolation mode, otherwise bilinear mode would
+                // end at a raw height-map cliff while Hermite fades out.
+                float fade = 1.0f;
+                if (meta.worldSpace == 1)
+                {
+                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
+                    float fadeStart = maxRadius * 0.85f;
+                    fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
+                }
 
                 if (meta.interpolation == 0)
                 {
@@ -430,8 +451,13 @@ namespace DivisionEngine
                     float4 c10 = terrainHeightData[texelBase + z0 * stride + x1];
                     float4 c01 = terrainHeightData[texelBase + z1 * stride + x0];
                     float4 c11 = terrainHeightData[texelBase + z1 * stride + x1];
+                    float4 bilinear = TerrainRendering.BilinearTerrain4(c00, c10, c01, c11, fx, fz,
+                        texelWorldSize, texelWorldSize);
+                    bilinear.x *= fade;
+                    bilinear.y *= fade;
+                    bilinear.z *= fade;
                     found = 1;
-                    return TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                    return bilinear;
                 }
 
                 // Cubic Hermite reconstruction: four texels plus the stored
@@ -450,23 +476,11 @@ namespace DivisionEngine
                 float4 p10 = terrainHeightData[texelBase + hz0 * stride + hx0 + 1];
                 float4 p01 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0];
                 float4 p11 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0 + 1];
-                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
                 float4 terrainSample = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
                     texelWorldSize, texelWorldSize);
-
-                // Fade the outermost ring to sea level so the clipmap does not end
-                // in a visible cliff. This is deliberately cheap: adding the
-                // procedural base height here would duplicate the whole FBM (three
-                // noise octaves) at every terrain sample in the raymarcher.
-                if (meta.worldSpace == 1)
-                {
-                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
-                    float fadeStart = maxRadius * 0.85f;
-                    float fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
-                    terrainSample.x *= fade;
-                    terrainSample.y *= fade;
-                    terrainSample.z *= fade;
-                }
+                terrainSample.x *= fade;
+                terrainSample.y *= fade;
+                terrainSample.z *= fade;
 
                 found = 1;
                 return terrainSample;
@@ -760,21 +774,29 @@ namespace DivisionEngine
         // penumbra shape is defined by it, together with the local-space step sizes produced by
         // ObjectSDF. Only additions are the receiver's own entity being skipped (self-shadow)
         // and the DivisionCompute spelling.
-        private float3 SoftShadow(float3 pt, float3 dir, uint excludeID)
+        private float3 SoftShadow(float3 pt, float3 dir, uint excludeID, float maxDistance)
         {
             float depth, dist, shadow = 1;
             int maxShadowRaySteps = worldData[0].maxShadowRaySteps;
+            bool limited = maxDistance < SHADOW_RAY_UNLIMITED;
             for (int k = 0; k < sdfObjects.Length; k++)
             {
                 SDFObjectDTO sdf = sdfObjects[k];
                 if (sdf.shadowEffects.x == 0) continue;
                 if (sdf.entityID == excludeID && sdf.type != 9) continue;
 
+                float rayEnd = limited
+                    ? math.min(sdf.shadowDistances.y, maxDistance)
+                    : sdf.shadowDistances.y;
                 depth = sdf.shadowDistances.x;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
+                    // Point lights stop at the light itself. The extra check keeps the
+                    // directional path bit-for-bit identical (it still samples at the
+                    // far boundary, as it always did).
+                    if (limited && depth > rayEnd) break;
                     dist = ObjectSDF(pt + depth * dir, sdf);
-                    if (depth > sdf.shadowDistances.y) break;
+                    if (depth > rayEnd) break;
                     shadow = math.min(shadow, sdf.shadowDistances.z * dist / depth);
                     depth += math.clamp(dist, 0.025f, 100f); // Larger minimum step than 0.01
                 }
@@ -783,12 +805,13 @@ namespace DivisionEngine
             return math.saturate(math.smoothstep(-1f, 0f, shadow)) * new float3(1f);
         }
 
-        private float3 SoftShadowColored(float3 pt, float3 dir, uint excludeID)
+        private float3 SoftShadowColored(float3 pt, float3 dir, uint excludeID, float maxDistance)
         {
             float shadow = 1f;
             float3 tint = new float3(1f);
             float tintShadow = 1f;
             int maxShadowRaySteps = worldData[0].maxShadowRaySteps;
+            bool limited = maxDistance < SHADOW_RAY_UNLIMITED;
             for (int k = 0; k < sdfObjects.Length; k++)
             {
                 SDFObjectDTO sdf = sdfObjects[k];
@@ -797,10 +820,13 @@ namespace DivisionEngine
 
                 bool isGlass = sdf.hasRefraction == 1;
                 float depth = sdf.shadowDistances.x;
+                float rayEnd = limited
+                    ? math.min(sdf.shadowDistances.y, maxDistance)
+                    : sdf.shadowDistances.y;
                 float3 absorptionCoefficient = isGlass ? math.log(math.max(sdf.absorptionColor.rgb, 0.001f)) : new float3(0f);
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
-                    if (depth > sdf.shadowDistances.y) break;
+                    if (depth > rayEnd) break;
                     float dist = ObjectSDF(pt + depth * dir, sdf);
                     float stepSize = math.clamp(dist, 0.025f, 100f);
                     if (isGlass)
@@ -824,21 +850,28 @@ namespace DivisionEngine
         /// Hard shadow - returns 1.0 for fully lit, 0.0 for fully shadowed.
         /// Fast and sharp, no penumbra.
         /// </summary>
-        private float3 HardShadow(float3 pt, float3 dir, uint excludeID)
+        private float3 HardShadow(float3 pt, float3 dir, uint excludeID, float maxDistance)
         {
             float depth, dist;
             int maxShadowRaySteps = worldData[0].maxShadowRaySteps;
+            bool limited = maxDistance < SHADOW_RAY_UNLIMITED;
             for (int k = 0; k < sdfObjects.Length; k++)
             {
                 SDFObjectDTO sdf = sdfObjects[k];
                 depth = sdf.shadowDistances.x;
                 if (sdf.shadowEffects.x == 0) continue;
                 if (sdf.entityID == excludeID && sdf.type != 9) continue;
+                float rayEnd = limited
+                    ? math.min(sdf.shadowDistances.y, maxDistance)
+                    : sdf.shadowDistances.y;
                 for (int i = 0; i < maxShadowRaySteps; ++i)
                 {
+                    // See SoftShadow: point lights stop before sampling past the light,
+                    // directional lights keep the original far-boundary behaviour.
+                    if (limited && depth >= rayEnd) break;
                     dist = ObjectSDF(pt + depth * dir, sdf);
                     if (dist < EPSILON) return 0f;
-                    if (depth >= sdf.shadowDistances.y) break;
+                    if (depth >= rayEnd) break;
                     depth += dist;
                 }
             }
@@ -849,7 +882,7 @@ namespace DivisionEngine
         /// Unified shadow function that selects the appropriate shadow type.
         /// </summary>
         private float3 CalculateShadow(float3 hitPoint, float3 normal, float3 lightDir, int shadowType,
-            uint excludeID, float shadowBias)
+            uint excludeID, float shadowBias, float maxDistance)
         {
             // Terrain passes a larger bias: its height field can shadow itself, and
             // a sub-millimetre offset would produce self-intersection acne.
@@ -857,15 +890,15 @@ namespace DivisionEngine
             switch (shadowType)
             {
                 case 0: // Hard shadows
-                    return HardShadow(shadowOrigin, lightDir, excludeID);
+                    return HardShadow(shadowOrigin, lightDir, excludeID, maxDistance);
                 case 1: // Soft shadows
-                    return SoftShadow(shadowOrigin, lightDir, excludeID);
+                    return SoftShadow(shadowOrigin, lightDir, excludeID, maxDistance);
                 case 2: // Colored shadows
-                    return SoftShadowColored(shadowOrigin, lightDir, excludeID);
+                    return SoftShadowColored(shadowOrigin, lightDir, excludeID, maxDistance);
                 case 3: // Caustic shadows (refracted transmission + focus)
-                    return CalculateCausticShadow(hitPoint, normal, lightDir, 0, excludeID);
+                    return CalculateCausticShadow(hitPoint, normal, lightDir, 0, excludeID, maxDistance);
                 default:
-                    return SoftShadow(shadowOrigin, lightDir, excludeID);
+                    return SoftShadow(shadowOrigin, lightDir, excludeID, maxDistance);
             }
         }
 
@@ -893,7 +926,7 @@ namespace DivisionEngine
                     if (NoL <= 0f) continue;
 
                     // Shadows
-                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias);
+                    if (shadowEffects.y != 0) lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias, SHADOW_RAY_UNLIMITED);
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
                         finalNormal, baseCol, metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
 
@@ -913,9 +946,12 @@ namespace DivisionEngine
                     if (NoL <= 0f || attenuation <= 0f) continue;
                     float3 lightColor = light.color.rgb * light.intensity * attenuation;
 
-                    // Calculate shadow for point light
+                    // Calculate shadow for point light. The ray must stop at the light:
+                    // without this, any object behind the light is marched into and
+                    // darkens the surface, which looks like the point light casting
+                    // directional shadows from the far side of the scene.
                     if (shadowEffects.y != 0 && distance < light.radius * 2f)
-                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias);
+                        lightShadow = CalculateShadow(hitPoint, geoNormal, lightDir, shadowType, excludeID, shadowBias, distance);
 
                     // Apply shadow to the entire BRDF result
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
@@ -1011,7 +1047,8 @@ namespace DivisionEngine
         /// Recursion budget (how many glass objects it'll pass through) shrinks with traceDepth,
         /// so this stays cheap when called from reflection/refraction bounces.
         /// </summary>
-        private float3 CalculateCausticShadow(float3 hitPoint, float3 normal, float3 lightDir, int traceDepth, uint excludeID)
+        private float3 CalculateCausticShadow(float3 hitPoint, float3 normal, float3 lightDir, int traceDepth,
+            uint excludeID, float maxDistance)
         {
             float3 p = hitPoint + normal * EPSILON * REFLECTION_BIAS;
             float3 dir = lightDir;
@@ -1031,9 +1068,10 @@ namespace DivisionEngine
                     if (sdf.entityID == excludeID && sdf.type != 9) continue;
 
                     float td = sdf.shadowDistances.x;
+                    float rayEnd = math.min(sdf.shadowDistances.y, maxDistance);
                     for (int i = 0; i < maxShadowRaySteps; i++)
                     {
-                        if (td > sdf.shadowDistances.y) break;
+                        if (td > rayEnd) break;
                         float dist = ObjectSDF(p + td * dir, sdf);
                         if (dist < EPSILON)
                         {
@@ -1986,7 +2024,7 @@ namespace DivisionEngine
                         if (math.length(worldData[0].mainLightDir) > 0f)
                         {
                             float3 shadowOrigin = hitPoint + normal * EPSILON * REFLECTION_BIAS;
-                            shadowColor = SoftShadow(shadowOrigin, worldData[0].mainLightDir, uint.MaxValue);
+                            shadowColor = SoftShadow(shadowOrigin, worldData[0].mainLightDir, uint.MaxValue, SHADOW_RAY_UNLIMITED);
                         }
                     }
                     outputTexture[pixel] = new float4(shadowColor, 1);

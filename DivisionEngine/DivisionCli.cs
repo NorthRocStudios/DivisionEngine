@@ -501,7 +501,8 @@ namespace DivisionEngine.Editor
                   selftest  Run headless regression checks (locale serialization, snapshots,
                             undo, matrix accessors, terrain noise); exits 1 on any failure
                   shadowtest  Render a shadow scene and verify it numerically; exits 1 on failure
-                            Options: --scene soft|colored  (colored checks glass tints combine)
+                            Options: --scene soft|colored|point  (colored checks glass tints combine;
+                                     point checks occluders behind a point light cannot cast shadows)
                                      --caustics  also render/compare the caustic shadow style
                   skyprobe  Print environment sun/atmosphere values for the default world
                   terrain   Terrain tools and tests (see --cli terrain help)

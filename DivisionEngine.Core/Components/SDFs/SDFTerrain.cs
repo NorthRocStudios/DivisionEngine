@@ -17,11 +17,14 @@ namespace DivisionEngine.Components.SDFs
         /// <summary>How the baked heightmap is reconstructed between texels.</summary>
         public enum Interpolation
         {
-            /// <summary>Classic bilinear filtering. Fast, but shows polygonal ridges.</summary>
+            /// <summary>Classic bilinear filtering. Fast, but shows polygonal ridges.
+            /// Heights and normals both come from the bilinear patch, so the surface
+            /// deliberately reads as flat, faceted rectangles.</summary>
             Bilinear = 0,
-            /// <summary>Cubic Hermite filtering from the stored analytic slopes.
+            /// <summary>Cubic Hermite filtering from the stored analytic slopes
+            /// (Bán &amp; Valasek, "Hermite interpolation of heightmaps", EG 2022).
             /// C1-continuous surfaces and smooth normals for four texels per sample.</summary>
-            Bicubic = 1,
+            Hermite = 1,
         }
 
         [Header("Terrain Settings")]
@@ -39,7 +42,7 @@ namespace DivisionEngine.Components.SDFs
 
         [Header("Heightmap")]
         [Tooltip("Filtering used between heightmap texels")]
-        public Interpolation interpolation = Interpolation.Bicubic;
+        public Interpolation interpolation = Interpolation.Hermite;
 
         [Tooltip("Texels per side of a fixed terrain heightmap")]
         [Range(32, 4096)] public int heightmapSize = 1024;

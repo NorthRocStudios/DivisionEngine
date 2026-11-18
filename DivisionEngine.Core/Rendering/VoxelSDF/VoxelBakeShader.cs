@@ -134,6 +134,15 @@ namespace DivisionEngine
                 float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
                 float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
                 int texelBase = meta.bufferOffset + slot * stride * stride;
+                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
+
+                float fade = 1.0f;
+                if (meta.worldSpace == 1)
+                {
+                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
+                    float fadeStart = maxRadius * 0.85f;
+                    fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
+                }
 
                 if (meta.interpolation == 0)
                 {
@@ -152,8 +161,13 @@ namespace DivisionEngine
                     float4 c10 = terrainHeightData[texelBase + z0 * stride + x1];
                     float4 c01 = terrainHeightData[texelBase + z1 * stride + x0];
                     float4 c11 = terrainHeightData[texelBase + z1 * stride + x1];
+                    float4 bilinear = TerrainRendering.BilinearTerrain4(c00, c10, c01, c11, fx, fz,
+                        texelWorldSize, texelWorldSize);
+                    bilinear.x *= fade;
+                    bilinear.y *= fade;
+                    bilinear.z *= fade;
                     found = 1;
-                    return TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                    return bilinear;
                 }
 
                 // Cubic Hermite reconstruction: four texels plus the stored
@@ -172,19 +186,11 @@ namespace DivisionEngine
                 float4 p10 = terrainHeightData[texelBase + hz0 * stride + hx0 + 1];
                 float4 p01 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0];
                 float4 p11 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0 + 1];
-                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
                 float4 terrainSample = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
                     texelWorldSize, texelWorldSize);
-
-                if (meta.worldSpace == 1)
-                {
-                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
-                    float fadeStart = maxRadius * 0.85f;
-                    float fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
-                    terrainSample.x *= fade;
-                    terrainSample.y *= fade;
-                    terrainSample.z *= fade;
-                }
+                terrainSample.x *= fade;
+                terrainSample.y *= fade;
+                terrainSample.z *= fade;
 
                 found = 1;
                 return terrainSample;

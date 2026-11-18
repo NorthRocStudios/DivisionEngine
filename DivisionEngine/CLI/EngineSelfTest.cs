@@ -6,6 +6,7 @@
 // project root for full license terms.
 //
 using DivisionEngine.Components;
+using DivisionEngine.Components.SDFs;
 using DivisionEngine.Editor.Systems;
 using DivisionEngine.Editor.Undo;
 using DivisionEngine.Settings;
@@ -47,6 +48,7 @@ namespace DivisionEngine.Editor
             Check("Play mode can be single-stepped while paused", CheckStepWhilePaused);
 
             Check("Vector serialization is culture independent", CheckCultureRoundTrip);
+            Check("Bicubic terrain saves load as Hermite", CheckTerrainInterpolationMigration);
             Check("Matrix accessors write through", CheckMatrixAccessors);
             Check("World snapshot preserves entity ids", CheckSnapshotIds);
             Check("World snapshot leaves the live editor camera alone", CheckSnapshotEditorCamera);
@@ -144,6 +146,20 @@ namespace DivisionEngine.Editor
             {
                 CultureInfo.CurrentCulture = original;
             }
+        }
+
+        /// <summary>
+        /// Worlds saved before the mode was renamed stored <c>interpolation = Bicubic</c>
+        /// for the cubic Hermite mode; that name must still load.
+        /// </summary>
+        private static bool CheckTerrainInterpolationMigration()
+        {
+            SDFTerrain terrain = new() { interpolation = SDFTerrain.Interpolation.Bilinear };
+            Deserialize.SetComponentProperties(terrain, new Dictionary<string, string>
+            {
+                ["interpolation"] = "Bicubic",
+            });
+            return terrain.interpolation == SDFTerrain.Interpolation.Hermite;
         }
 
         /// <summary>

@@ -162,6 +162,7 @@ namespace DivisionEngine.Rendering.Terrain
                 float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
                 float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
                 int texelBase = meta.bufferOffset + slot * stride * stride;
+                float texelWorldSize = levelSize / math.max(resolution - 1, 1);
 
                 if (meta.interpolation == 0)
                 {
@@ -175,7 +176,8 @@ namespace DivisionEngine.Rendering.Terrain
                     float4 c10 = data[texelBase + z0 * stride + x0 + 1];
                     float4 c01 = data[texelBase + (z0 + 1) * stride + x0];
                     float4 c11 = data[texelBase + (z0 + 1) * stride + x0 + 1];
-                    float4 bilinear = TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                    float4 bilinear = TerrainRendering.BilinearTerrain4(c00, c10, c01, c11, fx, fz,
+                        texelWorldSize, texelWorldSize);
                     if (meta.worldSpace == 1)
                     {
                         float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
@@ -201,7 +203,6 @@ namespace DivisionEngine.Rendering.Terrain
                 float4 p10 = data[texelBase + hz0 * stride + hx0 + 1];
                 float4 p01 = data[texelBase + (hz0 + 1) * stride + hx0];
                 float4 p11 = data[texelBase + (hz0 + 1) * stride + hx0 + 1];
-                float texelWorldSize = levelSize / math.max(resolution - 1, 1);
 
                 float4 result = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
                     texelWorldSize, texelWorldSize);

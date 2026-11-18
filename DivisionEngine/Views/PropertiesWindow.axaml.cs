@@ -1065,7 +1065,9 @@ public partial class PropertiesWindow : EditorWindow
             superFieldPanel.Children.Add(fieldPanel);
         }
 
-        string formattedFieldName = Thread.CurrentThread.CurrentCulture.TextInfo.ToTitleCase(FormattedFieldRegex().Replace(field.Name, "$1 $2"));
+        DisplayNameAttribute? displayNameAttr = field.GetCustomAttribute<DisplayNameAttribute>();
+        string formattedFieldName = displayNameAttr?.Name
+            ?? Thread.CurrentThread.CurrentCulture.TextInfo.ToTitleCase(FormattedFieldRegex().Replace(field.Name, "$1 $2"));
         TextBlock nameLabel = new() { Text = formattedFieldName, FontSize = 12, 
             Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center };
         fieldPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, 

@@ -196,7 +196,7 @@ Anti-Aliasing Method -> CTSS** (or **FXAA** / **None**) in the inspector.
 Per-camera CTSS knobs appear below it:
 
 - **Cone Coverage** - cone radius in pixels; 1 traces through the pixel corners.
-- **Debug CTSS** - one dropdown for both methods: FXAA threshold/direction and
+- **AA Debug** - one dropdown for both methods: FXAA threshold/direction and
   CTSS sample-count/coverage visualisations. Options that do not apply to the
   selected method render normally.
 
@@ -297,16 +297,25 @@ needs. The filter is MPL-2.0 licensed; the attribution lives at the top of
 `DivisionEngine.Core/Rendering/Terrain/TerrainRendering.cs`. It derives from Clay
 John's and Fewes' earlier Shadertoys.
 
-### Cubic Heightmap Reconstruction
+### Heightmap Reconstruction
 
-Each texel stores `(height, dH/dx, dH/dz, ridge)`. The sampler reconstructs the
-surface with **cubic Hermite interpolation** using the stored analytic slopes as
-tangents, so a sample reads only four texels while still producing a C1 surface with
-smooth silhouettes and normals. A bilinear mode is available for comparison.
+Each texel stores `(height, dH/dx, dH/dz, ridge)`. `SDFTerrain.interpolation`
+selects how those samples are reconstructed:
+
+- **Hermite** (default) uses the tensor-product cubic Hermite patch from R. Bán and
+  G. Valasek, *Hermite interpolation of heightmaps* (Eurographics 2022 poster).
+  The stored analytic slopes are the Hermite tangents, so a sample reads only four
+  texels while producing a C1 surface with exact analytic normals and smooth
+  silhouettes.
+- **Bilinear** uses the bilinear patch itself for both height and shading. Its
+  normal is the **exact gradient of the bilinear reconstruction**, not the stored
+  analytic slopes: the slopes describe the pre-filtered source surface, so reusing
+  them would light a deliberately faceted terrain as if it were smooth. The result
+  is the expected flat, rectangular look.
 
 Reconstruction error against the source function (mean absolute height error over a
-sweep of random sample positions): bilinear **0.0897**, cubic Hermite **0.0050**,
-Catmull-Rom **0.0071**. Hermite is ~18x more accurate than bilinear at half the fetch
+sweep of random sample positions): bilinear **0.0897**, cubic Hermite **0.0048**,
+Catmull-Rom **0.0071**. Hermite is ~19x more accurate than bilinear at half the fetch
 footprint of the 16-texel Catmull-Rom kernel.
 
 ### Fixed and Infinite Terrains
@@ -319,7 +328,10 @@ footprint of the 16-texel Catmull-Rom kernel.
   and filtering mode are configurable, so a 512-texel map with cubic reconstruction
   is smooth where a 2048-texel bilinear map used to show facets.
 - **Infinite** (`infinite = true`) streams a quadtree cut of heightmap chunks around
-  the camera. Each LOD level is a square grid of world-aligned chunks; a chunk always
+  the camera the render window is actually showing: the free-flying **editor camera**
+  while editing (and while a play session is paused, when the editor camera is
+  re-activated), and the **gameplay (main) camera** during play mode or in a player
+  build. Each LOD level is a square grid of world-aligned chunks; a chunk always
   occupies the same storage slot, so moving the camera only replaces the chunks that
   enter the grid (no buffer shifting). Every slot carries the identity of the chunk it
   holds, so a stale slot is detected and never sampled. The LOD ring is chosen from
@@ -330,6 +342,10 @@ Chunks are baked on background worker threads (`bakeThreads`) and uploaded at mo
 never rebuilds the whole heightmap buffer. A chunk that has not arrived yet falls back
 to the next coarser level; outside every loaded ring a flat sea-level plane keeps the
 world solid, and the outermost ring fades to it so the clipmap never ends in a cliff.
+The fade is a circle centred on the same camera-following LOD anchor, and the GPU
+metadata is refreshed every frame, so the fade recenters as the camera moves rather
+than staying at its initial position. The same fade applies to both interpolation
+modes.
 
 Terrain also participates in **its own shadows and ambient occlusion**. The engine's
 AO approximates occlusion with the second-closest object, which by design cannot
@@ -367,10 +383,13 @@ DivisionEngine.Editor.exe --cli terrain bench --chunk 96
 # table and sampled heights.
 DivisionEngine.Editor.exe --cli terrain shot --fixed-frame 3 --out terrain-fixed.png
 DivisionEngine.Editor.exe --cli terrain shot --infinite --fixed-frame 3 --out terrain-infinite.png
+# Compare the two reconstruction modes on a deliberately coarse heightmap
+DivisionEngine.Editor.exe --cli terrain shot --interpolation bilinear --heightmap-size 32 --out terrain-bilinear.png
+DivisionEngine.Editor.exe --cli terrain shot --interpolation hermite --heightmap-size 32 --out terrain-hermite.png
 ```
 
-Measured unit-test results: all 11 terrain checks pass; bilinear reconstruction
-error 0.0897 vs cubic Hermite 0.0050 and Catmull-Rom 0.0071; adjacent chunk seams
+Measured unit-test results: all 14 terrain checks pass; bilinear reconstruction
+error 0.0897 vs cubic Hermite 0.0048 and Catmull-Rom 0.0071; adjacent chunk seams
 match exactly; the GPU bake differs from the CPU bake by at most 0.00095 m; the
 sampled fixed terrain matches the analytic height field to 0.000 m (mean) with no
 missing samples.
@@ -387,11 +406,9 @@ filtering, erosion and quadtree settings) and appear in the Add menu as
   also includes the camera's height above the terrain, so an aerial camera selects a
   coarser ring than its XZ offset alone would suggest.
 - At grazing aerial angles the finest LOD rings can show fine comb-like shading in the
-  reconstructed surface. The height field itself is continuous; the likely cause is
-  the Hermite slope channel's small first-derivative discontinuity at cell boundaries
-  (the stored Z-slope is only C0 in X). Sampling the height derivative from the SDF
-  gradient instead of using the stored slope channel, or a C1 slope reconstruction,
-  is the planned fix.
+  reconstructed surface. The Hermite patch itself is C1 (including the Z-slope field,
+  which is interpolated with the Hermite value basis in X); the remaining combing is
+  most visible where LOD rings meet and is still being investigated.
 - The infinite quadtree is a camera-centred cut with fixed power-of-two rings rather
   than a per-node screen-space error metric; occlusion culling and a sparse node set
   are future work.

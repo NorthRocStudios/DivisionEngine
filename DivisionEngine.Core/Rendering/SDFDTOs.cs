@@ -162,7 +162,7 @@ namespace DivisionEngine.Rendering
         // --- Placement and sampling -------------------------------------------
         public float3 position;      // Terrain entity world position
         public float2 lodCenter;     // XZ anchor of the LOD clipmap (camera), relative to position
-        public int interpolation;    // 0 = bilinear, 1 = bicubic Catmull-Rom
+        public int interpolation;    // 0 = bilinear, 1 = cubic Hermite
         public int levels;           // LOD level count (1 for fixed terrain)
         public int gridSize;         // Chunks per level side (1 for fixed terrain)
         public float chunkSize;      // World size of a level-0 chunk

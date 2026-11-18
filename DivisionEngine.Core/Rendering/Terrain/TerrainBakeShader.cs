@@ -50,7 +50,7 @@ namespace DivisionEngine.Rendering.Terrain
 
             TerrainDTO meta = terrainMetadata[terrainIndex];
 
-            // Texels -1..resolution are stored (the 1-texel apron lets bicubic
+            // Texels -1..resolution are stored (the 1-texel apron lets cubic
             // interpolation read the neighbour chunk without a branch at the seam).
             float2 local = chunkOrigin + (new float2(pixel.x, pixel.y) - 1.0f)
                 / math.max(resolution - 1, 1) * levelSize;

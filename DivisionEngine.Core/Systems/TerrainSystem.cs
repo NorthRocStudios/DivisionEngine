@@ -211,6 +211,12 @@ namespace DivisionEngine.Systems
                 state.Rebuild = false;
             }
 
+            // The GPU reads AllTerrainMetadata every frame for the LOD anchor and the
+            // outer-ring fade. Copy the refreshed per-state structs into it even when no
+            // chunk was added: otherwise moving the camera leaves the GPU LOD/fade circle
+            // at its old position until a structural change happens to rebuild the array.
+            SyncGlobalMetadata();
+
             LoadedChunkCount = 0;
             PendingChunkCount = 0;
             foreach (TerrainState state in stateOrder)
@@ -542,19 +548,41 @@ namespace DivisionEngine.Systems
         private static float3 GetCameraPosition()
         {
             float3 result = new float3(0f, 0f, 0f);
-            float best = float.MinValue;
+            bool hasFallback = false;
 
-            foreach ((uint id, Transform transform, Camera camera) in W.QueryData<Transform, Camera>())
+            // The quadtree must follow the camera the render window is actually showing.
+            // In the editor that is the free-flying editor camera while editing (and while
+            // a play session is paused, because EditorCameraSystem re-activates it then).
+            // During play mode and in a player build the rendering camera is the gameplay
+            // ("main") camera, so the editor camera must not drag the terrain away from it.
+            bool editorView = !EngineCore.IsInPlayMode || EngineCore.IsPaused;
+            if (editorView)
             {
-                if (!camera.isActive) continue;
-                // Prefer the editor camera, which is what the render window shows.
-                float score = id == EditorCamera.EditorCameraId ? 1e9f : transform.position.y;
-                if (score > best)
+                foreach ((uint id, Transform transform, Camera camera) in W.QueryData<Transform, Camera>())
                 {
-                    best = score;
-                    result = transform.position;
+                    if (id == EditorCamera.EditorCameraId || W.HasComponent<EditorCamera>(id))
+                        return transform.position;
                 }
             }
+
+            // Gameplay camera selection. Prefer the camera with Player controls when
+            // there are several, exactly like the audio listener.
+            foreach ((uint id, Transform transform, Camera camera) in W.QueryData<Transform, Camera>())
+            {
+                if (id == EditorCamera.EditorCameraId || W.HasComponent<EditorCamera>(id)) continue;
+                if (W.HasComponent<Player>(id)) return transform.position;
+                if (!hasFallback)
+                {
+                    result = transform.position;
+                    hasFallback = true;
+                }
+            }
+            if (hasFallback) return result;
+
+            // No gameplay camera at all: keep the old active-camera fallback so a
+            // camera-less editor scene still streams around something sensible.
+            foreach ((uint id, Transform transform, Camera camera) in W.QueryData<Transform, Camera>())
+                if (camera.isActive) return transform.position;
 
             return result;
         }
@@ -575,6 +603,21 @@ namespace DivisionEngine.Systems
             AllTerrainData = [.. data];
             AllTerrainMetadata = [.. metas];
             AllTerrainChunkInfo = [.. chunkInfo];
+        }
+
+        /// <summary>
+        /// Refreshes the GPU-facing metadata entries in place. The LOD anchor
+        /// (<see cref="TerrainDTO.lodCenter"/>) and the camera height used by the outer-ring
+        /// fade change every frame while the camera moves, but they must not trigger the full
+        /// height-buffer rebuild that <see cref="RebuildGlobalBuffers"/> performs.
+        /// </summary>
+        private static void SyncGlobalMetadata()
+        {
+            if (AllTerrainMetadata == null || AllTerrainMetadata.Length != stateOrder.Count)
+                return;
+
+            for (int i = 0; i < stateOrder.Count; i++)
+                AllTerrainMetadata[i] = stateOrder[i].Meta;
         }
 
         /// <summary>

@@ -22,6 +22,15 @@ namespace DivisionEngine.Editor.Undo
 
         public static event Action? UndoStackChanged;
 
+        /// <summary>
+        /// Raised when the editor UI has to be rebuilt from the world: after an undo or
+        /// redo, and after a structural command (add/remove entity or component, handle
+        /// transform). A live field edit does <b>not</b> raise this - the property editor
+        /// that made the change already shows the new value, and rebuilding its panel
+        /// would destroy the slider or text box that is currently capturing the pointer.
+        /// </summary>
+        public static event Action? UndoStateRestored;
+
         public static bool CanUndo => undoStack.Count > 0;
         public static bool CanRedo => redoStack.Count > 0;
         public static bool IsExecuting { get; private set; } = false;
@@ -65,6 +74,9 @@ namespace DivisionEngine.Editor.Undo
                     undoStack = new Stack<IUndoCommand>(kept);
                 }
                 UndoStackChanged?.Invoke();
+                // A field edit is already reflected by its own editor; only structural
+                // commands need the properties panel rebuilt.
+                if (command is not ModifyFieldCommand) UndoStateRestored?.Invoke();
             }
             finally
             {
@@ -82,6 +94,7 @@ namespace DivisionEngine.Editor.Undo
                 command.Undo();
                 redoStack.Push(command);
                 UndoStackChanged?.Invoke();
+                UndoStateRestored?.Invoke();
             }
             finally
             {
@@ -99,6 +112,7 @@ namespace DivisionEngine.Editor.Undo
                 command.Do();
                 undoStack.Push(command);
                 UndoStackChanged?.Invoke();
+                UndoStateRestored?.Invoke();
             }
             finally
             {

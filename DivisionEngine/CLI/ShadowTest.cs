@@ -32,6 +32,9 @@ namespace DivisionEngine.Editor
     /// that overlapping tints <b>combine</b> (multiplied absorption), and that the opaque
     /// sphere's soft shadow still renders. <c>--caustics</c> renders the same scene with the
     /// caustic shadow style and compares the transmitted/focused light.
+    /// <c>--scene point</c>: point light with one occluder between it and the ground and a
+    /// second one behind it; verifies the far occluder cannot darken the ground (shadow rays
+    /// must stop at the light).
     /// </remarks>
     internal static class ShadowTest
     {
@@ -49,13 +52,18 @@ namespace DivisionEngine.Editor
 
             if (width < 32 || height < 32)
                 throw new ArgumentException("--width and --height must be at least 32.");
-            if (scene is not ("soft" or "colored"))
-                throw new ArgumentException("--scene must be 'soft' or 'colored'.");
+            if (scene is not ("soft" or "colored" or "point"))
+                throw new ArgumentException("--scene must be 'soft', 'colored' or 'point'.");
 
             DivisionCLI.WarnIfShaderCacheCold();
 
             diagnosticArgs = args;
-            (World world, uint groundEntity) = scene == "colored" ? BuildColoredScene() : BuildSoftScene();
+            (World world, uint groundEntity) = scene switch
+            {
+                "colored" => BuildColoredScene(),
+                "point" => BuildPointScene(),
+                _ => BuildSoftScene(),
+            };
             WorldManager.SetWorld(world);
             WorldManager.SwitchWorld(world.Name);
 
@@ -105,6 +113,24 @@ namespace DivisionEngine.Editor
                     if (!addsLight)
                         Console.WriteLine("  caustic style removed light instead of focusing it");
                 }
+            }
+            else if (scene == "point")
+            {
+                // Render the scene twice: with the occluder that sits behind the point
+                // light, and without it. A point light cannot be blocked by geometry that
+                // is farther away than the light itself, so the ground must be lit the same
+                // in both images (outside the intended near-occluder shadow).
+                // RenderOnce returns the pipeline's shared pixel buffer, which the second
+                // render overwrites, so snapshot the first image.
+                float4[] pointPixels = [.. RenderOnce(pipeline, outPath)];
+                uint2[] pointIds = [.. pipeline.ObjectIDs!];
+
+                world.DestroyEntity(pointReferenceOccluder);
+                string referencePath = Path.ChangeExtension(outPath, ".ref.png");
+                float4[] referencePixels = RenderOnce(pipeline, referencePath);
+
+                pass = AnalyzePoint(pointPixels, referencePixels, pointIds, groundEntity, out PointMetrics pointMetrics);
+                PrintPoint(pointMetrics, outPath, referencePath);
             }
             else
             {
@@ -309,6 +335,75 @@ namespace DivisionEngine.Editor
                 $"\"noBrightHalo\":{(m.NoBrightHalo ? "true" : "false")}}}");
         }
 
+        // ============================ point scene ============================
+
+        private sealed class PointMetrics
+        {
+            public int GroundPixels;
+            public float MeanAbsDiff;
+            public float MaxAbsDiff;
+            public float MaxRelativeDiff;
+            public float ActualMeanLum;
+            public float ReferenceMeanLum;
+        }
+
+        /// <summary>
+        /// Compares the point-light render against a reference with the occluder behind the
+        /// light removed. Only the near occluder is allowed to change the ground lighting;
+        /// any other difference is the shadow ray reaching past the light and being blocked
+        /// by geometry on the far side of it.
+        /// </summary>
+        private static bool AnalyzePoint(float4[] actual, float4[] reference, uint2[] objectIds,
+            uint groundEntity, out PointMetrics m)
+        {
+            m = new PointMetrics();
+
+            double actualSum = 0, referenceSum = 0, diffSum = 0;
+            float maxDiff = 0f, maxRelative = 0f;
+
+            for (int i = 0; i < actual.Length; i++)
+            {
+                if (objectIds[i].y != groundEntity) continue;
+
+                float a = Luminance(actual[i]);
+                float r = Luminance(reference[i]);
+                float diff = Math.Abs(a - r);
+                float relative = diff / Math.Max(Math.Abs(r), 0.02f);
+
+                actualSum += a;
+                referenceSum += r;
+                diffSum += diff;
+                maxDiff = Math.Max(maxDiff, diff);
+                maxRelative = Math.Max(maxRelative, relative);
+                m.GroundPixels++;
+            }
+
+            int n = Math.Max(1, m.GroundPixels);
+            m.MeanAbsDiff = (float)(diffSum / n);
+            m.MaxAbsDiff = maxDiff;
+            m.MaxRelativeDiff = maxRelative;
+            m.ActualMeanLum = (float)(actualSum / n);
+            m.ReferenceMeanLum = (float)(referenceSum / n);
+
+            // Small absolute and relative allowance for float/denoise rounding; a false
+            // shadow is many times larger than this.
+            return m.GroundPixels > 1000
+                && m.MaxAbsDiff < 0.02f
+                && m.MaxRelativeDiff < 0.05f;
+        }
+
+        private static float Luminance(float4 c) => c.x * 0.299f + c.y * 0.587f + c.z * 0.114f;
+
+        private static void PrintPoint(PointMetrics m, string outPath, string referencePath)
+        {
+            Console.WriteLine(
+                $"{{\"scene\":\"point\",\"out\":\"{outPath.Replace("\\", "/")}\"," +
+                $"\"reference\":\"{referencePath.Replace("\\", "/")}\",\"width\":{width},\"height\":{height}," +
+                $"\"groundPixels\":{m.GroundPixels},\"actualMeanLum\":{m.ActualMeanLum:F4}," +
+                $"\"referenceMeanLum\":{m.ReferenceMeanLum:F4},\"meanAbsDiff\":{m.MeanAbsDiff:F5}," +
+                $"\"maxAbsDiff\":{m.MaxAbsDiff:F5},\"maxRelativeDiff\":{m.MaxRelativeDiff:F4}}}");
+        }
+
         // ============================ scenes =============================
 
         private static (World, uint) BuildSoftScene() => BuildSoftWorld();
@@ -324,6 +419,55 @@ namespace DivisionEngine.Editor
             AddCamera(world, new float3(0f, 11f, 19f), new float3(0f, 1.5f, 3f), 55f);
             return (world, ground);
         }
+
+        /// <summary>
+        /// Point light above a ground plane with an occluder between them and a second
+        /// occluder behind (above) the light. The second object must not shadow the ground.
+        /// </summary>
+        private static (World, uint) BuildPointScene()
+        {
+            World world = NewWorld();
+            AddEnvironment(world);
+            foreach ((uint _, EngineEnvironment environment) in world.QueryData<EngineEnvironment>())
+            {
+                // Isolate direct point light: no ambient/sky contribution to compare.
+                environment.ambientStrength = 0f;
+                environment.skyIntensity = 0f;
+                environment.skyColor = new float4(0f, 0f, 0f, 1f);
+                break;
+            }
+
+            uint light = world.CreateEntity("PointLight");
+            world.AddComponent(light, new Transform { position = new float3(0f, 4f, 0f) });
+            world.AddComponent(light, new PointLight
+            {
+                color = new float4(1f, 1f, 1f, 1f),
+                intensity = 60f,
+                radius = 100f,
+            });
+
+            uint ground = AddGround(world, Shadows.ShadowType.Soft, penumbra: 2f);
+            // Ambient occlusion would make removing the far occluder change the ground
+            // even where no shadow is involved.
+            world.GetComponent<SDFMaterial>(ground)!.ambientOcclusion = 0f;
+
+            // Intended occluder: between the point light (y = 4) and the ground.
+            AddOpaqueSphere(world, new float3(0f, 2f, 0f), 1.5f);
+
+            // Occluder behind the light: the light is at y = 4, this sphere at y = 7.
+            // A shadow ray from the ground towards the light must stop at the light, so
+            // this object cannot darken the ground. It only becomes visible if the shadow
+            // march runs past the light and hits it on the extension of the ray.
+            pointReferenceOccluder = AddOpaqueSphere(world, new float3(6f, 7f, 0f), 1.5f);
+            // Wider penumbra makes the false shadow measurable rather than a faint tint.
+            world.GetComponent<Shadows>(pointReferenceOccluder)!.penumbraDistance = 20f;
+
+            AddCamera(world, new float3(0f, 11f, 24f), new float3(0f, 0f, 0f), 60f);
+            return (world, ground);
+        }
+
+        /// <summary>Occluder that is removed to build the point-light reference image.</summary>
+        private static uint pointReferenceOccluder;
 
         /// <summary>
         /// Red and teal glass boxes (plus a second teal box stacked over the red one, so their
@@ -425,7 +569,7 @@ namespace DivisionEngine.Editor
             return ground;
         }
 
-        private static void AddOpaqueSphere(World world, float3 position, float radius)
+        private static uint AddOpaqueSphere(World world, float3 position, float radius)
         {
             uint sphere = world.CreateEntity("Occluder");
             world.AddComponent(sphere, new Transform { position = position });
@@ -445,6 +589,7 @@ namespace DivisionEngine.Editor
                 shadowReceiver = true,
                 penumbraDistance = 2f,
             });
+            return sphere;
         }
 
         private static void AddGlassBox(World world, float3 position, float3 size, float4 absorption, string name)

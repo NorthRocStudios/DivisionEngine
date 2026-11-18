@@ -128,6 +128,7 @@ namespace DivisionEngine.Editor.ViewModels
 
             // Undo setup
             UndoManager.UndoStackChanged += OnUndoStackChanged;
+            UndoManager.UndoStateRestored += OnUndoStateRestored;
             ProjectManager.ProjectLoaded += ProjectStateChanged;
             ProjectManager.ProjectClosed += ProjectStateChanged;
             EngineCore.PlayModeChanged += OnPlayModeChanged;
@@ -155,13 +156,14 @@ namespace DivisionEngine.Editor.ViewModels
 
         private void OnUndoStackChanged()
         {
-            // Update menu item enabled states
+            // Update menu item enabled states. Do NOT rebuild the properties panel here:
+            // this also runs for every live field edit (slider drags, typing in number
+            // boxes), and rebuilding would take focus away from the control being edited.
             this.RaisePropertyChanged(nameof(CanUndo));
             this.RaisePropertyChanged(nameof(CanRedo));
-
-            // Refresh the PropertiesWindow based on the current selection
-            RefreshEditorUI();
         }
+
+        private static void OnUndoStateRestored() => RefreshEditorUI();
 
         private static void RefreshEditorUI()
         {

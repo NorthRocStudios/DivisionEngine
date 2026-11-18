@@ -53,6 +53,11 @@ namespace DivisionEngine
         const float PI = 3.141592654f;
         const float RECIPROCAL_PI = 1f / PI;
         const float MIN_TRAVERSE_DIST = 100000000.0f;
+        /// <summary>
+        /// Shadow-ray length for directional lights. Point lights pass the distance to the
+        /// light so their shadow rays stop there instead of marching through geometry behind it.
+        /// </summary>
+        const float SHADOW_RAY_UNLIMITED = 1e30f;
         const int MAX_REFLECTION_BOUNCES = 3;
 
         #region textures
@@ -169,6 +174,15 @@ namespace DivisionEngine
                 float2 chunkOrigin = anchor + new float2(chunkX, chunkZ) * levelSize;
                 float2 texel = (localXZ - chunkOrigin) / levelSize * (resolution - 1) + 1.0f;
                 int texelBase = meta.bufferOffset + slot * stride * stride;
+                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
+
+                float fade = 1.0f;
+                if (meta.worldSpace == 1)
+                {
+                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
+                    float fadeStart = maxRadius * 0.85f;
+                    fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
+                }
 
                 if (meta.interpolation == 0)
                 {
@@ -187,8 +201,13 @@ namespace DivisionEngine
                     float4 c10 = terrainHeightData[texelBase + z0 * stride + x1];
                     float4 c01 = terrainHeightData[texelBase + z1 * stride + x0];
                     float4 c11 = terrainHeightData[texelBase + z1 * stride + x1];
+                    float4 bilinear = TerrainRendering.BilinearTerrain4(c00, c10, c01, c11, fx, fz,
+                        texelWorldSize, texelWorldSize);
+                    bilinear.x *= fade;
+                    bilinear.y *= fade;
+                    bilinear.z *= fade;
                     found = 1;
-                    return TerrainRendering.Bilinear4(c00, c10, c01, c11, fx, fz);
+                    return bilinear;
                 }
 
                 // Cubic Hermite reconstruction: four texels plus the stored
@@ -207,19 +226,11 @@ namespace DivisionEngine
                 float4 p10 = terrainHeightData[texelBase + hz0 * stride + hx0 + 1];
                 float4 p01 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0];
                 float4 p11 = terrainHeightData[texelBase + (hz0 + 1) * stride + hx0 + 1];
-                float texelWorldSize = levelSize / math.max((float)(resolution - 1), 1.0f);
                 float4 terrainSample = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz,
                     texelWorldSize, texelWorldSize);
-
-                if (meta.worldSpace == 1)
-                {
-                    float maxRadius = meta.lodBaseRadius * (1 << (meta.levels - 1));
-                    float fadeStart = maxRadius * 0.85f;
-                    float fade = math.saturate((maxRadius - cameraDistance) / math.max(maxRadius - fadeStart, 1e-3f));
-                    terrainSample.x *= fade;
-                    terrainSample.y *= fade;
-                    terrainSample.z *= fade;
-                }
+                terrainSample.x *= fade;
+                terrainSample.y *= fade;
+                terrainSample.z *= fade;
 
                 found = 1;
                 return terrainSample;
@@ -746,13 +757,17 @@ namespace DivisionEngine
         #endregion sky
         #region lighting
 
-        private float CalculateShadow(float3 pt, float3 normal, float3 dir)
+        private float CalculateShadow(float3 pt, float3 normal, float3 dir, float maxDistance)
         {
             int lodHint = LevelAt(pt);
             float t = 0.02f;
             float shadow = 1f;
+            bool limited = maxDistance < SHADOW_RAY_UNLIMITED;
             for (int i = 0; i < worldData[0].maxShadowRaySteps; i++)
             {
+                // Point lights stop at the light; the directional path keeps its original
+                // 64 m look-ahead and boundary behaviour.
+                if (limited && t >= maxDistance) break;
                 float3 q = pt + dir * t;
                 int shadowDiscard;
                 float d;
@@ -792,7 +807,7 @@ namespace DivisionEngine
                     float NoL = math.max(math.dot(finalNormal, lightDir), 0f);
                     if (NoL <= 0f) continue;
 
-                    float shadow = shadowEffects.y != 0 ? CalculateShadow(hitPoint, geoNormal, lightDir) : 1f;
+                    float shadow = shadowEffects.y != 0 ? CalculateShadow(hitPoint, geoNormal, lightDir, SHADOW_RAY_UNLIMITED) : 1f;
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir, finalNormal, baseCol,
                         metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
                     totalLight += brdf * lightColor * NoL * shadow;
@@ -807,7 +822,9 @@ namespace DivisionEngine
                     float NoL = math.max(math.dot(finalNormal, lightDir), 0f);
                     if (NoL <= 0f || attenuation <= 0f) continue;
 
-                    float shadow = shadowEffects.y != 0 ? CalculateShadow(hitPoint, geoNormal, lightDir) : 1f;
+                    // Point-light shadow rays stop at the light, so objects behind it
+                    // cannot cast shadows onto surfaces it illuminates.
+                    float shadow = shadowEffects.y != 0 ? CalculateShadow(hitPoint, geoNormal, lightDir, distance) : 1f;
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir, finalNormal, baseCol,
                         metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
                     totalLight += brdf * light.color.rgb * light.intensity * attenuation * NoL * shadow;
@@ -1154,7 +1171,7 @@ namespace DivisionEngine
                 {
                     float3 hitPoint = rayOrigin + rayDir * distance;
                     float3 normal = outputNormal;
-                    shadowColor = CalculateShadow(hitPoint, normal, worldData[0].mainLightDir) * new float3(1f);
+                    shadowColor = CalculateShadow(hitPoint, normal, worldData[0].mainLightDir, SHADOW_RAY_UNLIMITED) * new float3(1f);
                 }
                 outputTexture[pixel] = new float4(shadowColor, 1);
             }

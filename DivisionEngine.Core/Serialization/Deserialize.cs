@@ -5,6 +5,7 @@
 // of the Division Engine License. See the LICENSE.txt file in the
 // project root for full license terms.
 //
+using DivisionEngine.Components.SDFs;
 using DivisionEngine.Projects.Assets;
 using System.Globalization;
 using System.Reflection;
@@ -187,7 +188,20 @@ namespace DivisionEngine.Serialization
             else if (targetType == typeof(float)) return float.Parse(value);
             else if (targetType == typeof(int)) return int.Parse(value);
             else if (targetType == typeof(uint)) return uint.Parse(value);
-            else if (targetType.IsEnum) return Enum.Parse(targetType, value);
+            else if (targetType.IsEnum)
+            {
+                try
+                {
+                    return Enum.Parse(targetType, value);
+                }
+                catch (ArgumentException) when (targetType == typeof(SDFTerrain.Interpolation)
+                    && string.Equals(value, "Bicubic", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Worlds saved before the mode was named after its actual algorithm
+                    // stored "Bicubic"; the value (1) always meant cubic Hermite.
+                    return SDFTerrain.Interpolation.Hermite;
+                }
+            }
 
             Debug.Warning($"Unhandled property parse type: {targetType.Name}");
             return null;

@@ -118,18 +118,20 @@ namespace DivisionEngine.Components
         [Tooltip("The size of the area edge blur")]
         public int fxaaKernelSize = 2;
         /// <summary>
-        /// Combined debug view for the selected anti-aliasing method.
-        /// </summary>
-        [Space(6f)]
-        [Tooltip("Anti-aliasing debug view (FXAA threshold/direction or CTSS samples/coverage)")]
-        public AntiAliasingDebugMode debugCTSS = AntiAliasingDebugMode.Disabled;
-
-        /// <summary>
         /// Radius of the cone in pixels. 1 covers the pixel corners.
         /// </summary>
         [Range(0.25f, 4f)]
         [Tooltip("CTSS cone coverage in pixels (1 = pixel corners)")]
         public float ctssConeCoverage = 1f;
+
+        /// <summary>
+        /// Combined debug view for the selected anti-aliasing method. Shared by FXAA
+        /// (threshold/direction) and CTSS (samples/coverage), so it is the last option.
+        /// </summary>
+        [Space(6f)]
+        [DisplayName("AA Debug")]
+        [Tooltip("Anti-aliasing debug view (FXAA threshold/direction or CTSS samples/coverage)")]
+        public AntiAliasingDebugMode debugCTSS = AntiAliasingDebugMode.Disabled;
 
 
         public IComponent Clone() => new Camera

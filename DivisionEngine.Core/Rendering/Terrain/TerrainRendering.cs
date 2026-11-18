@@ -400,6 +400,19 @@ namespace DivisionEngine.Rendering.Terrain
         /// Returns the interpolated (height, dHdx, dHdz, ridge) with the slopes in
         /// world units per world unit.
         /// </summary>
+        /// <remarks>
+        /// This is the tensor-product Hermite patch from Bán &amp; Valasek,
+        /// "Hermite interpolation of heightmaps" (Eurographics 2022 poster):
+        /// <code>
+        /// f(x,z) = sum_i sum_j [ f_ij H_i0(x) H_j0(z)
+        ///                      + fx_ij H_i1(x) H_j0(z)
+        ///                      + fz_ij H_i0(x) H_j1(z) ]
+        /// </code>
+        /// The z-tangent field is therefore interpolated along X with the Hermite
+        /// <b>value</b> basis only (H_i0), not linearly: that is what keeps the patch
+        /// C1 across neighbouring cells. The returned derivatives are the exact
+        /// analytic derivatives of that patch, which is what the shading normals use.
+        /// </remarks>
         /// <param name="p00">Texel at (x0, z0).</param>
         /// <param name="p10">Texel at (x0 + 1, z0).</param>
         /// <param name="p01">Texel at (x0, z0 + 1).</param>
@@ -422,16 +435,17 @@ namespace DivisionEngine.Rendering.Terrain
             float d01x = 3.0f * tx2 - 4.0f * tx + 1.0f;
             float d11x = 3.0f * tx2 - 2.0f * tx;
 
-            float h0 = p00.x * h00x + p10.x * h10x + dx * (p00.y * h01x + p10.y * h11x);
-            float h1 = p01.x * h00x + p11.x * h10x + dx * (p01.y * h01x + p11.y * h11x);
-            float dh0 = p00.x * d00x + p10.x * d10x + dx * (p00.y * d01x + p10.y * d11x);
-            float dh1 = p01.x * d00x + p11.x * d10x + dx * (p01.y * d01x + p11.y * d11x);
+            // Height value at each Z edge, Hermite-interpolated along X (A_j in the paper).
+            float a0 = p00.x * h00x + p10.x * h10x + dx * (p00.y * h01x + p10.y * h11x);
+            float a1 = p01.x * h00x + p11.x * h10x + dx * (p01.y * h01x + p11.y * h11x);
+            float da0 = p00.x * d00x + p10.x * d10x + dx * (p00.y * d01x + p10.y * d11x);
+            float da1 = p01.x * d00x + p11.x * d10x + dx * (p01.y * d01x + p11.y * d11x);
 
-            // The Z tangents are the stored slopes, blended linearly along X.
-            float s0 = p00.z + (p10.z - p00.z) * tx;
-            float s1 = p01.z + (p11.z - p01.z) * tx;
-            float ds0 = p10.z - p00.z;
-            float ds1 = p11.z - p01.z;
+            // Z tangents, interpolated along X with the Hermite value basis (B_j in the paper).
+            float b0 = p00.z * h00x + p10.z * h10x;
+            float b1 = p01.z * h00x + p11.z * h10x;
+            float db0 = p00.z * d00x + p10.z * d10x;
+            float db1 = p01.z * d00x + p11.z * d10x;
 
             float tz2 = tz * tz;
             float tz3 = tz2 * tz;
@@ -444,16 +458,20 @@ namespace DivisionEngine.Rendering.Terrain
             float d01z = 3.0f * tz2 - 4.0f * tz + 1.0f;
             float d11z = 3.0f * tz2 - 2.0f * tz;
 
-            float height = h0 * h00z + h1 * h10z + dz * (s0 * h01z + s1 * h11z);
-            float dHeightDx = (dh0 * h00z + dh1 * h10z + dz * (ds0 * h01z + ds1 * h11z)) / math.max(dx, 1e-6f);
-            float dHeightDz = (h0 * d00z + h1 * d10z + dz * (s0 * d01z + s1 * d11z)) / math.max(dz, 1e-6f);
+            float height = a0 * h00z + a1 * h10z + dz * (b0 * h01z + b1 * h11z);
+            float dHeightDx = (da0 * h00z + da1 * h10z + dz * (db0 * h01z + db1 * h11z))
+                / math.max(dx, 1e-6f);
+            float dHeightDz = (a0 * d00z + a1 * d10z + dz * (b0 * d01z + b1 * d11z))
+                / math.max(dz, 1e-6f);
             float ridge = p00.w + (p10.w - p00.w) * tx + (p01.w - p00.w) * tz
                 + (p00.w - p10.w - p01.w + p11.w) * tx * tz;
 
             return new float4(height, dHeightDx, dHeightDz, ridge);
         }
 
-        /// <summary>Catmull-Rom sample of a float4 (used for the packed terrain data).</summary>
+        /// <summary>
+        /// Catmull-Rom sample of a float4 (used for the packed terrain data).
+        /// </summary>
         public static float4 CatmullRom4(float4 p0, float4 p1, float4 p2, float4 p3, float t)
         {
             float t2 = t * t;
@@ -465,12 +483,39 @@ namespace DivisionEngine.Rendering.Terrain
             return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
         }
 
-        /// <summary>Bilinear sample of a float4.</summary>
+        /// <summary>
+        /// Bilinear sample of a float4 (all four channels). Terrain sampling uses
+        /// <see cref="BilinearTerrain4"/> instead so the returned slopes match the
+        /// bilinear height field rather than the stored source slopes.
+        /// </summary>
         public static float4 Bilinear4(float4 p00, float4 p10, float4 p01, float4 p11, float tx, float ty)
         {
             float4 a = math.lerp(p00, p10, tx);
             float4 b = math.lerp(p01, p11, tx);
             return math.lerp(a, b, ty);
+        }
+
+        /// <summary>
+        /// Bilinear terrain sample: bilinear height and ridge, but with the <b>exact</b>
+        /// gradient of that bilinear height field. The stored slopes describe the
+        /// pre-filtered source surface, not the bilinear reconstruction, so reusing them
+        /// for shading makes a deliberately faceted bilinear terrain look incorrectly
+        /// smooth (and produces shading that does not match the geometry).
+        /// </summary>
+        public static float4 BilinearTerrain4(float4 p00, float4 p10, float4 p01, float4 p11,
+            float tx, float tz, float dx, float dz)
+        {
+            float4 a = math.lerp(p00, p10, tx);
+            float4 b = math.lerp(p01, p11, tx);
+            float4 value = math.lerp(a, b, tz);
+
+            // d/dx of the bilinear height = lerp of the two row finite differences.
+            value.y = ((p10.x - p00.x) * (1.0f - tz) + (p11.x - p01.x) * tz)
+                / math.max(dx, 1e-6f);
+            // d/dz of the bilinear height = lerp of the two column finite differences.
+            value.z = ((p01.x - p00.x) * (1.0f - tx) + (p11.x - p10.x) * tx)
+                / math.max(dz, 1e-6f);
+            return value;
         }
 
         /// <summary>

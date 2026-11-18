@@ -96,6 +96,7 @@ namespace DivisionEngine.Editor
                            Options: --out <file> --width N --height N --fixed-frame N
                                     --terrain-size N --terrain-height N
                                     --terrain-frequency F --heightmap-size N
+                                    --interpolation bilinear|hermite
                                     --infinite --no-erosion --pos x,y,z --look x,y,z
                                     --no-post --voxel (use the voxel clipmap renderer)
                                     --no-shadows  (disable terrain shadow casting)
@@ -148,6 +149,21 @@ namespace DivisionEngine.Editor
                 chunkSize = GetFloat(args, "--chunk-size", 24f),
                 chunksPerLevel = GetInt(args, "--chunks-per-level", 5),
             };
+
+            // --interpolation bilinear|hermite (case-insensitive; "bicubic" is the
+            // old name for Hermite and is still accepted so existing scripts work)
+            string interpolation = GetString(args, "--interpolation", "");
+            if (!string.IsNullOrWhiteSpace(interpolation))
+            {
+                if (string.Equals(interpolation, "bicubic", StringComparison.OrdinalIgnoreCase))
+                    terrain.interpolation = SDFTerrain.Interpolation.Hermite;
+                else if (Enum.TryParse(interpolation, ignoreCase: true, out SDFTerrain.Interpolation mode))
+                    terrain.interpolation = mode;
+                else
+                    throw new ArgumentException(
+                        $"--interpolation must be bilinear or hermite (got '{interpolation}').");
+            }
+
             return terrain;
         }
 
@@ -294,6 +310,7 @@ namespace DivisionEngine.Editor
                 {
                     failed++;
                     Console.WriteLine($"  FAIL  {name} ({ex.GetType().Name}: {ex.Message})");
+                    Console.WriteLine(ex.StackTrace);
                 }
             }
 
@@ -344,7 +361,7 @@ namespace DivisionEngine.Editor
                 return math.abs(left) < 1e-5f;
             });
 
-            Check("Bicubic reconstruction beats bilinear on curved data", () =>
+            Check("Catmull-Rom reconstruction beats bilinear on curved data", () =>
             {
                 int n = 9;
                 float[] data = new float[n * n];
@@ -420,7 +437,76 @@ namespace DivisionEngine.Editor
                 return math.abs(a.x - b2.x) < 1e-4f
                     && math.abs(a.z - b2.z) < 1e-4f
                     && math.abs(c.x - d.x) < 1e-4f
-                    && math.abs(c.y - d.y) < 0.05f;
+                    && math.abs(c.y - d.y) < 1e-4f;
+            });
+
+            Check("Bilinear terrain uses the bilinear surface gradient, not stored slopes", () =>
+            {
+                // The stored slopes describe the source surface. Bilinear mode must
+                // derive its shading normal from the bilinear patch itself, otherwise
+                // faceted geometry is lit as if it were still smooth.
+                float4 p00 = new float4(1.0f, 3.0f, -2.0f, 0.2f);
+                float4 p10 = new float4(4.0f, 7.0f, 5.0f, 0.4f);
+                float4 p01 = new float4(2.0f, -4.0f, 1.0f, 0.6f);
+                float4 p11 = new float4(6.0f, 2.0f, -3.0f, 0.8f);
+                float dx = 2.5f, dz = 4.0f, tx = 0.37f, tz = 0.62f;
+
+                float4 s = TerrainRendering.BilinearTerrain4(p00, p10, p01, p11, tx, tz, dx, dz);
+                float expectedHeight = math.lerp(
+                    math.lerp(p00.x, p10.x, tx), math.lerp(p01.x, p11.x, tx), tz);
+                float expectedDx = ((p10.x - p00.x) * (1f - tz) + (p11.x - p01.x) * tz) / dx;
+                float expectedDz = ((p01.x - p00.x) * (1f - tx) + (p11.x - p10.x) * tx) / dz;
+
+                // At the cell corner the bilinear gradient is the row/column
+                // finite difference, never the stored analytic slope.
+                float4 corner = TerrainRendering.BilinearTerrain4(p00, p10, p01, p11, 0f, 0f, dx, dz);
+                Console.WriteLine($"        h={s.x:F4} dx={s.y:F4} dz={s.z:F4} " +
+                    $"corner dx={corner.y:F4} dz={corner.z:F4}");
+
+                return math.abs(s.x - expectedHeight) < 1e-5f
+                    && math.abs(s.y - expectedDx) < 1e-5f
+                    && math.abs(s.z - expectedDz) < 1e-5f
+                    && math.abs(corner.y - (p10.x - p00.x) / dx) < 1e-5f
+                    && math.abs(corner.z - (p01.x - p00.x) / dz) < 1e-5f;
+            });
+
+            Check("Hermite patch reproduces corner slopes and exact derivatives", () =>
+            {
+                float4 P(float h, float fx, float fz) => new float4(h, fx, fz, 0.5f);
+                float4 p00 = P(1.0f, 0.5f, -0.25f);
+                float4 p10 = P(4.0f, -0.75f, 1.5f);
+                float4 p01 = P(2.0f, 1.25f, 0.75f);
+                float4 p11 = P(6.0f, 0.25f, -1.0f);
+                float dx = 0.75f, dz = 1.25f;
+
+                // Every corner is interpolated and its tangent equals the stored slope.
+                float4 c00 = TerrainRendering.Hermite4(p00, p10, p01, p11, 0f, 0f, dx, dz);
+                float4 c10 = TerrainRendering.Hermite4(p00, p10, p01, p11, 1f, 0f, dx, dz);
+                float4 c01 = TerrainRendering.Hermite4(p00, p10, p01, p11, 0f, 1f, dx, dz);
+                float4 c11 = TerrainRendering.Hermite4(p00, p10, p01, p11, 1f, 1f, dx, dz);
+                bool corners = math.abs(c00.x - p00.x) < 1e-5f && math.abs(c00.y - p00.y) < 1e-4f && math.abs(c00.z - p00.z) < 1e-4f
+                    && math.abs(c10.x - p10.x) < 1e-5f && math.abs(c10.y - p10.y) < 1e-4f && math.abs(c10.z - p10.z) < 1e-4f
+                    && math.abs(c01.x - p01.x) < 1e-5f && math.abs(c01.y - p01.y) < 1e-4f && math.abs(c01.z - p01.z) < 1e-4f
+                    && math.abs(c11.x - p11.x) < 1e-5f && math.abs(c11.y - p11.y) < 1e-4f && math.abs(c11.z - p11.z) < 1e-4f;
+
+                // The returned slopes must be the analytic derivatives of the same
+                // patch, since shading normals are built from them.
+                float maxDx = 0f, maxDz = 0f;
+                const float eps = 1e-3f;
+                for (int sample = 0; sample < 64; sample++)
+                {
+                    float tx = 0.15f + (sample % 8) * 0.1f;
+                    float tz = 0.15f + (sample / 8) * 0.1f;
+                    float4 h = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz, dx, dz);
+                    float hxp = TerrainRendering.Hermite4(p00, p10, p01, p11, tx + eps, tz, dx, dz).x;
+                    float hxm = TerrainRendering.Hermite4(p00, p10, p01, p11, tx - eps, tz, dx, dz).x;
+                    float hzp = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz + eps, dx, dz).x;
+                    float hzm = TerrainRendering.Hermite4(p00, p10, p01, p11, tx, tz - eps, dx, dz).x;
+                    maxDx = math.max(maxDx, math.abs(h.y - (hxp - hxm) / (2f * eps * dx)));
+                    maxDz = math.max(maxDz, math.abs(h.z - (hzp - hzm) / (2f * eps * dz)));
+                }
+                Console.WriteLine($"        derivative error: max dx={maxDx:E2} dz={maxDz:E2}");
+                return corners && maxDx < 2e-3f && maxDz < 2e-3f;
             });
 
             Check("Adjacent chunks agree along their shared seam", () =>
@@ -601,6 +687,109 @@ namespace DivisionEngine.Editor
                     && foundFar == 1
                     && foundFallback == 1
                     && levelFallback > 0;
+            });
+
+            Check("Infinite quadtree follows the editor camera while editing, the main camera in play mode", () =>
+            {
+                // Reproduces the editor setup: the gameplay camera (with Player controls)
+                // and a free-flying editor camera are both in the world.
+                World world = new("terrain-camera-test");
+                WorldManager.SetWorld(world);
+                WorldManager.SwitchWorld(world.Name);
+
+                uint terrainEntity = world.CreateTransformEntity("Terrain");
+                world.GetComponent<Transform>(terrainEntity)!.position = new float3(0f, 0f, 0f);
+                world.AddComponent(terrainEntity, new SDFTerrain
+                {
+                    infinite = true,
+                    levels = 3,
+                    chunksPerLevel = 3,
+                    chunkResolution = 16,
+                    chunkSize = 32f,
+                    bakeThreads = 1,
+                    chunksPerFrame = 8,
+                    erosion = false,
+                    height = 30f,
+                    frequency = 0.01f,
+                });
+
+                uint mainCamera = world.CreateTransformEntity("Camera");
+                world.GetComponent<Transform>(mainCamera)!.position = new float3(100f, 5f, 200f);
+                world.AddComponent(mainCamera, new Camera { isActive = false });
+                world.AddComponent(mainCamera, new Player());
+
+                if (!world.AddEntityWithId(EditorCamera.EditorCameraId, "EditorCamera")) return false;
+                world.AddComponent(EditorCamera.EditorCameraId, new Transform
+                {
+                    position = new float3(-3000f, 8f, 5000f),
+                });
+                world.AddComponent(EditorCamera.EditorCameraId, new Camera { isActive = true });
+                world.AddComponent(EditorCamera.EditorCameraId, new EditorCamera());
+
+                TerrainSystem system = new();
+                bool enteredPlayMode = false;
+                try
+                {
+                    // Editing: the render view is the editor camera, so the quadtree
+                    // and the GPU LOD/fade anchor must follow it.
+                    system.Render();
+                    bool editFollowsEditor = TerrainSystem.TryGetTerrainMetadata(terrainEntity, out TerrainDTO editA)
+                        && math.abs(editA.lodCenter.x + 3000f) < 1e-3f
+                        && math.abs(editA.lodCenter.y - 5000f) < 1e-3f;
+                    bool gpuEditFollowsEditor = TerrainSystem.AllTerrainMetadata is { Length: 1 } gpuEditA
+                        && math.abs(gpuEditA[0].lodCenter.x + 3000f) < 1e-3f
+                        && math.abs(gpuEditA[0].lodCenter.y - 5000f) < 1e-3f;
+
+                    world.GetComponent<Transform>(EditorCamera.EditorCameraId)!.position =
+                        new float3(-6000f, 12f, 7000f);
+                    system.Render();
+                    bool editFollowsMovedEditor = TerrainSystem.TryGetTerrainMetadata(terrainEntity, out TerrainDTO editB)
+                        && math.abs(editB.lodCenter.x + 6000f) < 1e-3f
+                        && math.abs(editB.lodCenter.y - 7000f) < 1e-3f;
+
+                    // Play mode: the rendering camera is the gameplay camera. The editor
+                    // camera is still in the world, but must be ignored.
+                    EngineCore.EnterPlayMode();
+                    enteredPlayMode = true;
+                    system.Render();
+                    bool playFollowsMain = TerrainSystem.TryGetTerrainMetadata(terrainEntity, out TerrainDTO playA)
+                        && math.abs(playA.lodCenter.x - 100f) < 1e-3f
+                        && math.abs(playA.lodCenter.y - 200f) < 1e-3f;
+                    bool gpuPlayFollowsMain = TerrainSystem.AllTerrainMetadata is { Length: 1 } gpuPlayA
+                        && math.abs(gpuPlayA[0].lodCenter.x - 100f) < 1e-3f
+                        && math.abs(gpuPlayA[0].lodCenter.y - 200f) < 1e-3f;
+
+                    world.GetComponent<Transform>(mainCamera)!.position = new float3(500f, 5f, -400f);
+                    system.Render();
+                    bool playFollowsMovedMain = TerrainSystem.TryGetTerrainMetadata(terrainEntity, out TerrainDTO playB)
+                        && math.abs(playB.lodCenter.x - 500f) < 1e-3f
+                        && math.abs(playB.lodCenter.y + 400f) < 1e-3f;
+                    bool gpuPlayFollowsMovedMain = TerrainSystem.AllTerrainMetadata is { Length: 1 } gpuPlayB
+                        && math.abs(gpuPlayB[0].lodCenter.x - 500f) < 1e-3f
+                        && math.abs(gpuPlayB[0].lodCenter.y + 400f) < 1e-3f;
+
+                    world.GetComponent<Transform>(EditorCamera.EditorCameraId)!.position =
+                        new float3(8000f, 12f, -8000f);
+                    system.Render();
+                    bool playIgnoresEditor = TerrainSystem.TryGetTerrainMetadata(terrainEntity, out TerrainDTO playC)
+                        && math.abs(playC.lodCenter.x - 500f) < 1e-3f
+                        && math.abs(playC.lodCenter.y + 400f) < 1e-3f;
+
+                    Console.WriteLine($"        lodCenter edit={editB.lodCenter} play={playB.lodCenter}");
+
+                    return editFollowsEditor && gpuEditFollowsEditor && editFollowsMovedEditor
+                        && playFollowsMain && gpuPlayFollowsMain && playFollowsMovedMain
+                        && gpuPlayFollowsMovedMain && playIgnoresEditor;
+                }
+                finally
+                {
+                    // Leave the engine exactly as a unit test found it (no play mode,
+                    // no background terrain state, no current world).
+                    if (enteredPlayMode) EngineCore.ExitPlayMode();
+                    world.DestroyEntity(terrainEntity);
+                    system.Render();
+                    WorldManager.ClearAllWorlds();
+                }
             });
 
             Check("LOD level grows with distance and clamps", () =>
@@ -1086,7 +1275,8 @@ namespace DivisionEngine.Editor
                     ProbeTerrainMetadata(m0);
                     Console.WriteLine($"  terrain meta: res={m0.resolution.x} stride={m0.chunkStride} levels={m0.levels} " +
                         $"chunkSize={m0.chunkSize} worldSpace={m0.worldSpace} bufferOffset={m0.bufferOffset} " +
-                        $"infoOffset={m0.chunkInfoOffset} size={m0.size} pos={m0.position}");
+                        $"infoOffset={m0.chunkInfoOffset} size={m0.size} pos={m0.position} " +
+                        $"lodCenter={m0.lodCenter} cameraHeight={m0.worldMin.x}");
                 }
                 if (TerrainSystem.AllTerrainChunkInfo is { Length: > 0 } info0)
                     Console.WriteLine($"  chunk info[0]: {info0[0]}");
