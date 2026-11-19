@@ -131,17 +131,37 @@ namespace DivisionEngine.Rendering
     /// <summary>
     /// Transfers SDF light data to GPU for rendering.
     /// </summary>
+    /// <remarks>
+    /// Structured buffers use natural (packed) alignment, so these fields are laid out
+    /// by the same rules on the CPU and in HLSL. The area-light fields are appended, so
+    /// the point and directional layout is byte-identical to what it was before area
+    /// lights existed. <c>--cli compute selftest</c> verifies the layout with a GPU probe.
+    /// </remarks>
     public struct SDFLightDTO
     {
-        // Base Properties
+        /// <summary>0 = directional, 1 = point, 2 = spherical area, 3 = rectangular area.</summary>
         public int type; // 4b
         public float3 position; // 12b
         public float4 rotation; // 16b
         public float4 color; // 16b
         public float intensity; // 4b
 
-        // Point Light Properties
+        // Point light / spherical area light
+        /// <summary>
+        /// Point light reach (attenuation cutoff) or the radius of a spherical area
+        /// emitter, depending on <see cref="type"/>.
+        /// </summary>
         public float radius; // 4b
+
+        // Area lights
+        /// <summary>Rectangle emitter half extents (x = width/2, y = height/2).</summary>
+        public float2 size; // 8b
+        /// <summary>Area light attenuation cutoff distance; 0 = no cutoff.</summary>
+        public float range; // 4b
+        /// <summary>Minimal tangent cone accuracy (the paper's epsilon).</summary>
+        public float epsilon; // 4b
+        /// <summary>Samples used by the rectangle light's numerical integration.</summary>
+        public int samples; // 4b
     }
 
     /// <summary>

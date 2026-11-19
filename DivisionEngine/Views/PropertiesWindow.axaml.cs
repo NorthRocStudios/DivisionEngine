@@ -760,6 +760,9 @@ public partial class PropertiesWindow : EditorWindow
         foreach (var (entityId, point) in W.QueryData<PointLight>())
             CreateComponentEditor(environmentPanel, typeof(PointLight), point, entityId, 
                 CardTitleFor("Point Light", entityId), allowRemove: false);
+        foreach (var (entityId, area) in W.QueryData<AreaLight>())
+            CreateComponentEditor(environmentPanel, typeof(AreaLight), area, entityId, 
+                CardTitleFor("Area Light", entityId), allowRemove: false);
 
         if (environmentPanel.Children.Count == 0)
             environmentPanel.Children.Add(new TextBlock { Text = "No environment or lighting components in this world.", 

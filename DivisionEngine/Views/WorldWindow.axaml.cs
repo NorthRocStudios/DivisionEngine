@@ -449,7 +449,8 @@ public partial class WorldWindow : EditorWindow
     }
 
     /// <summary>
-    /// Attaches a context menu to the background of the world window.
+    /// Attaches a context menu to the background of the world window. Entries are grouped
+    /// into one submenu per kind of entity so the list stays readable as the engine grows.
     /// </summary>
     private void AttachBackgroundContextMenu()
     {
@@ -459,58 +460,78 @@ public partial class WorldWindow : EditorWindow
             BorderBrush = EditorColor.FromRGB(128, 128, 128),
         };
 
-        // Entity types
-        var entityTypes = new Dictionary<string, (string DisplayName, MaterialIconKind Icon)>
-        {
-            ["empty"] = ("Empty Entity", MaterialIconKind.DotsGrid),
-            ["emptyTransform"] = ("Empty Transform", MaterialIconKind.Axis),
-            ["camera"] = ("Camera", MaterialIconKind.Camera),
-            ["environment"] = ("Environment", MaterialIconKind.Grass),
-            ["directionalLight"] = ("Directional Light", MaterialIconKind.WeatherSunny),
-            ["pointLight"] = ("Point Light", MaterialIconKind.Lightbulb),
-            ["audioSource"] = ("Audio Source", MaterialIconKind.VolumeHigh),
-            ["audioListener"] = ("Audio Listener", MaterialIconKind.Headphones),
-            ["sphere"] = ("Sphere", MaterialIconKind.Circle),
-            ["box"] = ("Box", MaterialIconKind.Square),
-            ["roundedBox"] = ("Rounded Box", MaterialIconKind.SquareRounded),
-            ["torus"] = ("Donut", MaterialIconKind.CircleDouble),
-            ["pyramid"] = ("Pyramid", MaterialIconKind.Pyramid),
-            ["plane"] = ("Plane", MaterialIconKind.SquareOutline),
-            ["cylinder"] = ("Cylinder", MaterialIconKind.Cylinder),
-            ["capsule"] = ("Capsule", MaterialIconKind.Capsule),
-            ["cone"] = ("Cone", MaterialIconKind.Cone),
-            ["terrain"] = ("Terrain", MaterialIconKind.Terrain),
-        };
+        // Bare entities first: they are the building blocks every other entry is made of.
+        backgroundContextMenu.Items.Add(
+            EditorUI.CreateContextMenuItem("Empty Entity", MaterialIconKind.DotsGrid,
+                () => EditorUI.CreateEntityStatic("empty")));
+        backgroundContextMenu.Items.Add(
+            EditorUI.CreateContextMenuItem("Empty Transform", MaterialIconKind.Axis,
+                () => EditorUI.CreateEntityStatic("emptyTransform")));
 
-        foreach (var type in entityTypes)
-        {
-            backgroundContextMenu.Items.Add(
-                EditorUI.CreateContextMenuItem(type.Value.DisplayName, type.Value.Icon,
-                    () => EditorUI.CreateEntityStatic(type.Key)));
-        }
-
-        // SDF fractals live in their own section next to the primitives
         backgroundContextMenu.Items.Add(new Separator());
 
-        var fractalTypes = new Dictionary<string, (string DisplayName, MaterialIconKind Icon)>
-        {
-            ["mandelbulb"] = ("Mandelbulb", MaterialIconKind.Star),
-            ["mengersponge"] = ("Menger Sponge", MaterialIconKind.Grain),
-            ["mandelbox"] = ("Mandelbox", MaterialIconKind.Cube),
-        };
+        backgroundContextMenu.Items.Add(CreateEntityTypeSubmenu("Lights", MaterialIconKind.Lightbulb,
+        [
+            ("Directional Light", MaterialIconKind.WeatherSunny, "directionalLight"),
+            ("Point Light", MaterialIconKind.LightbulbOn, "pointLight"),
+            ("Area Light", MaterialIconKind.CeilingLight, "areaLight"),
+        ]));
 
-        List<MenuItem> fractalItems = [];
-        foreach (var type in fractalTypes)
-        {
-            fractalItems.Add(
-                EditorUI.CreateContextMenuItem(type.Value.DisplayName, type.Value.Icon,
-                    () => EditorUI.CreateEntityStatic(type.Key)));
-        }
+        backgroundContextMenu.Items.Add(CreateEntityTypeSubmenu("Scene", MaterialIconKind.Grass,
+        [
+            ("Environment", MaterialIconKind.Grass, "environment"),
+            ("Camera", MaterialIconKind.Camera, "camera"),
+        ]));
 
-        backgroundContextMenu.Items.Add(
-            EditorUI.CreateSubmenu("SDF Fractals", MaterialIconKind.Shape, fractalItems));
+        backgroundContextMenu.Items.Add(new Separator());
+
+        backgroundContextMenu.Items.Add(CreateEntityTypeSubmenu("SDF Primitives", MaterialIconKind.Shape,
+        [
+            ("Sphere", MaterialIconKind.Circle, "sphere"),
+            ("Box", MaterialIconKind.Square, "box"),
+            ("Rounded Box", MaterialIconKind.SquareRounded, "roundedBox"),
+            ("Donut", MaterialIconKind.CircleDouble, "torus"),
+            ("Pyramid", MaterialIconKind.Pyramid, "pyramid"),
+            ("Plane", MaterialIconKind.SquareOutline, "plane"),
+            ("Cylinder", MaterialIconKind.Cylinder, "cylinder"),
+            ("Capsule", MaterialIconKind.Capsule, "capsule"),
+            ("Cone", MaterialIconKind.Cone, "cone"),
+            ("Terrain", MaterialIconKind.Terrain, "terrain"),
+        ]));
+
+        backgroundContextMenu.Items.Add(CreateEntityTypeSubmenu("SDF Fractals", MaterialIconKind.Star,
+        [
+            ("Mandelbulb", MaterialIconKind.Star, "mandelbulb"),
+            ("Menger Sponge", MaterialIconKind.Grain, "mengersponge"),
+            ("Mandelbox", MaterialIconKind.Cube, "mandelbox"),
+        ]));
+
+        backgroundContextMenu.Items.Add(new Separator());
+
+        backgroundContextMenu.Items.Add(CreateEntityTypeSubmenu("Audio", MaterialIconKind.VolumeHigh,
+        [
+            ("Audio Source", MaterialIconKind.VolumeHigh, "audioSource"),
+            ("Audio Listener", MaterialIconKind.Headphones, "audioListener"),
+        ]));
 
         scrollViewer.ContextMenu = backgroundContextMenu;
+    }
+
+    /// <summary>
+    /// Builds one "type of entity" submenu for the world window's create menu.
+    /// </summary>
+    /// <param name="title">Submenu label, e.g. "Lights".</param>
+    /// <param name="icon">Icon shown on the submenu header.</param>
+    /// <param name="entries">Display name, entry icon and entity type key for each item.</param>
+    /// <returns>Populated submenu.</returns>
+    private static MenuItem CreateEntityTypeSubmenu(string title, MaterialIconKind icon,
+        (string DisplayName, MaterialIconKind Icon, string Key)[] entries)
+    {
+        List<MenuItem> items = [];
+        foreach ((string displayName, MaterialIconKind entryIcon, string key) in entries)
+            items.Add(EditorUI.CreateContextMenuItem(displayName, entryIcon,
+                () => EditorUI.CreateEntityStatic(key)));
+        return EditorUI.CreateSubmenu(title, icon, items);
     }
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)

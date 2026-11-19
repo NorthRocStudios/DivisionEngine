@@ -244,6 +244,48 @@ namespace DivisionEngine.Rendering
             }
         }
 
+        /// <summary>
+        /// Area light gizmo: a softbox rectangle with a short fan of light rays under it, so
+        /// an area light reads differently from a point light at a glance.
+        /// </summary>
+        private void DrawAreaLight(float2 centerScreen, float scale, float2 uv, ref float3 finalColor, ref bool isHit)
+        {
+            float2 center = centerScreen;
+            float halfWidth = 10 * scale;
+            float halfHeight = 5 * scale;
+            float3 boxColor = new float3(1.0f, 0.72f, 0.15f);
+            float3 rayColor = new float3(1.0f, 0.9f, 0.4f);
+
+            // Softbox outline.
+            float2 topLeft = center + new float2(-halfWidth, halfHeight);
+            float2 topRight = center + new float2(halfWidth, halfHeight);
+            float2 bottomLeft = center + new float2(-halfWidth, -halfHeight);
+            float2 bottomRight = center + new float2(halfWidth, -halfHeight);
+
+            float edgeTop = LineSDF(uv, topLeft, topRight, 1.2f);
+            float edgeBottom = LineSDF(uv, bottomLeft, bottomRight, 1.2f);
+            float edgeLeft = LineSDF(uv, topLeft, bottomLeft, 1.2f);
+            float edgeRight = LineSDF(uv, topRight, bottomRight, 1.2f);
+
+            if (edgeTop <= 1.2f) { isHit = true; finalColor = DrawShape(edgeTop, 1.2f, boxColor, finalColor); }
+            if (edgeBottom <= 1.2f) { isHit = true; finalColor = DrawShape(edgeBottom, 1.2f, boxColor, finalColor); }
+            if (edgeLeft <= 1.2f) { isHit = true; finalColor = DrawShape(edgeLeft, 1.2f, boxColor, finalColor); }
+            if (edgeRight <= 1.2f) { isHit = true; finalColor = DrawShape(edgeRight, 1.2f, boxColor, finalColor); }
+
+            // Short fan of emitted light below the emitter.
+            for (int i = -1; i <= 1; i++)
+            {
+                float2 rayStart = center + new float2(i * 6 * scale, -halfHeight - 2 * scale);
+                float2 rayEnd = rayStart + new float2(i * 3 * scale, -7 * scale);
+                float distRay = LineSDF(uv, rayStart, rayEnd, 1.0f);
+                if (distRay <= 1.0f)
+                {
+                    isHit = true;
+                    finalColor = DrawShape(distRay, 1.0f, rayColor, finalColor);
+                }
+            }
+        }
+
         private void DrawSpotLight(float2 centerScreen, float scale, float2 uv, ref float3 finalColor, ref bool isHit)
         {
             float2 center = centerScreen;
@@ -409,6 +451,9 @@ namespace DivisionEngine.Rendering
                     break;
                 case 104: // Environment
                     DrawEnvironment(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
+                    break;
+                case 105: // AreaLight
+                    DrawAreaLight(centerScreen.xy, scale, uv, ref finalColor, ref isHit);
                     break;
             }
 

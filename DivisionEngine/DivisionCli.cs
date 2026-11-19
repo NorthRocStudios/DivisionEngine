@@ -60,6 +60,7 @@ namespace DivisionEngine.Editor
             {
                 switch (command)
                 {
+                    case "arealighttest": return AreaLightTest.Run(args);
                     case "bench": return RunBench(args);
                     case "compare": return RunCompare(args);
                     case "compute": return DivisionComputeCLI.TryRun(args);
@@ -484,6 +485,11 @@ namespace DivisionEngine.Editor
                   DivisionEngine.Editor.exe --cli <command> [options]
 
                 Commands:
+                  arealighttest  Area light checks: spherical shadows vs Monte Carlo ground truth,
+                            rectangular lights vs a CPU mirror of the paper's integration, and
+                            additivity of combined light rigs; exits 1 on failure
+                            Options: --scene all|sphere|rect|mix|demo --width N --height N --out-dir <dir>
+                                     --samples N --denoise 0|1   (demo scene only)
                   bench     Render frames offscreen and report frame times
                             Options: --width N --height N --frames N --warmup N
                                      --voxel --voxel-resolution N

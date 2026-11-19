@@ -132,6 +132,7 @@ namespace DivisionEngine.Editor
                     "environment" => DefaultEntities.Environment(),
                     "directionallight" => DefaultEntities.DirectionalLight(),
                     "pointlight" => DefaultEntities.PointLight(),
+                    "arealight" => DefaultEntities.AreaLight(),
                     "audiosource" => DefaultEntities.AudioSource(),
                     "audiolistener" => DefaultEntities.AudioListener(),
                     "sphere" => DefaultEntities.SDFSphere(),

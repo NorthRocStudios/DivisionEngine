@@ -268,6 +268,118 @@ budget. Multi-kernel shaders require DivisionCompute to emit explicit
 `register(tN/uN)` slots (the translator change lives in the sibling
 `DivisionTranslate/DivisionCompute` checkout this project builds against).
 
+## Area Lights
+
+Directional and point lights are joined by **area lights**: a spherical emitter or a
+rectangular softbox whose shadows come from the light's own extent instead of a
+tunable penumbra width. The implementation follows R. Bán, Cs. Bálint and G. Valasek,
+*Area Lights in Signed Distance Function Scenes* (Eurographics 2019 short paper).
+
+Add one with **Add → Area Light**, or by right-clicking in the World window and picking
+**Lights → Area Light** (the World window menu groups every entity type into a submenu:
+Lights, Scene, SDF Primitives, SDF Fractals and Audio). Edit it in the Properties window
+like any other component:
+
+- **Shape** - *Sphere* (omnidirectional) or *Rectangle* (a softbox that emits from the
+  side its local -Z axis faces away from: rotate the entity so -Z points at the
+  subject, exactly like a directional light).
+- **Intensity** / **Color** - the same convention as a point light: intensity is the
+  irradiance the light delivers at one world unit. An area light therefore replaces a
+  point light one-for-one and only changes the shadow, and the emitter's size never
+  changes the overall brightness of the scene.
+- **Radius** (sphere) or **Size** (rectangle) - the emitter's physical extent. This is
+  what sets the penumbra width, and the penumbra hardens towards the contact point the
+  way a real light does.
+- **Range** - attenuation cutoff, 0 disables it.
+- **Samples** (rectangle) - light samples per pixel for the numerical integration.
+- **Epsilon** - the paper's cone-search accuracy parameter; smaller is more accurate and
+  slower, and larger lights want smaller values.
+
+### How the shadows are computed
+
+The paper's *minimal tangent cone* search (its Algorithm 2) is what makes the shadow
+cheap: a cone is constructed from the shaded point towards the light's bounding sphere,
+and sphere tracing along the cone axis shrinks the cone around the closest surface until
+the relative cone radius `m` stops decreasing. `m = 1` means nothing occludes the cone and
+`m <= 0` means the surface crosses the axis. Each step uses the Accelerating Sphere
+Tracing step of Bálint and Valasek, `(f - r - t tan a) / (1 + tan a)`, and every time the
+cone touches a surface it is rescaled to `m - epsilon`, which pockets the occluder and
+lets the march take much longer steps than a shadow ray of the same radius would.
+
+The two shading paths then use that single search result:
+
+- **Spherical lights** use the paper's closed form for the visibility term (Section 4.1).
+  The reported `m` is mapped through `smoothstep(0, 1, m/2 + 1/2)`, which is identically
+  `((m/2 + 1/2)^2 * (2 - m))`, the paper's fast stand-in for the exact circular integral
+  `m/pi * sqrt(1-m^2) + asin(m)/pi + 1/2`. That visibility factor multiplies the light's
+  ordinary punctual contribution, which is the paper's Equation 2 factored into BRDF
+  times visibility times irradiance.
+- **Rectangular lights** integrate Equation 1 numerically (Section 4.2). The largest
+  occluder found by the cone search becomes a tangent plane through its closest point, so
+  each light sample costs one dot product to be classified as visible or hidden instead of
+  another shadow trace, while the light's own shape is tested exactly. The paper samples
+  directions inside the cone and tests them against the rectangle; this implementation
+  samples the rectangle's area, which integrates the same estimate with far less variance
+  at the sample counts an editor frame can afford.
+
+Neither path touches the existing shadow styles: `CalculateShadow`, the penumbra ("soft")
+shadow and the coloured glass shadow keep their own code untouched, and point and
+directional lights are unaffected by area light support.
+
+### Measured results
+
+`--cli arealighttest` renders the same scene through the area light path and through
+independent references, so these numbers are not golden images:
+
+| Check | Result |
+| --- | --- |
+| Sphere light visibility vs a 1024-sample Monte Carlo integration of the exact visibility (radius 0.5 / 1.5 / 3 / 5) | mean error **0.04% / 0.08% / 0.22% / 1.10%**, correlation 0.9999 / 0.9999 / 0.9996 / 0.9976 |
+| The same scene, the existing point-light penumbra shadow with a matched penumbra width | mean error **13.8%** (the paper's Quilez comparison) |
+| Rectangle light vs a CPU mirror of the paper's integration (64 spp, tilted emitter) | mean relative error **0.41%**, RMS **0.76%**, median rendered/expected exactly **1.000** |
+| Rectangle light shrunk to a point vs a point light of equal intensity and colour, straight under the emitter | **0.38%** |
+| Four-light rig (directional + point + sphere + rectangle) vs the sum of the four, 174,480 pixels | **0.00%** RMS, **0** NaN pixels |
+| Rectangle light sample convergence (RMS vs 64 spp) | 1 spp 0.0053, 4 spp 0.0008, 16 spp 0.0002 |
+
+(Rendered at 640x360 with the fast, unoptimized shader variant, so the numbers do not
+depend on a tuned build.)
+
+The sphere light's shadow therefore lands within about 1% of the exact visibility, while
+the engine's existing penumbra approximation of the same scene is off by 14% - the
+paper's headline result. The rectangle light matches the paper's integral to well under
+a percent, and area lights mix with the existing light types linearly and without
+double counting.
+
+### Limitations
+
+- Rectangular emitters evaluate Equation 1 with `Samples` samples per pixel, so their
+  penumbrae are dithered rather than smooth at low counts - the trade-off the paper
+  reports for its second algorithm. Sphere lights are closed form and have no sampling
+  noise at all. Raise **Samples** for hero renders; 16 is the default and 32-64 removes
+  visible dithering from a large softbox.
+- The paper's edge-like occluder assumption is weakest for a very large emitter close to
+  a receiver and inside concave corners, which is exactly the accuracy the paper's
+  Section 5 reports.
+- The voxel clipmap path approximates area lights as point lights at the emitter centre:
+  it keeps the brightness convention of the exact path but not the soft shadow, in the
+  same way it simplifies the rest of its lighting model.
+- The area light cone search costs the same order as one shadow ray per light, and a
+  rectangle light additionally evaluates the BRDF once per sample.
+
+### Command line
+
+```bash
+# Full area light suite: sphere light shadows against a Monte Carlo ground truth,
+# rectangle lights against a CPU mirror of the paper's integration, and additivity of a
+# combined directional + point + sphere + rectangle rig
+DivisionEngine.Editor.exe --cli arealighttest
+
+# One group only, writing its images to a directory
+DivisionEngine.Editor.exe --cli arealighttest --scene sphere --out-dir artifacts/area
+
+# The structured-buffer layout of SDFLightDTO, area light fields included
+DivisionEngine.Editor.exe --cli compute selftest
+```
+
 ## Terrain System
 
 Terrains are height fields evaluated directly inside the SDF raymarcher. The terrain

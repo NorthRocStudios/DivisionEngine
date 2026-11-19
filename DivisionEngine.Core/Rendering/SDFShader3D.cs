@@ -907,7 +907,8 @@ namespace DivisionEngine
         /// </summary>
         private float3 CalculateLighting(float3 hitPoint, float3 geoNormal, float3 finalNormal, float3 viewDir,
             int2 shadowEffects, int shadowType, float specular, float reflectance,
-            float3 baseCol, float metallic, float roughAlpha, uint excludeID, float shadowBias)
+            float3 baseCol, float metallic, float roughAlpha, uint excludeID, float shadowBias,
+            int2 pixel)
         {
             float3 totalLight = new float3(0f);
 
@@ -957,6 +958,12 @@ namespace DivisionEngine
                     float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir,
                         finalNormal, baseCol, metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
                     totalLight += brdf * lightColor * NoL * lightShadow;
+                }
+                else if (light.type == 2 || light.type == 3) // Area light (spherical / rectangular)
+                {
+                    totalLight += AreaLightContribution(light, hitPoint, viewDir, finalNormal, baseCol,
+                        metallic, roughAlpha, specular, reflectance, shadowEffects.y != 0, shadowBias,
+                        excludeID, i, pixel);
                 }
             }
 
@@ -1110,6 +1117,258 @@ namespace DivisionEngine
         }
 
         #endregion lighting
+
+        #region area_lights
+
+        // -----------------------------------------------------------------------------
+        // Area lights
+        //
+        // Reference: R. Ban, Cs. Balint and G. Valasek, "Area Lights in Signed Distance
+        // Function Scenes", Eurographics 2019 short paper.
+        //
+        // Algorithm 2 of the paper (the minimal tangent cone search) is implemented 1:1 in
+        // MinimalTangentCone below: a cone is built from the shaded point towards the
+        // light's bounding sphere, and sphere tracing along its axis shrinks the cone
+        // around the closest surface until the relative cone radius m stops decreasing.
+        // m = 1 means nothing occludes the cone; m <= 0 means the surface crosses the axis.
+        //
+        // Spherical lights then use the paper's closed form (Section 4.1), which maps m
+        // through smoothstep(0, 1, m/2 + 1/2) == ((m/2 + 1/2)^2 * (2 - m)). Rectangular
+        // lights use the paper's numerical integration (Section 4.2): the largest occluder
+        // found by the cone search becomes a planar proxy, so every light sample can be
+        // tested with one dot product instead of a second shadow trace.
+        //
+        // Nothing here is shared with CalculateShadow: the penumbra and coloured shadow
+        // styles of the point and directional lights keep their own code path untouched.
+        // -----------------------------------------------------------------------------
+
+        /// <summary>
+        /// Distance to the closest shadow-casting surface, i.e. the paper's f. Objects that
+        /// do not cast shadows are skipped, and so is the receiving object (except terrain,
+        /// which has to be able to shadow itself).
+        /// </summary>
+        private float ShadowCasterSDF(float3 pt, uint excludeID, out int closest)
+        {
+            float minDist = MIN_TRAVERSE_DIST;
+            closest = -1;
+            for (int k = 0; k < sdfObjects.Length; k++)
+            {
+                SDFObjectDTO sdf = sdfObjects[k];
+                if (sdf.shadowEffects.x == 0) continue;
+                if (sdf.entityID == excludeID && sdf.type != 9) continue;
+
+                float dist = ObjectSDF(pt, sdf);
+                if (dist < minDist)
+                {
+                    minDist = dist;
+                    closest = k;
+                }
+            }
+            return minDist;
+        }
+
+        /// <summary>
+        /// Algorithm 2 of the paper: the minimal relative cone radius seen along a shadow
+        /// cone's axis. The cone is shrunk every time a surface enters it, so the march
+        /// skips the parts of the scene the shrunken cone no longer covers.
+        /// </summary>
+        /// <param name="origin">Cone apex (the offset shaded point).</param>
+        /// <param name="dir">Unit direction of the cone axis, towards the light.</param>
+        /// <param name="tanAlpha0">Tangent of the cone's original half opening angle.</param>
+        /// <param name="tMax">Axis length to march, where the cone reaches the light.</param>
+        /// <param name="epsilon">The paper's accuracy parameter.</param>
+        /// <param name="excludeID">Receiving object, excluded from the caster set.</param>
+        /// <param name="occluderObject">Index of the largest occluder found, -1 when none.</param>
+        /// <param name="occluderT">Axis parameter of the closest point on that occluder.</param>
+        /// <returns>m clamped to [-1, 1]; 1 = unobstructed, 0 = the surface touches the axis.</returns>
+        private float MinimalTangentCone(float3 origin, float3 dir, float tanAlpha0, float tMax,
+            float epsilon, uint excludeID, out int occluderObject, out float occluderT)
+        {
+            occluderObject = -1;
+            occluderT = 0f;
+
+            float m = 1f;
+            float r0 = 0f;              // cone radius at the apex: the cone starts as a point
+            float tanAlpha = tanAlpha0; // current (shrunken) cone half angle
+            int maxSteps = worldData[0].maxShadowRaySteps;
+            float minStep = math.max(tMax * 1e-4f, EPSILON * 10f);
+            // Never sample the apex itself: the surface passes through it and a zero distance
+            // there would read as a fully occluded cone.
+            float t = minStep;
+            // The paper's epsilon budgets how far the march may skip past a local minimum, so
+            // it doubles as the over-relaxation of the accelerated sphere tracing step below.
+            float relaxation = 1f + math.max(epsilon, 0f);
+
+            for (int i = 0; i < maxSteps; i++)
+            {
+                if (t >= tMax) break;
+
+                float f = ShadowCasterSDF(origin + dir * t, excludeID, out int closest);
+                float coneRadius = t * tanAlpha0;
+
+                // The occluder proxy is the first place the cone touches a surface: the plane
+                // through that contact blocks exactly the radiance behind it, which is the
+                // paper's edge-like assumption. (The deepest point would sit inside the
+                // occluder once the cone is fully blocked.)
+                if (occluderObject < 0 && f < coneRadius && closest >= 0)
+                {
+                    occluderObject = closest;
+                    occluderT = t;
+                }
+
+                // m(t) = f / (r0 + t*tan(a0)): the relative cone radius. The paper's search is
+                // the minimum of m along the axis, so every sample is a candidate.
+                float mNew = math.clamp(f / math.max(coneRadius, EPSILON), -1f, 1f);
+                if (mNew < m)
+                {
+                    m = mNew;
+                    // The surface fully crosses the cone: no shading term can recover from it.
+                    if (m <= -1f) break;
+                }
+
+                // Pocket the current minimum: shrinking the cone so it no longer intersects
+                // the surface here bounds how much of a later minimum the march can skip.
+                float coneDist = f - r0 - t * tanAlpha;
+                if (coneDist < epsilon * coneRadius)
+                {
+                    float shrink = math.max(m - epsilon, 0f);
+                    tanAlpha = shrink * tanAlpha0;
+                }
+
+                // Accelerating Sphere Tracing (Balint & Valasek 2018) steps by the cone
+                // condition divided by its Lipschitz constant; plain sphere tracing (|f|)
+                // keeps narrow cones from crawling, and |f| penetrates an occluder once the
+                // cone is blocked, which is what lets m go negative (a fully hidden light).
+                float surfaceStep = f >= 0f ? f : -f;
+                float stepSize = math.max(coneDist / (1f + tanAlpha), surfaceStep) * relaxation;
+                t += math.max(stepSize, minStep);
+            }
+
+            return m;
+        }
+
+        /// <summary>
+        /// Direct illumination from an area light: one minimal tangent cone search plus the
+        /// paper's shading for the light's shape. Section 4.1 for spherical emitters (closed
+        /// form visibility), Section 4.2 for rectangular ones (numerical integration of
+        /// Equation 1 against a planar proxy of the largest occluder).
+        /// </summary>
+        /// <remarks>
+        /// Both shapes share this single entry point on purpose: the cone search contains the
+        /// inlined scene SDF, so giving each shape its own copy of it roughly doubles the
+        /// front-end cost of the already very large raymarch shader.
+        /// The paper samples directions inside the cone towards the bounding sphere and tests
+        /// whether they hit the rectangle; sampling the rectangle's area instead integrates
+        /// the same estimate with far less variance, which is what keeps the penumbra clean at
+        /// the low sample counts an editor frame can afford.
+        /// </remarks>
+        private float3 AreaLightContribution(SDFLightDTO light, float3 hitPoint, float3 viewDir,
+            float3 finalNormal, float3 baseCol, float metallic, float roughAlpha, float specular,
+            float reflectance, bool traceShadows, float shadowBias, uint excludeID, int lightIndex,
+            int2 pixel)
+        {
+            float3 forward = math.normalize(ShaderMath.RotateVector(new float3(0f, 0f, -1f), light.rotation));
+            float3 lightNormal = -forward; // emission direction: away from the lit side, into the scene
+            float3 axisX = ShaderMath.RotateVector(new float3(1f, 0f, 0f), light.rotation);
+            float3 axisY = ShaderMath.RotateVector(new float3(0f, 1f, 0f), light.rotation);
+
+            bool isRect = light.type == 3;
+            float2 halfExtent = new float2(math.max(light.size.x, 1e-4f), math.max(light.size.y, 1e-4f));
+            float3 toCenter = light.position - hitPoint;
+            float centerDistance = math.length(toCenter);
+            if (centerDistance <= 1e-4f) return new float3(0f);
+            float3 axisDir = toCenter / centerDistance;
+
+            // Cone tangent to the emitter's bounding sphere: the sphere's radius for a
+            // spherical light, the rectangle's half diagonal for a rectangular one.
+            float emitterRadius = isRect ? math.length(halfExtent) : math.max(light.radius, EPSILON);
+            float3 origin = hitPoint + finalNormal * shadowBias;
+            float tMax = math.sqrt(math.max(centerDistance * centerDistance - emitterRadius * emitterRadius, EPSILON));
+
+            float m = 1f;
+            int occluderObject = -1;
+            float occluderT = 0f;
+            if (traceShadows && centerDistance > emitterRadius * 1.01f)
+                m = MinimalTangentCone(origin, axisDir, emitterRadius / tMax, tMax, light.epsilon,
+                    excludeID, out occluderObject, out occluderT);
+
+            if (!isRect)
+            {
+                // Section 4.1: smoothstep(0, 1, m/2 + 1/2) is identically
+                // ((m/2 + 1/2)^2 * (2 - m)), the closed form the paper uses in place of the
+                // exact circular integral of the visibility.
+                float visibility = traceShadows ? math.smoothstep(0f, 1f, 0.5f + 0.5f * m) : 1f;
+                float attenuation = math.rcp(math.max(centerDistance * centerDistance, EPSILON));
+                if (light.range > 0f) attenuation *= math.saturate(1f - centerDistance / light.range);
+                float NoL = math.max(math.dot(finalNormal, axisDir), 0f);
+                if (NoL <= 0f || attenuation <= 0f) return new float3(0f);
+                float3 brdf = PBR.BRDFMicrofacetFunction(axisDir, viewDir, finalNormal, baseCol,
+                    metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
+                return brdf * (light.color.rgb * (light.intensity * attenuation * NoL * visibility));
+            }
+
+            // Section 4.2: the largest occluder found by the cone search becomes a plane, so
+            // each light sample costs one dot product instead of another shadow trace.
+            bool hasOccluder = occluderObject >= 0 && m < 1f;
+            float3 occluderPoint = origin;
+            float3 occluderNormal = new float3(0f, 1f, 0f);
+            if (hasOccluder)
+            {
+                occluderPoint = origin + axisDir * occluderT;
+                occluderNormal = FastNormalSingleObject(occluderPoint, sdfObjects[occluderObject]);
+            }
+
+            int samples = (int)math.clamp((float)light.samples, 1f, 64f);
+            float3 sum = new float3(0f);
+            for (int s = 0; s < samples; s++)
+            {
+                // Low-discrepancy sample over the rectangle, offset per pixel and per light
+                // so neighbouring pixels do not use the same set of points.
+                int sampleIndex = pixel.x * 73 + pixel.y * 9277 + lightIndex * 3571 + s * 1237 + 17;
+                float2 u = PBR.Halton2D(sampleIndex);
+                float3 samplePoint = light.position
+                    + axisX * ((u.x * 2f - 1f) * halfExtent.x)
+                    + axisY * ((u.y * 2f - 1f) * halfExtent.y);
+
+                float3 toSample = samplePoint - hitPoint;
+                float distanceSquared = math.dot(toSample, toSample);
+                if (distanceSquared <= 1e-8f) continue;
+                float3 lightDir = toSample / math.sqrt(distanceSquared);
+
+                float cosLight = -math.dot(lightNormal, lightDir);
+                if (cosLight <= 0f) continue;
+                float NoL = math.dot(finalNormal, lightDir);
+                if (NoL <= 0f) continue;
+
+                float visibility = 1f;
+                if (hasOccluder)
+                {
+                    // Planar/edge proxy of the largest occluder: a light sample is hidden
+                    // when it sits behind the plane through the closest approach point.
+                    visibility = math.dot(samplePoint - occluderPoint, occluderNormal) > 0f ? 1f : 0f;
+                }
+
+                float falloff = distanceSquared;
+                if (light.range > 0f)
+                {
+                    float rangeFactor = math.saturate(1f - math.sqrt(distanceSquared) / light.range);
+                    if (rangeFactor <= 0f) continue;
+                    falloff = distanceSquared / rangeFactor;
+                }
+
+                float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir, finalNormal, baseCol,
+                    metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
+                sum += brdf * (visibility * cosLight * NoL / falloff);
+            }
+
+            // intensity is a power-like scale (see AreaLight), so it replaces the emitter
+            // radiance times its area: the light keeps the brightness of a point light of
+            // the same intensity while its extent only softens the shadow.
+            return sum * (light.color.rgb * (light.intensity / (float)samples));
+        }
+
+        #endregion area_lights
+
         #region pbr_workflow
 
         private void SampleSurfaceMaterial(
@@ -1537,9 +1796,12 @@ namespace DivisionEngine
             float aoValue = 1f;
             if (sdf.aoValues.x > 0f) aoValue = math.lerp(1f, CalculateAO(hitPoint, normal, sdf.entityID, sdf.aoValues), sdf.aoValues.x);
 
+            // Refracted pixels receive no shadows here (the second shadow flag is 0), so the
+            // area light sample pattern is deliberately pixel independent: one coherent set
+            // of rectangle samples behind glass instead of per-pixel noise.
             float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
                 new int2(sdf.shadowEffects.x, 0), sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha,
-                sdf.entityID, EPSILON * REFLECTION_BIAS);
+                sdf.entityID, EPSILON * REFLECTION_BIAS, new int2(0, 0));
             float3 ambientLight = ambientBase * aoValue;
             finalColor += ambientLight + directLight;
             return finalColor;
@@ -1653,7 +1915,7 @@ namespace DivisionEngine
                 float shadowBias = sdf.type == 9 ? 0.15f : EPSILON * REFLECTION_BIAS;
                 float3 directLight = CalculateLighting(hitPoint, normal, finalNormal, viewDir,
                     sdf.shadowEffects, sdf.shadowType, sdf.specular, sdf.reflectance, albedo, metallic, roughAlpha,
-                    sdf.entityID, shadowBias);
+                    sdf.entityID, shadowBias, pixel);
                 // Ambient is scaled by AO only. The previous line overwrote aoValue with the
                 // *direct* light magnitude whenever it exceeded 0.5, which made ambient jump back
                 // up exactly where the shadow term pulled directLight down: a bright band hugging

@@ -829,6 +829,28 @@ namespace DivisionEngine
                         metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
                     totalLight += brdf * light.color.rgb * light.intensity * attenuation * NoL * shadow;
                 }
+                else if (light.type == 2 || light.type == 3)
+                {
+                    // Area lights are approximated as point lights here: the minimised
+                    // tangent cone search that the exact-SDF shader uses would grow this
+                    // already enormous shader further, and the voxel path is the simplified
+                    // preview path. Brightness matches the exact path because the intensity
+                    // convention is punctual; only the penumbra softness is missing.
+                    float3 lightVec = light.position - hitPoint;
+                    float distance = math.length(lightVec);
+                    float3 lightDir = lightVec / math.max(distance, EPSILON);
+                    float attenuation = math.rcp(math.max(distance * distance, EPSILON));
+                    if (light.range > 0f) attenuation *= math.saturate(1f - distance / light.range);
+                    float NoL = math.max(math.dot(finalNormal, lightDir), 0f);
+                    if (NoL <= 0f || attenuation <= 0f) continue;
+
+                    float shadow = shadowEffects.y != 0
+                        ? CalculateShadow(hitPoint, geoNormal, lightDir, distance)
+                        : 1f;
+                    float3 brdf = PBR.BRDFMicrofacetFunction(lightDir, viewDir, finalNormal, baseCol,
+                        metallic, roughAlpha, specular, reflectance, RECIPROCAL_PI, EPSILON);
+                    totalLight += brdf * light.color.rgb * light.intensity * attenuation * NoL * shadow;
+                }
             }
             return totalLight;
         }

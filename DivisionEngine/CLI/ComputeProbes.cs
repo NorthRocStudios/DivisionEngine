@@ -311,6 +311,44 @@ namespace DivisionEngine.Editor.Compute
         }
     }
     /// <summary>
+    /// Copies every field of every <c>SDFLightDTO</c> into a float buffer so the CPU can
+    /// verify the structured-buffer layout the renderer relies on. Area lights appended
+    /// fields to that struct, and a mismatch between the C# and HLSL layouts would read the
+    /// light size, epsilon and sample count from the wrong offsets.
+    /// </summary>
+    [Shader]
+    public struct LightLayoutProbe
+    {
+        /// <summary>Lights to inspect.</summary>
+        [ShaderResource] public StructuredBuffer<DivisionEngine.Rendering.SDFLightDTO> lights;
+
+        /// <summary>Eight float4 rows per light.</summary>
+        [ShaderResource] public RWStructuredBuffer<F4> output;
+
+        /// <summary>Writes one light's fields per thread.</summary>
+        [Kernel(64, 1, 1)]
+        public void Execute(U3 id)
+        {
+            uint index = id.x;
+            if (index >= (uint)lights.Length) return;
+
+            DivisionEngine.Rendering.SDFLightDTO light = lights[index];
+            uint row = index * 8u;
+            output[row + 0u] = new F4((float)light.type, light.position.x, light.position.y, light.position.z);
+            output[row + 1u] = light.rotation;
+            output[row + 2u] = light.color;
+            output[row + 3u] = new F4(light.intensity, light.radius, light.size.x, light.size.y);
+            output[row + 4u] = new F4(light.range, light.epsilon, (float)light.samples, 0f);
+            output[row + 5u] = new F4(light.position.x * 2f, light.position.y * 2f, light.position.z * 2f,
+                light.rotation.x);
+            output[row + 6u] = new F4(light.size.x * 1000f, light.size.y * 1000f, light.epsilon * 1000f,
+                light.radius * 1000f);
+            output[row + 7u] = new F4(light.color.x * 7f, light.color.y * 11f, light.color.z * 13f,
+                light.intensity * 17f);
+        }
+    }
+
+    /// <summary>
     /// Reads a typed buffer and writes a typed buffer. Validates
     /// <c>Buffer&lt;T&gt;</c>/<c>RWBuffer&lt;T&gt;</c> translation and binding.
     /// </summary>

@@ -28,6 +28,7 @@ using DivisionEngine.Editor.Compute;
 using DivisionEngine.Graphics;
 using Vortice.D3DCompiler;
 using DivisionEngine.MathLib;
+using DivisionEngine.Rendering;
 using SkiaSharp;
 using Vortice.DXGI;
 using M2 = DivisionEngine.MathLib.float2;
@@ -416,6 +417,7 @@ namespace DivisionEngine.Editor
             probes.Add(RunTypedBufferProbe(context, iterations));
             probes.Add(RunGpuCopyProbe(context));
             probes.Add(RunBufferProbe(context, iterations));
+            probes.Add(RunLightLayoutProbe(context, iterations));
 
             Console.WriteLine();
             Console.WriteLine("probe        result  max error    mean error   mismatch    gpu ms     cpu ms");
@@ -739,6 +741,96 @@ namespace DivisionEngine.Editor
         #endregion selftest
 
         #region probe helpers
+
+        /// <summary>
+        /// Verifies that <see cref="SDFLightDTO"/> is read with the same layout by the GPU as
+        /// it is written by C#. The area-light fields were appended to that struct, and a
+        /// packing difference (for example an implicit 16-byte register boundary, which
+        /// structured buffers do not apply) would silently feed the shader the wrong light
+        /// size and sample count.
+        /// </summary>
+        private static ProbeResult RunLightLayoutProbe(DivisionComputeContext context, int iterations)
+        {
+            const int count = 16;
+            SDFLightDTO[] lights = new SDFLightDTO[count];
+            for (int i = 0; i < count; i++)
+            {
+                lights[i] = new SDFLightDTO
+                {
+                    type = i % 4,
+                    position = new M3(10f + i, 20f + i * 0.5f, -30f - i * 0.25f),
+                    rotation = new M4(0.1f * i, 0.2f * i, 0.3f * i, 1f),
+                    color = new M4(0.5f + i * 0.01f, 0.25f + i * 0.02f, 0.125f + i * 0.03f, 1f),
+                    intensity = 2f + i * 0.5f,
+                    radius = 3f + i * 0.25f,
+                    size = new M2(1.5f + i * 0.1f, 0.75f + i * 0.05f),
+                    range = 40f + i,
+                    epsilon = 0.02f + i * 0.001f,
+                    samples = 1 + i * 3,
+                };
+            }
+
+            using StructuredBuffer<SDFLightDTO> input = context.CreateStructuredBuffer(lights);
+            using RWStructuredBuffer<M4> output = context.CreateRWStructuredBuffer<M4>(count * 8);
+            using DivisionShader shader = CompileProbe(context, typeof(LightLayoutProbe));
+
+            shader.SetStructuredBuffer("lights", input);
+            shader.SetRWStructuredBuffer("output", output);
+
+            int kernel = shader.FindKernel(KernelName);
+            (uint gx, uint gy, uint gz) = GetGroupSize(typeof(LightLayoutProbe), KernelName);
+            uint groups = (uint)((count + gx - 1) / gx);
+            shader.Dispatch(kernel, groups, 1, 1); // warmup
+
+            Stopwatch sw = Stopwatch.StartNew();
+            for (int i = 0; i < iterations; i++)
+                shader.Dispatch(kernel, groups, 1, 1);
+            M4[] actual = output.GetData(context.Context);
+            sw.Stop();
+
+            int mismatches = 0;
+            float maxError = 0f;
+            for (int i = 0; i < count; i++)
+            {
+                SDFLightDTO light = lights[i];
+                M4[] expected =
+                [
+                    new M4(light.type, light.position.x, light.position.y, light.position.z),
+                    light.rotation,
+                    light.color,
+                    new M4(light.intensity, light.radius, light.size.x, light.size.y),
+                    new M4(light.range, light.epsilon, light.samples, 0f),
+                    new M4(light.position.x * 2f, light.position.y * 2f, light.position.z * 2f, light.rotation.x),
+                    new M4(light.size.x * 1000f, light.size.y * 1000f, light.epsilon * 1000f, light.radius * 1000f),
+                    new M4(light.color.x * 7f, light.color.y * 11f, light.color.z * 13f, light.intensity * 17f),
+                ];
+
+                for (int row = 0; row < 8; row++)
+                {
+                    M4 want = expected[row];
+                    M4 got = actual[i * 8 + row];
+                    float error = Math.Max(
+                        Math.Max(Math.Abs(want.x - got.x), Math.Abs(want.y - got.y)),
+                        Math.Max(Math.Abs(want.z - got.z), Math.Abs(want.w - got.w)));
+                    maxError = Math.Max(maxError, error);
+                    if (error > 1e-5f) mismatches++;
+                }
+            }
+
+            return new ProbeResult
+            {
+                Name = "light-dto",
+                Passed = mismatches == 0,
+                MaxError = maxError,
+                MeanError = maxError,
+                Mismatches = mismatches,
+                GpuMs = sw.Elapsed.TotalMilliseconds / iterations,
+                CpuMs = 0,
+                Message = mismatches == 0
+                    ? "SDFLightDTO structured-buffer layout (type/position/rotation/color/intensity/radius/size/range/epsilon/samples)"
+                    : "SDFLightDTO layout mismatch between C# and HLSL",
+            };
+        }
 
         private static ProbeResult RunTypedBufferProbe(DivisionComputeContext context, int iterations)
         {

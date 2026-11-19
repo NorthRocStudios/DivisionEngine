@@ -77,6 +77,7 @@ namespace DivisionEngine.Systems
         PointLight = 102,
         SpotLight = 103,
         Environment = 104,
+        AreaLight = 105,
     }
 
     public static class IconDefinitions
@@ -86,6 +87,7 @@ namespace DivisionEngine.Systems
             if (entityId != EditorCamera.EditorCameraId && world.HasComponent<Camera>(entityId)) return IconType.Camera;
             if (world.HasComponent<Components.Lights.DirectionalLight>(entityId)) return IconType.DirectionalLight;
             if (world.HasComponent<Components.Lights.PointLight>(entityId)) return IconType.PointLight;
+            if (world.HasComponent<Components.Lights.AreaLight>(entityId)) return IconType.AreaLight;
             if (world.HasComponent<Components.Environment>(entityId)) return IconType.Environment;
             return IconType.None;
         }

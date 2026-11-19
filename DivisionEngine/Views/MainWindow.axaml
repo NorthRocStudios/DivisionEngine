@@ -83,6 +83,7 @@
             <Separator/>
             <MenuItem Header="Directional Light" Command="{Binding CreateEntityCommand}" CommandParameter="directionalLight" Foreground="#ccc"/>
             <MenuItem Header="Point Light" Command="{Binding CreateEntityCommand}" CommandParameter="pointLight" Foreground="#ccc"/>
+            <MenuItem Header="Area Light" Command="{Binding CreateEntityCommand}" CommandParameter="areaLight" Foreground="#ccc"/>
             <Separator/>
             <MenuItem Header="Sphere" Command="{Binding CreateEntityCommand}" CommandParameter="sphere" Foreground="#ccc"/>
             <MenuItem Header="Box" Command="{Binding CreateEntityCommand}" CommandParameter="box" Foreground="#ccc"/>

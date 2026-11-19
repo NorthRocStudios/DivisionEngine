@@ -117,6 +117,22 @@ namespace DivisionEngine.Editor
             return pointLight;
         }
 
+        public static uint AreaLight(string name = "New Area Light")
+        {
+            if (WorldManager.CurrentWorld == null)
+            {
+                Debug.Warning("No world is currently loaded to add entities to");
+                return uint.MaxValue;
+            }
+            uint areaLight = W.CreateTransformEntity(name);
+            W.AddComponent(areaLight, new AreaLight());
+            var components = WorldManager.CurrentWorld!.GetClonedComponents(areaLight);
+            AddEntityCommand command = new AddEntityCommand(areaLight, components, name);
+            UndoManager.Execute(command);
+            Selection.SelectEntity(areaLight);
+            return areaLight;
+        }
+
         public static uint AudioSource(string name = "New Audio Source")
         {
             if (WorldManager.CurrentWorld == null)

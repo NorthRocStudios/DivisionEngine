@@ -175,6 +175,22 @@ namespace DivisionEngine.Systems
                     curLight.radius = light.radius;
                     sdfLights.Add(curLight);
                 }
+                else if (W.HasComponent<AreaLight>(id))
+                {
+                    AreaLight light = W.GetComponent<AreaLight>(id)!;
+                    curLight.type = light.shape == AreaLight.LightShape.Rectangle ? 3 : 2;
+                    curLight.color = light.color;
+                    curLight.intensity = light.intensity;
+                    curLight.radius = light.radius;
+                    // The shader works with half extents, matching how it samples the
+                    // rectangle around its centre.
+                    curLight.size = new float2(math.max(light.size.x, 1e-4f) * 0.5f,
+                        math.max(light.size.y, 1e-4f) * 0.5f);
+                    curLight.range = light.range;
+                    curLight.epsilon = math.clamp(light.epsilon, 0.01f, 0.5f);
+                    curLight.samples = math.clamp(light.samples, 1, 64);
+                    sdfLights.Add(curLight);
+                }
 
                 // Space to add more lights in the future
             }
