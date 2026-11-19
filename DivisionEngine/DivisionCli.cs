@@ -73,6 +73,7 @@ namespace DivisionEngine.Editor
                     case "terrain": return TerrainTest.Run(args);
                     case "shot": return RunShot(args);
                     case "voxeltest": return VoxelSdfTest.Run(args);
+                    case "windowtest": return WindowTest.Run(args);
                     case "help":
                     case "--help":
                     case "-h": PrintHelp(); return true;
@@ -514,6 +515,8 @@ namespace DivisionEngine.Editor
                   terrain   Terrain tools and tests (see --cli terrain help)
                   voxeltest Run the world-stable clipmap regression test; exits 1 on failure
                             Options: --width N --height N --resolution N (32-128)
+                  windowtest Run dockable window layout checks (dock tree, splits, floating
+                            groups, drop geometry, project persistence); exits 1 on failure
                   shot      Render one frame to a PNG
                             Options: --sky <solid|gradient|hdri|procedural> --pos x,y,z --look x,y,z --out file --width N --height N
                                      --fixed-frame N --seed N  (deterministic capture)

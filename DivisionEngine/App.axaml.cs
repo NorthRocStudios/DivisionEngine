@@ -116,6 +116,10 @@ namespace DivisionEngine.Editor
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
+                // Floating dock windows must not keep the process alive after the main
+                // editor window is closed.
+                desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
+
                 // Install the Roslyn compiler so projects compile scripts as they
                 // load. Doing this here (rather than in ProjectManager) keeps the
                 // engine core free of a Roslyn dependency.

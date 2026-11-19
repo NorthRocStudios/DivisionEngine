@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:DivisionEngine.Editor.ViewModels"
         xmlns:local="using:DivisionEngine.Editor"
+        xmlns:windowing="using:DivisionEngine.Editor.Windowing"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1920" d:DesignHeight="1080"
@@ -10,34 +11,7 @@
         x:DataType="vm:MainWindowViewModel"
         Icon="/Assets/DivisionEngineLogoRAS.ico"
         Title="Division Engine" Background="#111" Foreground="#ccc">
-  <!--Editor Window Templates-->
-  <!--DO NOT FORGET TO PUT CUSTOM WINDOWS HERE!-->
-  <Window.DataTemplates>
-    <DataTemplate DataType="{x:Type local:ViewModels.WorldWindowViewModel}">
-      <local:WorldWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.AssetsWindowViewModel}">
-      <local:AssetsWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.ConsoleWindowViewModel}">
-      <local:ConsoleWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.EnvironmentWindowViewModel}">
-      <local:EnvironmentWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.PropertiesWindowViewModel}">
-      <local:PropertiesWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.SettingsWindowViewModel}">
-      <local:SettingsWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.DeveloperWindowViewModel}">
-      <local:DeveloperWindow/>
-    </DataTemplate>
-    <DataTemplate DataType="{x:Type local:ViewModels.SdfPlaygroundExampleViewModel}">
-      <local:NodeEditorWindow/>
-    </DataTemplate>
-  </Window.DataTemplates>
+  <!--Editor window content templates live in App.axaml so floating windows can use them too.-->
 
   <!--Main Window-->
   <DockPanel Background="#333">
@@ -197,100 +171,7 @@
         </Grid>
     </Grid>
 
-    <!--Basic Grid Layout-->
-    <Grid x:Name="MainGrid" ColumnDefinitions="*, 2, 300">
-      <Grid Grid.Column="0" x:Name="LeftCenterBottomGrid" RowDefinitions="*, 2, 250">
-        <Grid Grid.Row="0" x:Name="LeftCenterGrid" ColumnDefinitions="200, 2, *">
-          <!--Left Tabs-->
-          <Grid Grid.Column="0" x:Name="LeftPanelGrid">
-            <TabControl x:Name="leftTabs"
-                        ItemsSource="{Binding LeftTabs}"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        SelectedItem="{Binding SelectedLeftTab, Mode=TwoWay}">
-              <TabControl.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <icons:MaterialIcon Kind="{Binding Icon}" Foreground="#888" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </DataTemplate>
-              </TabControl.ItemTemplate>
-            </TabControl>
-            <Button x:Name="LeftAddButton" Content="+" FontSize="14" Width="18" Height="18"
-                    Margin="6,6,6,6" Padding="3,-2,0,0" HorizontalAlignment="Right" VerticalAlignment="Top"/>
-          </Grid>
-
-          <GridSplitter Grid.Column="1" x:Name="LeftCenterSplitter" ResizeDirection="Auto"/>
-
-          <!--Center Tabs-->
-          <Grid Grid.Column="2" x:Name="CenterPanelGrid">
-            <TabControl x:Name="centerTabs"
-                        ItemsSource="{Binding CenterTabs}"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        SelectedItem="{Binding SelectedCenterTab, Mode=TwoWay}">
-              <TabControl.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <icons:MaterialIcon Kind="{Binding Icon}" Foreground="#888" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </DataTemplate>
-              </TabControl.ItemTemplate>
-            </TabControl>
-
-            <Button x:Name="CenterAddButton" Content="+" FontSize="14" Width="18" Height="18"
-                    Margin="6,6,6,6" Padding="3,-2,0,0" HorizontalAlignment="Right" VerticalAlignment="Top"/>
-          </Grid>
-        </Grid>
-        
-        <GridSplitter Grid.Row="1" x:Name="CenterBottomSplitter" ResizeDirection="Auto"/>
-        
-        <!--Bottom Tabs-->
-        <Grid Grid.Row="2" x:Name="BottomPanelGrid">
-          <TabControl x:Name="bottomTabs"
-                      ItemsSource="{Binding BottomTabs}"
-                      HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch"
-                      SelectedItem="{Binding SelectedBottomTab, Mode=TwoWay}">
-            <TabControl.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <icons:MaterialIcon Kind="{Binding Icon}" Foreground="#888" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </DataTemplate>
-            </TabControl.ItemTemplate>
-          </TabControl>
-
-          <Button x:Name="BottomAddButton" Content="+" FontSize="14" Width="18" Height="18"
-                    Margin="6,6,6,6" Padding="3,-2,0,0" HorizontalAlignment="Right" VerticalAlignment="Top"/>
-        </Grid>
-      </Grid>
-
-      <GridSplitter Grid.Column="1" x:Name="CenterRightSplitter" ResizeDirection="Auto"/>
-
-      <!--Right Tabs-->
-      <Grid Grid.Column="2" x:Name="RightPanelGrid">
-        <TabControl x:Name="rightTabs"
-                    ItemsSource="{Binding RightTabs}"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"
-                    SelectedItem="{Binding SelectedRightTab, Mode=TwoWay}">
-            <TabControl.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <icons:MaterialIcon Kind="{Binding Icon}" Foreground="#888" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </DataTemplate>
-            </TabControl.ItemTemplate>
-        </TabControl>
-
-        <Button x:Name="RightAddButton" Content="+" FontSize="14" Width="18" Height="18"
-                    Margin="6,6,6,6" Padding="3,-2,0,0" HorizontalAlignment="Right" VerticalAlignment="Top"/>
-      </Grid>
-    </Grid>
+    <!--Dockable editor layout (tab groups, splits and floating windows)-->
+    <windowing:DockHost x:Name="EditorDockHost"/>
   </DockPanel>
 </Window>

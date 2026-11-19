@@ -15,6 +15,7 @@ using DivisionEngine.Editor.Settings;
 using DivisionEngine.Editor.Systems;
 using DivisionEngine.Editor.Tasks;
 using DivisionEngine.Editor.Undo;
+using DivisionEngine.Editor.Windowing;
 using DivisionEngine.Projects;
 using DivisionEngine.Settings;
 using DivisionEngine.Systems;
@@ -43,11 +44,8 @@ namespace DivisionEngine.Editor.ViewModels
         public static bool CanRedo => UndoManager.CanRedo;
         public static bool LayoutsEnabled => ProjectManager.IsCurrentLoaded;
 
-        // Editor window tab collections
-        public ObservableCollection<EditorWindowViewModel> CenterTabs { get; } = [];
-        public ObservableCollection<EditorWindowViewModel> BottomTabs { get; } = [];
-        public ObservableCollection<EditorWindowViewModel> LeftTabs { get; } = [];
-        public ObservableCollection<EditorWindowViewModel> RightTabs { get; } = [];
+        // Dockable editor window layout (tab groups, splits and floating groups)
+        public DockLayout Layout { get; } = new();
 
         // Recent projects
         private ObservableCollection<string> recentProjects = [];
@@ -64,33 +62,6 @@ namespace DivisionEngine.Editor.ViewModels
         }
 
         public bool HasRecentProjects => RecentProjects.Count > 0;
-
-        // Tab selection variables
-        private EditorWindowViewModel? selectedLeftTab;
-        private EditorWindowViewModel? selectedRightTab;
-        private EditorWindowViewModel? selectedCenterTab;
-        private EditorWindowViewModel? selectedBottomTab;
-
-        public EditorWindowViewModel? SelectedLeftTab
-        {
-            get => selectedLeftTab;
-            set => this.RaiseAndSetIfChanged(ref selectedLeftTab, value);
-        }
-        public EditorWindowViewModel? SelectedRightTab
-        {
-            get => selectedRightTab;
-            set => this.RaiseAndSetIfChanged(ref selectedRightTab, value);
-        }
-        public EditorWindowViewModel? SelectedCenterTab
-        {
-            get => selectedCenterTab;
-            set => this.RaiseAndSetIfChanged(ref selectedCenterTab, value);
-        }
-        public EditorWindowViewModel? SelectedBottomTab
-        {
-            get => selectedBottomTab;
-            set => this.RaiseAndSetIfChanged(ref selectedBottomTab, value);
-        }
 
         // Main Window API
 
@@ -113,16 +84,9 @@ namespace DivisionEngine.Editor.ViewModels
             this.mainWindow = mainWindow;
             vm = this;
 
-            // Initialize default tabs
-            LeftTabs.Add(new WorldWindowViewModel());
-
-            CenterTabs.Add(new EnvironmentWindowViewModel());
-
-            RightTabs.Add(new PropertiesWindowViewModel());
-            RightTabs.Add(new SettingsWindowViewModel());
-
-            BottomTabs.Add(new AssetsWindowViewModel());
-            BottomTabs.Add(new ConsoleWindowViewModel());
+            // The startup layout mirrors the classic four-panel editor. Project load
+            // replaces it with the project's saved dock tree.
+            Layout.Load(DockLayoutSerialization.BuildLegacy(CreateStartupLayoutData()));
 
             LoadRecentProjects(); // Load recent projects
 
@@ -424,7 +388,13 @@ namespace DivisionEngine.Editor.ViewModels
         {
             try
             {
-                if (ProjectManager.IsCurrentLoaded) ProjectManager.SaveCurrentProject();
+                if (ProjectManager.IsCurrentLoaded)
+                {
+                    // Keep the dock tree and floating-window bounds in step with the
+                    // project file when the user saves manually, not only on close.
+                    if (mainWindow is MainWindow editorWindow) editorWindow.SaveEditorLayoutToProject();
+                    ProjectManager.SaveCurrentProject();
+                }
                 else await SaveProjectAs();
             }
             catch (Exception ex)
@@ -487,14 +457,30 @@ namespace DivisionEngine.Editor.ViewModels
                     }
                 }
 
+                // SaveNewProject raises ProjectLoaded; the current layout is already the
+                // one we want, so skip the automatic reload and write it into the new
+                // project instead (rather than rebuilding every editor window).
+                if (mainWindow is MainWindow layoutWindow) layoutWindow.SkipNextProjectLayoutLoad();
+
                 // Save project
                 bool success = ProjectManager.SaveNewProject(projectName, projectPath);
                 if (success)
                 {
+                    // SaveNewProject writes a default layout; replace it with the layout
+                    // the user is currently looking at.
+                    if (mainWindow is MainWindow editorWindow)
+                    {
+                        editorWindow.SaveEditorLayoutToProject();
+                        ProjectManager.SaveCurrentProject();
+                    }
                     AddToRecentProjects(projectPath);
                     AssetsWindow.LoadAssetsForCurrentProject();
                 }
-                else Debug.Error("Failed to save project");
+                else
+                {
+                    if (mainWindow is MainWindow failedWindow) failedWindow.CancelSkipNextProjectLayoutLoad();
+                    Debug.Error("Failed to save project");
+                }
                 EditorTaskManager.Complete(t.Id);
             }
             catch (Exception ex)
@@ -577,144 +563,42 @@ namespace DivisionEngine.Editor.ViewModels
         private static void CreateEntity(string entityType) => EditorUI.CreateEntityStatic(entityType);
 
         /// <summary>
-        /// Adds a new window to a tab list on the main window.
+        /// Opens a window in the first tab group of a logical zone, creating no new group.
+        /// Used by the View menu and by the tab group plus buttons.
         /// </summary>
-        /// <param name="param">Window key to add</param>
-        [RelayCommand]
-        private void AddWindowToTab(string param)
+        public void OpenWindow(EditorWindowViewModel viewModel, string zone)
         {
-            string[] args = param.Split(',');
+            DockGroupNode? group = Layout.FindGroupByZone(zone);
+            if (group == null) return;
+            Layout.AddTab(group, viewModel);
+            group.SelectedTab = viewModel;
+        }
 
-            EditorWindowViewModel? vm = args[0] switch
-            {
-                "Assets" => new AssetsWindowViewModel(),
-                "Console" => new ConsoleWindowViewModel(),
-                "Environment" => new EnvironmentWindowViewModel(),
-                "Properties" => new PropertiesWindowViewModel(),
-                "World" => new WorldWindowViewModel(),
-                "Settings" => new SettingsWindowViewModel(),
-                "Developer" => new DeveloperWindowViewModel(),
-                "NodeGraphDemo" or "SdfPlaygroundExample" => new SdfPlaygroundExampleViewModel(),
-                _ => null
-            };
-
-            if (vm == null)
-            {
-                Debug.Error($"Unknown window type: {args[0]}");
-                return;
-            }
-
-            switch (args[1])
-            {
-                case "left":
-                    LeftTabs.Add(vm);
-                    SelectedLeftTab = vm;
-                    break;
-                case "right":
-                    RightTabs.Add(vm);
-                    SelectedRightTab = vm;
-                    break;
-                case "bottom":
-                    BottomTabs.Add(vm);
-                    SelectedBottomTab = vm;
-                    break;
-                default:
-                    CenterTabs.Add(vm);
-                    SelectedCenterTab = vm;
-                    break;
-            }
+        /// <summary>Selects a tab wherever it currently lives (docked or floating).</summary>
+        public void FocusTab(EditorWindowViewModel tab)
+        {
+            DockGroupNode? group = Layout.FindGroup(tab);
+            if (group != null) group.SelectedTab = tab;
         }
 
         /// <summary>
-        /// Adds a window to the specified panel.
+        /// The layout the editor starts with before a project is loaded: the classic
+        /// left/centre/right/bottom arrangement.
         /// </summary>
-        public void AddWindowToPanel(EditorWindowViewModel viewModel, string panelType)
+        private static EditorLayoutData CreateStartupLayoutData() => new()
         {
-            switch (panelType)
-            {
-                case "left":
-                    LeftTabs.Add(viewModel);
-                    SelectedLeftTab = viewModel;
-                    break;
-                case "right":
-                    RightTabs.Add(viewModel);
-                    SelectedRightTab = viewModel;
-                    break;
-                case "bottom":
-                    BottomTabs.Add(viewModel);
-                    SelectedBottomTab = viewModel;
-                    break;
-                default:
-                    CenterTabs.Add(viewModel);
-                    SelectedCenterTab = viewModel;
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// Called when a tab must be closed on one of the main panel areas.
-        /// </summary>
-        /// <param name="vm">Tab type to close</param>
-        [RelayCommand]
-        private void CloseTab(EditorWindowViewModel? vm)
-        {
-            if (vm is null) return;
-            else if (LeftTabs.Remove(vm))
-            {
-                if (LeftTabs.Count > 0) SelectedLeftTab = LeftTabs[^1];
-                else SelectedLeftTab = null;
-            }
-            else if (RightTabs.Remove(vm))
-            {
-                if (RightTabs.Count > 0) SelectedRightTab = RightTabs[^1];
-                else SelectedRightTab = null;
-            }
-            else if (BottomTabs.Remove(vm))
-            {
-                if (BottomTabs.Count > 0) SelectedBottomTab = BottomTabs[^1];
-                else SelectedBottomTab = null;
-            }
-            else if (CenterTabs.Remove(vm))
-            {
-                if (CenterTabs.Count > 0) SelectedCenterTab = CenterTabs[^1];
-                else SelectedCenterTab = null;
-            }
-        }
-
-        /// <summary>
-        /// Duplicates a tab, creating a new instance of the same window type and inserting it directly after the original in the same panel.
-        /// </summary>
-        /// <param name="vm">Tab to duplicate</param>
-        [RelayCommand]
-        private void DuplicateTab(EditorWindowViewModel? vm)
-        {
-            if (vm is null) return;
-
-            // Create a fresh instance of the same concrete type
-            if (Activator.CreateInstance(vm.GetType()) is not EditorWindowViewModel duplicate)
-            {
-                Debug.Error($"Failed to duplicate tab: could not create instance of {vm.GetType().Name}");
-                return;
-            }
-
-            if (InsertAfter(LeftTabs, vm, duplicate)) { SelectedLeftTab = duplicate; return; }
-            if (InsertAfter(RightTabs, vm, duplicate)) { SelectedRightTab = duplicate; return; }
-            if (InsertAfter(CenterTabs, vm, duplicate)) { SelectedCenterTab = duplicate; return; }
-            if (InsertAfter(BottomTabs, vm, duplicate)) { SelectedBottomTab = duplicate; return; }
-            Debug.Error("Failed to duplicate tab: original tab not found in any panel");
-        }
-
-        /// <summary>
-        /// Inserts <paramref name="duplicate"/> directly after <paramref name="original"/> in <paramref name="tabs"/>, if present.
-        /// </summary>
-        /// <returns>True if the original was found and the duplicate was inserted.</returns>
-        private static bool InsertAfter(ObservableCollection<EditorWindowViewModel> tabs, EditorWindowViewModel original, EditorWindowViewModel duplicate)
-        {
-            int index = tabs.IndexOf(original);
-            if (index < 0) return false;
-            tabs.Insert(index + 1, duplicate);
-            return true;
-        }
+            LeftPanelWidth = 200,
+            RightPanelWidth = 300,
+            BottomPanelHeight = 250,
+            LeftTabs = "WorldWindow",
+            CenterTabs = "EnvironmentWindow",
+            RightTabs = "PropertiesWindow,SettingsWindow",
+            BottomTabs = "AssetsWindow,ConsoleWindow",
+            SelectedLeftTab = "WorldWindow",
+            SelectedCenterTab = "EnvironmentWindow",
+            SelectedRightTab = "PropertiesWindow",
+            SelectedBottomTab = "AssetsWindow",
+        };
 
         [RelayCommand]
         private async Task ApplyDefaultLayout()
@@ -850,6 +734,10 @@ namespace DivisionEngine.Editor.ViewModels
         {
             if (ProjectManager.CurrentProjectData != null)
             {
+                // A preset is described by the legacy fields, so make sure a previously
+                // saved dock tree cannot take precedence over it.
+                layout.DockTree = null;
+                layout.FloatingGroups.Clear();
                 ProjectManager.CurrentProjectData.EditorLayout = layout;
                 if (mainWindow is MainWindow window) await window.LoadEditorLayoutFromProjectAsync();
             }

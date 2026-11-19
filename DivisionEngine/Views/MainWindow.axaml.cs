@@ -15,6 +15,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using DivisionEngine.Editor.Tasks;
 using DivisionEngine.Editor.ViewModels;
+using DivisionEngine.Editor.Windowing;
 using DivisionEngine.MathLib;
 using DivisionEngine.MathUtilities;
 using DivisionEngine.Projects;
@@ -35,29 +36,16 @@ namespace DivisionEngine.Editor
     /// </summary>
     public partial class MainWindow : Window
     {
-        // Single source of truth for the View menu and each panel's add-window menu.
-        private sealed record WindowCatalogEntry(
-            Type ViewModelType,
-            string Title,
-            MaterialIconKind Icon,
-            string AllowedTabGroups,
-            string DefaultTabGroup,
-            bool IsExample);
-
-        private readonly List<WindowCatalogEntry> WindowCatalog = [];
-
         // Bottom nav bar vars
         private static Flyout? tasksFlyout;
 
-        // Draggin vars
-        private EditorWindowViewModel? draggedTab;
-        private string? sourcePanel;
-        private TabControl? dragSourceTabControl;
-        private Point pressPoint;
-        private bool isDragging;
-        private Border? ghost;
-        private Border? dropHighlight;
-        private Border? insertionLine;
+        // Docking
+        private DockLayout? dockLayout;
+        private DockSurface? mainSurface;
+        private FloatingWindowManager? floatingManager;
+        private bool dockAttached;
+        private bool skipNextProjectLayoutLoad;
+        private bool mainWindowClosed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MainWindow"/> class.
@@ -66,47 +54,43 @@ namespace DivisionEngine.Editor
         {
             InitializeComponent(); // Initialize the main window components
             if (DataContext is MainWindowViewModel vm) vm.RequestClose = Close;
-            AttachContextMenus();
-            BuildWindowCatalog();
             SetupViewMenu();
             SetupUniversalProgressBar(); // Build editor task system UI
-            SetupAddButtons();
             SetupPlayControls();
             SubscribeToEngineEvents();
             UpdatePlayControlsUI();
             SubscribeToProjectEvents();
         }
 
+        /// <inheritdoc/>
+        protected override void OnDataContextChanged(EventArgs e)
+        {
+            base.OnDataContextChanged(e);
+            AttachDockWorkspace();
+        }
+
+        /// <summary>
+        /// Binds the dock host, the floating window manager and the main surface to the
+        /// view model's layout. Runs once the DataContext is assigned (the view model is
+        /// created after the window in the application startup path).
+        /// </summary>
+        private void AttachDockWorkspace()
+        {
+            if (dockAttached || DataContext is not MainWindowViewModel vm) return;
+
+            dockAttached = true;
+            dockLayout = vm.Layout;
+            floatingManager = new FloatingWindowManager(this, dockLayout);
+            mainSurface = new DockSurface(this, EditorDockHost, dockLayout, null, floatingManager);
+            EditorDockHost.Attach(mainSurface);
+            mainSurface.Register();
+            floatingManager.Attach();
+        }
+
         private void SubscribeToProjectEvents()
         {
             ProjectManager.ProjectLoaded += OnProjectLoaded;
             ProjectManager.ProjectClosing += OnProjectClosing;
-        }
-
-        /// <summary>
-        /// Builds the catalog of editor windows used by the View menu and by each
-        /// tab group's add-window flyout. The default tab group is the panel the View
-        /// menu opens the window in; allowed groups determine where it can be added
-        /// with a plus button.
-        /// </summary>
-        private void BuildWindowCatalog()
-        {
-            AddWindow<WorldWindowViewModel>("left,right,center,bottom", "left");
-            AddWindow<EnvironmentWindowViewModel>("left,right,center,bottom", "center");
-            AddWindow<AssetsWindowViewModel>("left,right,center,bottom", "bottom");
-            AddWindow<ConsoleWindowViewModel>("left,right,center,bottom", "bottom");
-            AddWindow<PropertiesWindowViewModel>("left,right,center,bottom", "right");
-            AddWindow<SettingsWindowViewModel>("left,right,center,bottom", "right");
-            AddWindow<DeveloperWindowViewModel>("left,right,center,bottom", "bottom");
-            AddWindow<SdfPlaygroundExampleViewModel>("center", "center", isExample: true);
-        }
-
-        private void AddWindow<T>(string allowedTabGroups, string defaultTabGroup, bool isExample = false)
-            where T : EditorWindowViewModel, new()
-        {
-            T window = new();
-            WindowCatalog.Add(new WindowCatalogEntry(
-                typeof(T), window.Title, window.Icon, allowedTabGroups, defaultTabGroup, isExample));
         }
 
         /// <summary>
@@ -118,13 +102,15 @@ namespace DivisionEngine.Editor
         {
             ViewMenu.Items.Clear();
 
-            foreach (WindowCatalogEntry entry in WindowCatalog)
+            foreach (EditorWindowCatalogEntry entry in EditorWindowCatalog.Entries)
             {
                 if (entry.IsExample) continue;
                 ViewMenu.Items.Add(CreateWindowMenuItem(entry));
             }
 
-            List<WindowCatalogEntry> examples = WindowCatalog.Where(entry => entry.IsExample).ToList();
+            List<EditorWindowCatalogEntry> examples = EditorWindowCatalog.Entries
+                .Where(entry => entry.IsExample)
+                .ToList();
             if (examples.Count == 0) return;
 
             ViewMenu.Items.Add(new Separator());
@@ -133,12 +119,12 @@ namespace DivisionEngine.Editor
                 Header = CreateWindowMenuHeader("Examples", MaterialIconKind.FlaskOutline),
                 Foreground = EditorColor.FromRGB(200, 200, 200),
             };
-            foreach (WindowCatalogEntry example in examples)
+            foreach (EditorWindowCatalogEntry example in examples)
                 examplesMenu.Items.Add(CreateWindowMenuItem(example));
             ViewMenu.Items.Add(examplesMenu);
         }
 
-        private MenuItem CreateWindowMenuItem(WindowCatalogEntry entry)
+        private MenuItem CreateWindowMenuItem(EditorWindowCatalogEntry entry)
         {
             MenuItem item = new()
             {
@@ -174,35 +160,54 @@ namespace DivisionEngine.Editor
         /// Opens a window from the View menu. If that window type is already open,
         /// focuses the existing tab instead of creating a duplicate.
         /// </summary>
-        private void OpenOrFocusWindow(WindowCatalogEntry entry)
+        private void OpenOrFocusWindow(EditorWindowCatalogEntry entry)
         {
             if (DataContext is not MainWindowViewModel vm) return;
 
-            EditorWindowViewModel? existing = vm.CenterTabs
-                .Concat(vm.LeftTabs)
-                .Concat(vm.RightTabs)
-                .Concat(vm.BottomTabs)
+            EditorWindowViewModel? existing = vm.Layout.AllTabs
                 .FirstOrDefault(window => entry.ViewModelType.IsInstanceOfType(window));
 
             if (existing is not null)
             {
-                FocusTab(vm, existing);
+                vm.FocusTab(existing);
+                ActivateGroup(vm.Layout.FindGroup(existing));
                 return;
             }
 
-            if (Activator.CreateInstance(entry.ViewModelType) is not EditorWindowViewModel window) return;
-            vm.AddWindowToPanel(window, entry.DefaultTabGroup);
+            if (EditorWindowCatalog.Create(entry.ViewModelType) is not { } window) return;
+            vm.OpenWindow(window, entry.DefaultZone);
+            ActivateGroup(vm.Layout.FindGroup(window));
         }
 
-        private static void FocusTab(MainWindowViewModel vm, EditorWindowViewModel tab)
+        /// <summary>Brings the main window or the floating window that owns a group to the front.</summary>
+        private void ActivateGroup(DockGroupNode? group)
         {
-            if (vm.CenterTabs.Contains(tab)) vm.SelectedCenterTab = tab;
-            else if (vm.LeftTabs.Contains(tab)) vm.SelectedLeftTab = tab;
-            else if (vm.RightTabs.Contains(tab)) vm.SelectedRightTab = tab;
-            else if (vm.BottomTabs.Contains(tab)) vm.SelectedBottomTab = tab;
+            if (group == null) return;
+            if (mainSurface?.Host.ContainsGroup(group) == true) mainSurface.Activate();
+            else floatingManager?.WindowForGroup(group)?.Activate();
         }
 
-        private void OnProjectLoaded() => Dispatcher.UIThread.Post(async () => await LoadEditorLayoutFromProjectAsync());
+        private void OnProjectLoaded()
+        {
+            // Creating a project via Save As already displays the layout that was just
+            // written to it; reloading it would rebuild every editor window for nothing.
+            if (skipNextProjectLayoutLoad)
+            {
+                skipNextProjectLayoutLoad = false;
+                return;
+            }
+
+            Dispatcher.UIThread.Post(async () => await LoadEditorLayoutFromProjectAsync());
+        }
+
+        /// <summary>
+        /// Skips the next automatic project layout load. Used by Save As, where the
+        /// current layout is saved into the new project and already on screen.
+        /// </summary>
+        public void SkipNextProjectLayoutLoad() => skipNextProjectLayoutLoad = true;
+
+        /// <summary>Cancels a pending <see cref="SkipNextProjectLayoutLoad"/> when project creation failed.</summary>
+        public void CancelSkipNextProjectLayoutLoad() => skipNextProjectLayoutLoad = false;
 
         private void OnProjectClosing()
         {
@@ -217,28 +222,17 @@ namespace DivisionEngine.Editor
         /// </summary>
         public void SaveEditorLayoutToProject()
         {
+            // OnClosing captures the layout before the dock visuals are disposed. Any
+            // later save (project close during application shutdown) must not recapture
+            // from a torn-down window.
+            if (mainWindowClosed) return;
             if (DataContext is not MainWindowViewModel vm || ProjectManager.CurrentProjectData == null) return;
 
             try
             {
-                EditorLayoutData layout = ProjectManager.CurrentProjectData.EditorLayout;
-
-                // Save panel sizes
-                layout.LeftPanelWidth = GetColumnWidth(LeftPanelGrid);
-                layout.RightPanelWidth = GetColumnWidth(RightPanelGrid);
-                layout.BottomPanelHeight = GetRowHeight(BottomPanelGrid);
-
-                // Save selected tabs
-                layout.SelectedLeftTab = vm.SelectedLeftTab?.GetType().Name.Replace("ViewModel", "") ?? "";
-                layout.SelectedRightTab = vm.SelectedRightTab?.GetType().Name.Replace("ViewModel", "") ?? "";
-                layout.SelectedCenterTab = vm.SelectedCenterTab?.GetType().Name.Replace("ViewModel", "") ?? "";
-                layout.SelectedBottomTab = vm.SelectedBottomTab?.GetType().Name.Replace("ViewModel", "") ?? "";
-
-                // Save open tabs as comma-separated strings
-                layout.LeftTabs = string.Join(",", vm.LeftTabs.Select(t => t.GetType().Name.Replace("ViewModel", "")));
-                layout.RightTabs = string.Join(",", vm.RightTabs.Select(t => t.GetType().Name.Replace("ViewModel", "")));
-                layout.CenterTabs = string.Join(",", vm.CenterTabs.Select(t => t.GetType().Name.Replace("ViewModel", "")));
-                layout.BottomTabs = string.Join(",", vm.BottomTabs.Select(t => t.GetType().Name.Replace("ViewModel", "")));
+                // Capture live floating-window positions before serializing.
+                floatingManager?.CaptureBoundsToLayout();
+                DockLayoutSerialization.Capture(ProjectManager.CurrentProjectData.EditorLayout, vm.Layout);
             }
             catch (Exception ex)
             {
@@ -247,97 +241,23 @@ namespace DivisionEngine.Editor
         }
 
         /// <summary>
-        /// Loads the editor layout from the loaded project data.
+        /// Loads the editor layout from the loaded project data. Projects from before the
+        /// dockable layout are converted from their four-panel representation.
         /// </summary>
-        public async Task LoadEditorLayoutFromProjectAsync()
+        public Task LoadEditorLayoutFromProjectAsync()
         {
-            if (DataContext is not MainWindowViewModel vm || ProjectManager.CurrentProjectData == null) return;
+            if (DataContext is not MainWindowViewModel vm || ProjectManager.CurrentProjectData == null)
+                return Task.CompletedTask;
 
             try
             {
-                EditorLayoutData layout = ProjectManager.CurrentProjectData.EditorLayout;
-
-                // Clear existing tabs
-                vm?.LeftTabs.Clear();
-                vm?.RightTabs.Clear();
-                vm?.CenterTabs.Clear();
-                vm?.BottomTabs.Clear();
-
-                // Parse comma-separated strings and restore tabs
-                RestoreTabsFromString(vm!, layout.LeftTabs, "left");
-                RestoreTabsFromString(vm!, layout.RightTabs, "right");
-                RestoreTabsFromString(vm!, layout.CenterTabs, "center");
-                RestoreTabsFromString(vm!, layout.BottomTabs, "bottom");
-
-                // Restore selected tabs
-                vm!.SelectedLeftTab = FindTabByTypeName(vm.LeftTabs, layout.SelectedLeftTab);
-                vm.SelectedRightTab = FindTabByTypeName(vm.RightTabs, layout.SelectedRightTab);
-                vm.SelectedCenterTab = FindTabByTypeName(vm.CenterTabs, layout.SelectedCenterTab);
-                vm.SelectedBottomTab = FindTabByTypeName(vm.BottomTabs, layout.SelectedBottomTab);
-
-                // Restore panel sizes
-                SetColumnWidth(LeftPanelGrid, layout.LeftPanelWidth);
-                SetColumnWidth(RightPanelGrid, layout.RightPanelWidth);
-                SetRowHeight(BottomPanelGrid, layout.BottomPanelHeight);
+                DockLayoutSerialization.Apply(ProjectManager.CurrentProjectData.EditorLayout, vm.Layout);
             }
             catch (Exception ex)
             {
                 Debug.Error($"Failed to load editor layout: {ex.Message}");
             }
-        }
-
-        private static void RestoreTabsFromString(MainWindowViewModel vm, string tabNames, string panel)
-        {
-            if (string.IsNullOrWhiteSpace(tabNames)) return;
-            foreach (string typeName in tabNames.Split(',', StringSplitOptions.RemoveEmptyEntries))
-            {
-                EditorWindowViewModel? viewModel = CreateViewModelFromTypeName(typeName.Trim());
-                vm.AddWindowToPanel(viewModel!, panel);
-            }
-        }
-
-        private static EditorWindowViewModel? CreateViewModelFromTypeName(string typeName)
-        {
-            string fullTypeName = $"DivisionEngine.Editor.ViewModels.{typeName}ViewModel";
-            Type? type = Type.GetType(fullTypeName);
-            if (type != null && Activator.CreateInstance(type) is EditorWindowViewModel editorVM) return editorVM;
-            return null;
-        }
-
-        private static EditorWindowViewModel? FindTabByTypeName(ObservableCollection<EditorWindowViewModel> tabs, string typeName) =>
-            tabs.FirstOrDefault(t => t.GetType().Name.Replace("ViewModel", "") == typeName);
-
-        private static double GetColumnWidth(Grid grid)
-        {
-            if (grid.Parent is Grid parent && Grid.GetColumn(grid) >= 0)
-            {
-                ColumnDefinition colDef = parent.ColumnDefinitions[Grid.GetColumn(grid)];
-                if (colDef.Width.IsAbsolute) return colDef.Width.Value;
-                else if (colDef.Width.IsStar) return colDef.Width.Value;
-            }
-            return 200; // Default
-        }
-
-        private static double GetRowHeight(Grid grid)
-        {
-            if (grid.Parent is Grid parent && Grid.GetRow(grid) >= 0)
-            {
-                RowDefinition rowDef = parent.RowDefinitions[Grid.GetRow(grid)];
-                if (rowDef.Height.IsAbsolute) return rowDef.Height.Value;
-            }
-            return 250; // Default
-        }
-
-        private static void SetColumnWidth(Grid grid, double width)
-        {
-            if (grid.Parent is Grid parent && Grid.GetColumn(grid) >= 0)
-                parent.ColumnDefinitions[Grid.GetColumn(grid)].Width = new GridLength(width);
-        }
-
-        private static void SetRowHeight(Grid grid, double height)
-        {
-            if (grid.Parent is Grid parent && Grid.GetRow(grid) >= 0)
-                parent.RowDefinitions[Grid.GetRow(grid)].Height = new GridLength(height);
+            return Task.CompletedTask;
         }
 
         #endregion layouts
@@ -481,167 +401,6 @@ namespace DivisionEngine.Editor
         private void AdvanceFrameButton_Click(object? sender, RoutedEventArgs e)
         {
             if (EngineCore.IsInPlayMode && EngineCore.IsPaused) EngineCore.RunFrame(step: true);
-        }
-
-        #endregion
-        #region contextMenus
-
-        /// <summary>
-        /// Attaches a context menu to each tab control.
-        /// </summary>
-        private void AttachContextMenus()
-        {
-            Loaded += (s, e) =>
-            {
-                TabControl leftTabsControl = this.Find<TabControl>("leftTabs")!;
-                TabControl centerTabsControl = this.Find<TabControl>("centerTabs")!;
-                TabControl bottomTabsControl = this.Find<TabControl>("bottomTabs")!;
-                TabControl rightTabsControl = this.Find<TabControl>("rightTabs")!;
-                AttachContextMenuToTabControl(leftTabsControl);
-                AttachContextMenuToTabControl(centerTabsControl);
-                AttachContextMenuToTabControl(bottomTabsControl);
-                AttachContextMenuToTabControl(rightTabsControl);
-
-                SetupCustomDrag(); // make sure tab drag drop is setup correctly
-            };
-        }
-
-        /// <summary>
-        /// Attaches a context menu to each tab control element.
-        /// </summary>
-        /// <param name="tabControl">Tab control to attach menu to</param>
-        /// <param name="panelType">Panel type of tab control</param>
-        private void AttachContextMenuToTabControl(TabControl tabControl)
-        {
-            tabControl.AddHandler(PointerReleasedEvent, (sender, e) =>
-            {
-                if (e.InitialPressMouseButton == MouseButton.Right)
-                {
-                    Control? source = e.Source as Control;
-                    TabItem? tabItem = EditorUI.FindParentTabItem(source);
-
-                    if (tabItem != null && tabItem.DataContext is EditorWindowViewModel viewModel)
-                    {
-                        ContextMenu contextMenu = CreateTabContextMenu(viewModel);
-                        contextMenu.Open(tabItem);
-                        e.Handled = true;
-                    }
-                }
-            }, RoutingStrategies.Tunnel);
-        }
-
-        /// <summary>
-        /// Creates the context menu for each tab.
-        /// </summary>
-        /// <param name="panelType">Tab panel type</param>
-        /// <param name="viewModel">Tab editor view model</param>
-        /// <returns>Generated tab context menu</returns>
-        private ContextMenu CreateTabContextMenu(EditorWindowViewModel viewModel)
-        {
-            ContextMenu contextMenu = new ContextMenu
-            {
-                Background = EditorColor.FromRGB(68, 68, 68),
-                BorderBrush = EditorColor.FromRGB(128, 128, 128),
-            };
-            if (DataContext is MainWindowViewModel mainViewModel)
-            {
-                MenuItem closeMenuItem = new MenuItem
-                {
-                    Header = "Close",
-                    Foreground = EditorColor.FromColor(ColorPalette.White),
-                    Command = mainViewModel.CloseTabCommand,
-                    CommandParameter = viewModel
-                };
-                Separator separator = new Separator();
-                MenuItem duplicateMenuItem = new MenuItem
-                {
-                    Header = "Duplicate Tab",
-                    Foreground = EditorColor.FromColor(ColorPalette.White),
-                    Command = mainViewModel.DuplicateTabCommand,
-                    CommandParameter = viewModel
-                };
-
-                contextMenu.Items.Add(closeMenuItem);
-                contextMenu.Items.Add(separator);
-                contextMenu.Items.Add(duplicateMenuItem);
-            }
-            return contextMenu;
-        }
-
-        #endregion
-        #region addTabButton
-
-        private void SetupAddButtons()
-        {
-            SetupAddButton(LeftAddButton, "left");
-            SetupAddButton(CenterAddButton, "center");
-            SetupAddButton(BottomAddButton, "bottom");
-            SetupAddButton(RightAddButton, "right");
-        }
-
-        private void SetupAddButton(Button button, string panelType)
-        {
-            if (button == null) return;
-            Flyout flyout = new Flyout
-            {
-                Placement = PlacementMode.Bottom,
-                ShowMode = FlyoutShowMode.TransientWithDismissOnPointerMoveAway,
-            };
-
-            StackPanel stackPanel = new StackPanel();
-            foreach (WindowCatalogEntry entry in WindowCatalog)
-            {
-                if (!entry.AllowedTabGroups.Contains(panelType, StringComparison.InvariantCultureIgnoreCase)) continue;
-
-                string windowTitle = entry.Title;
-                MaterialIconKind windowIcon = entry.Icon;
-
-                StackPanel menuPanel = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Margin = new Thickness(0),
-                    Background = EditorColor.FromRGB(24, 24, 24),
-                };
-                MaterialIcon menuIcon = new MaterialIcon
-                {
-                    Kind = windowIcon,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0),
-                    Padding = new Thickness(12, 4, 6, 4),
-                    CornerRadius = new CornerRadius(0),
-                    Foreground = EditorColor.FromRGB(200, 200, 200),
-                };
-                TextBlock menuLabel = new TextBlock
-                {
-                    Text = windowTitle,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0),
-                    Padding = new Thickness(12, 4),
-                    Foreground = EditorColor.FromRGB(200, 200, 200),
-                };
-                menuPanel.Children.Add(menuIcon);
-                menuPanel.Children.Add(menuLabel);
-
-                Type viewModelType = entry.ViewModelType; // Store the type locally to avoid closure issues
-                menuPanel.PointerPressed += (s, e) =>
-                {
-                    if (DataContext is MainWindowViewModel vm &&
-                        Activator.CreateInstance(viewModelType) is EditorWindowViewModel viewModel)
-                        vm.AddWindowToPanel(viewModel, panelType);
-                    flyout.Hide();
-                };
-                menuPanel.PointerEntered += (s, e) =>
-                    menuPanel.Background = EditorColor.FromRGB(10, 10, 10);
-                menuPanel.PointerExited += (s, e) =>
-                    menuPanel.Background = EditorColor.FromRGB(24, 24, 24);
-                stackPanel.Children.Add(menuPanel);
-            }
-
-            flyout.Content = stackPanel;
-            button.Flyout = flyout;
         }
 
         #endregion
@@ -845,7 +604,7 @@ namespace DivisionEngine.Editor
             Grid.SetColumn(nameText, 0);
             Button removeButton = new Button
             {
-                Content = "×",
+                Content = "Ã—",
                 FontSize = 16,
                 FontWeight = FontWeight.Bold,
                 Width = 20,
@@ -925,319 +684,23 @@ namespace DivisionEngine.Editor
         }
 
         #endregion
-        #region tabDragDrop
 
-        private void SetupCustomDrag()
+        /// <inheritdoc/>
+        protected override void OnClosing(WindowClosingEventArgs e)
         {
-            AttachCustomDragToTabControl(leftTabs);
-            AttachCustomDragToTabControl(centerTabs);
-            AttachCustomDragToTabControl(bottomTabs);
-            AttachCustomDragToTabControl(rightTabs);
+            if (ProjectManager.IsCurrentLoaded) SaveEditorLayoutToProject();
+            floatingManager?.PrepareForShutdown();
+            base.OnClosing(e);
         }
 
-        private void AttachCustomDragToTabControl(TabControl tabControl)
-        {
-            if (tabControl == null) return;
-            tabControl.AddHandler(PointerPressedEvent, OnTabPointerPressed, RoutingStrategies.Tunnel);
-            tabControl.AddHandler(PointerMovedEvent, OnTabPointerMoved, RoutingStrategies.Tunnel);
-            tabControl.AddHandler(PointerReleasedEvent, OnTabPointerReleased, RoutingStrategies.Tunnel);
-            tabControl.AddHandler(PointerCaptureLostEvent, OnPointerCaptureLost, RoutingStrategies.Tunnel);
-        }
-
-        private string? GetPanelType(TabControl? tabControl)
-        {
-            if (tabControl == null) return null;
-            if (tabControl == leftTabs) return "left";
-            if (tabControl == rightTabs) return "right";
-            if (tabControl == centerTabs) return "center";
-            if (tabControl == bottomTabs) return "bottom";
-            return null;
-        }
-
-        private void OnTabPointerPressed(object? sender, PointerPressedEventArgs e)
-        {
-            // Only left-click starts a drag; ignore right-click (context menu) presses.
-            if (!e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
-            if (e.Source is not Control source) return;
-
-            TabItem? tabItem = FindParentTabItem(source);
-            if (tabItem?.DataContext is EditorWindowViewModel vm)
-            {
-                draggedTab = vm;
-                sourcePanel = GetPanelType(sender as TabControl);
-                dragSourceTabControl = sender as TabControl;
-                pressPoint = e.GetPosition(this); // Window-relative, used consistently below
-                isDragging = false;
-                ghost = null;
-            }
-        }
-
-        private void OnTabPointerMoved(object? sender, PointerEventArgs e)
-        {
-            if (draggedTab == null || dragSourceTabControl == null) return;
-
-            Point windowPoint = e.GetPosition(this);
-            Vector diff = windowPoint - pressPoint;
-
-            // Start drag if moved at least 10 pixels
-            if (!isDragging && (math.abs(diff.X) > 10 || math.abs(diff.Y) > 10))
-            {
-                isDragging = true;
-                CreateGhost();
-            }
-
-            if (!isDragging || ghost == null) return;
-
-            // Move ghost to follow the cursor (OverlayLayer coordinates == window coordinates)
-            Canvas.SetLeft(ghost, windowPoint.X - 20);
-            Canvas.SetTop(ghost, windowPoint.Y - 10);
-
-            // Geometric hit-test do NOT use e.Source here, it's unreliable once the TabItem has captured the pointer (its own selection logic does this).
-            TabControl? target = GetTabControlUnderPoint(windowPoint);
-            UpdateDropIndicators(target, windowPoint);
-        }
-
-        private void OnTabPointerReleased(object? sender, PointerReleasedEventArgs e)
-        {
-            if (draggedTab != null && dragSourceTabControl != null && isDragging)
-            {
-                Point windowPoint = e.GetPosition(this);
-                TabControl? target = GetTabControlUnderPoint(windowPoint);
-                if (target != null)
-                {
-                    string? targetPanel = GetPanelType(target);
-                    if (targetPanel != null) MoveOrReorderTab(sourcePanel!, targetPanel, target, draggedTab, windowPoint);
-                }
-            }
-
-            ClearDragVisuals();
-            draggedTab = null;
-            sourcePanel = null;
-            dragSourceTabControl = null;
-            isDragging = false;
-        }
-
-        private void OnPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
-        {
-            ClearDragVisuals();
-            draggedTab = null;
-            sourcePanel = null;
-            dragSourceTabControl = null;
-            isDragging = false;
-        }
-
-        private void CreateGhost()
-        {
-            if (draggedTab == null) return;
-            OverlayLayer? overlay = OverlayLayer.GetOverlayLayer(this);
-            if (overlay == null) return;
-
-            ghost = new Border
-            {
-                Background = EditorColor.FromRGB(24, 24, 24),
-                Padding = new Thickness(8, 4),
-                CornerRadius = new CornerRadius(2),
-                BorderBrush = Brushes.Black,
-                BorderThickness = new Thickness(0, 0, 2, 2),
-                Opacity = 0.85,
-                Width = 120,
-                Height = 28,
-                ZIndex = 1000,
-                IsHitTestVisible = false, // don't let the ghost itself block hit-testing
-            };
-
-            StackPanel content = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            content.Children.Add(new MaterialIcon
-            {
-                Kind = draggedTab.Icon,
-                Width = 12,
-                Height = 12,
-                Foreground = Brushes.LightGray,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = draggedTab.Title,
-                FontSize = 12,
-                Foreground = Brushes.White,
-                Margin = new Thickness(4, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            ghost.Child = content;
-            overlay.Children.Add(ghost);
-
-            dropHighlight = new Border
-            {
-                Background = EditorColor.FromColor(ColorPalette.Azure),
-                Opacity = 0.15,
-                IsHitTestVisible = false,
-                ZIndex = 999,
-            };
-            overlay.Children.Add(dropHighlight);
-
-            insertionLine = new Border
-            {
-                Background = Brushes.White,
-                Width = 2,
-                IsHitTestVisible = false,
-                ZIndex = 1001,
-            };
-            overlay.Children.Add(insertionLine);
-        }
-
-        private void ClearDragVisuals()
-        {
-            OverlayLayer? overlay = OverlayLayer.GetOverlayLayer(this);
-            if (overlay != null)
-            {
-                if (ghost != null) overlay.Children.Remove(ghost);
-                if (dropHighlight != null) overlay.Children.Remove(dropHighlight);
-                if (insertionLine != null) overlay.Children.Remove(insertionLine);
-            }
-            ghost = null;
-            dropHighlight = null;
-            insertionLine = null;
-        }
-
-        /// <summary>
-        /// Finds which of the four tab controls (if any) contains the given
-        /// window-relative point. Uses real geometry, not event routing/e.Source,
-        /// since pointer capture makes e.Source unreliable during a drag.
-        /// </summary>
-        private TabControl? GetTabControlUnderPoint(Point windowPoint)
-        {
-            foreach (TabControl? tc in new[] { leftTabs, centerTabs, bottomTabs, rightTabs })
-            {
-                if (tc == null) continue;
-                Point? topLeft = tc.TranslatePoint(new Point(0, 0), this);
-                if (topLeft == null) continue;
-                Rect rect = new Rect(topLeft.Value, tc.Bounds.Size);
-                if (rect.Contains(windowPoint)) return tc;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Figures out where in the target tab strip a drop would insert the tab,
-        /// based on the midpoints of the realized tab headers.
-        /// </summary>
-        private int GetInsertionIndex(TabControl tabControl, ObservableCollection<EditorWindowViewModel> tabs, Point windowPoint)
-        {
-            for (int i = 0; i < tabs.Count; i++)
-            {
-                if (tabControl.ContainerFromIndex(i) is not Control container) continue;
-                Point? topLeft = container.TranslatePoint(new Point(0, 0), this);
-                if (topLeft == null) continue;
-                double midX = topLeft.Value.X + container.Bounds.Width / 2;
-                if (windowPoint.X < midX) return i;
-            }
-            return tabs.Count;
-        }
-
-        private void UpdateDropIndicators(TabControl? target, Point windowPoint)
-        {
-            if (dropHighlight == null || insertionLine == null) return;
-
-            if (target == null)
-            {
-                dropHighlight.IsVisible = false;
-                insertionLine.IsVisible = false;
-                return;
-            }
-
-            Point? targetTopLeft = target.TranslatePoint(new Point(0, 0), this);
-            if (targetTopLeft == null) return;
-
-            dropHighlight.IsVisible = true;
-            dropHighlight.Width = target.Bounds.Width;
-            dropHighlight.Height = target.Bounds.Height;
-            Canvas.SetLeft(dropHighlight, targetTopLeft.Value.X);
-            Canvas.SetTop(dropHighlight, targetTopLeft.Value.Y);
-
-            ObservableCollection<EditorWindowViewModel>? targetTabs = GetTabCollection(GetPanelType(target)!);
-            if (targetTabs == null) return;
-
-            int insertIndex = GetInsertionIndex(target, targetTabs, windowPoint);
-            double lineX;
-            if (insertIndex < targetTabs.Count && target.ContainerFromIndex(insertIndex) is Control c &&
-                c.TranslatePoint(new Point(0, 0), this) is Point p)
-            {
-                lineX = p.X;
-            }
-            else
-            {
-                lineX = targetTopLeft.Value.X + target.Bounds.Width; // insert at end
-            }
-
-            insertionLine.IsVisible = true;
-            insertionLine.Height = 28;
-            Canvas.SetLeft(insertionLine, lineX - 1);
-            Canvas.SetTop(insertionLine, targetTopLeft.Value.Y);
-        }
-
-        private void MoveOrReorderTab(string sourcePanel, string targetPanel, TabControl targetControl, EditorWindowViewModel tab, Point windowPoint)
-        {
-            if (DataContext is not MainWindowViewModel vm) return;
-
-            ObservableCollection<EditorWindowViewModel>? sourceTabs = GetTabCollection(sourcePanel);
-            ObservableCollection<EditorWindowViewModel>? targetTabs = GetTabCollection(targetPanel);
-            if (sourceTabs == null || targetTabs == null) return;
-
-            int insertIndex = GetInsertionIndex(targetControl, targetTabs, windowPoint);
-            if (sourcePanel == targetPanel)
-            {
-                // Reordering within the same panel
-                int oldIndex = sourceTabs.IndexOf(tab);
-                if (oldIndex < 0) return;
-                if (insertIndex > oldIndex) insertIndex--; // account for the item's own removal shift
-                insertIndex = math.clamp(insertIndex, 0, sourceTabs.Count - 1);
-                if (insertIndex != oldIndex) sourceTabs.Move(oldIndex, insertIndex);
-            }
-            else
-            {
-                // Moving to a different panel
-                if (!sourceTabs.Remove(tab)) return;
-                insertIndex = math.clamp(insertIndex, 0, targetTabs.Count);
-                targetTabs.Insert(insertIndex, tab);
-
-                switch (targetPanel)
-                {
-                    case "left": vm.SelectedLeftTab = tab; break;
-                    case "right": vm.SelectedRightTab = tab; break;
-                    case "center": vm.SelectedCenterTab = tab; break;
-                    case "bottom": vm.SelectedBottomTab = tab; break;
-                }
-            }
-        }
-
-        private ObservableCollection<EditorWindowViewModel>? GetTabCollection(string panelType)
-        {
-            if (DataContext is not MainWindowViewModel vm) return null;
-            return panelType switch
-            {
-                "left" => vm.LeftTabs,
-                "right" => vm.RightTabs,
-                "center" => vm.CenterTabs,
-                "bottom" => vm.BottomTabs,
-                _ => null,
-            };
-        }
-
-        private static TabItem? FindParentTabItem(Control? element)
-        {
-            while (element != null)
-            {
-                if (element is TabItem tabItem) return tabItem;
-                element = element.Parent as Control;
-            }
-            return null;
-        }
-
-        #endregion
-
+        /// <inheritdoc/>
         protected override void OnClosed(EventArgs e)
         {
+            mainWindowClosed = true;
             EditorTaskManager.TasksChanged -= UpdateUniversalProgressBar;
+            floatingManager?.Detach();
+            mainSurface?.Unregister();
+            EditorDockHost.Dispose();
             base.OnClosed(e);
         }
     }

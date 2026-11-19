@@ -3,10 +3,37 @@
              xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
              x:Class="DivisionEngine.Editor.App"
              xmlns:local="using:DivisionEngine.Editor"
+             xmlns:vm="using:DivisionEngine.Editor.ViewModels"
              RequestedThemeVariant="Dark"
              xmlns:avalonia_controls_presenters="using:Avalonia.Controls.Presenters">
 
     <Application.DataTemplates>
+      <!--Editor window content. These live at application scope so the same tab content
+          also renders inside floating dock windows.-->
+      <DataTemplate DataType="{x:Type vm:WorldWindowViewModel}">
+        <local:WorldWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:AssetsWindowViewModel}">
+        <local:AssetsWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:ConsoleWindowViewModel}">
+        <local:ConsoleWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:EnvironmentWindowViewModel}">
+        <local:EnvironmentWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:PropertiesWindowViewModel}">
+        <local:PropertiesWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:SettingsWindowViewModel}">
+        <local:SettingsWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:DeveloperWindowViewModel}">
+        <local:DeveloperWindow/>
+      </DataTemplate>
+      <DataTemplate DataType="{x:Type vm:SdfPlaygroundExampleViewModel}">
+        <local:NodeEditorWindow/>
+      </DataTemplate>
       <local:ViewLocator/>
     </Application.DataTemplates>
   

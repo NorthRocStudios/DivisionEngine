@@ -97,6 +97,53 @@ Open **View → Examples → SDF Playground (Example)** to try the example graph
 DivisionEngine.Editor.exe --cli nodetest
 ```
 
+## Dockable Editor Windows
+
+The editor's four classic panels (World, Environment, Properties/Settings and
+Assets/Console) are now a general docking layout. Every panel is a tab group in a tree
+of horizontal and vertical splits, so the workspace can be rearranged like Unity or
+Visual Studio:
+
+- **Dock into a group** by dragging a tab over the middle of another group. A five-zone
+  compass (left, right, top, bottom, centre) shows where the tab will land; dropping on
+  an edge creates a new tab group on that side and animates it into place, while the
+  centre merges the tab into the existing group. The white insertion line shows the tab
+  order for a centre drop, and dragging within one group reorders its tabs.
+- **Split a tab into a new group** without dragging with **right-click -> Move to New
+  Group -> Left/Right/Above/Below**. The new group gets the dragged tab and inherits the
+  source panel's logical kind, so its **+** menu offers the same windows.
+- **Float a tab** by dragging it outside every editor window, or with **right-click ->
+  Float Tab**. Floating tabs live in normal top-level windows with their own tab strip,
+  position and size; they can be moved to another monitor or dragged back onto any dock
+  group (edge drops split, centre drops merge). Closing a floating window closes its tabs.
+- **Resize splits** with the same splitters as before; any number of nested splits is
+  supported. Empty groups show a hint and can be filled from their **+** menu, and groups
+  that become empty because their last tab was moved or closed are removed automatically
+  (the final group of the main window is kept so the editor always has a place to open
+  windows).
+- **Tabs** keep the original look and behaviour: drag to reorder, right-click for Close,
+  Duplicate Tab, Float/Dock Tab, Move to New Group and Close Tab Group, or middle-click
+  to close. The **+** button opens the same window catalog as **View**, filtered to the
+  panel kind, and **View** focuses an already-open window instead of duplicating it.
+- **Animations** are deliberately short: a new split grows from the drop point and its
+  content fades in, the five-zone compass fades, and floating windows fade in and out.
+  Nothing changes the existing tab or window design.
+
+Layouts are saved with the project as a dock tree plus the floating windows' bounds.
+Projects saved by earlier builds still open with their original four-panel layout: the
+old `LeftTabs`/`RightTabs`/`CenterTabs`/`BottomTabs` fields are converted to a dock tree
+on load, and the current layout is also written back to those fields for compatibility.
+
+Headless checks for the layout model, drop geometry and serialization:
+
+```bash
+DivisionEngine.Editor.exe --cli windowtest
+```
+
+The command exercises edge splits, tab moves/reorders, empty-group collapse, floating
+groups and docking back, JSON project round-trips, legacy layout conversion, unknown
+window types and the drop-zone geometry rules, and exits non-zero on any failure.
+
 ## Voxelized SDF Rendering
 
 Division Engine can render the same scene through either the exact SDF or a
