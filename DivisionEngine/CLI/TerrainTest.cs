@@ -1213,8 +1213,7 @@ namespace DivisionEngine.Editor
             {
                 foreach ((uint _, Camera camera) in world.QueryData<Camera>())
                 {
-                    camera.enableDivisionDenoise = false;
-                    camera.enableATrousDenoise = false;
+                    camera.enableDenoise = false;
                     camera.antiAliasing = Camera.AntiAliasingMode.None;
                     break;
                 }

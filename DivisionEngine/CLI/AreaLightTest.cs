@@ -753,8 +753,7 @@ namespace DivisionEngine.Editor
                 fieldOfView = fov,
                 isActive = true,
                 antiAliasing = Camera.AntiAliasingMode.None,
-                enableDivisionDenoise = false,
-                enableATrousDenoise = false,
+                enableDenoise = false,
                 maxRaySteps = 192,
                 maxShadowRaySteps = 160,
             });
@@ -805,8 +804,7 @@ namespace DivisionEngine.Editor
             post.enableAcesTonemapper = true;
             Camera camera = world.GetComponent<Camera>(cameraEntity)!;
             bool denoise = GetInt(argsAll, "--denoise", 1) != 0;
-            camera.enableDivisionDenoise = denoise;
-            camera.enableATrousDenoise = denoise;
+            camera.enableDenoise = denoise;
             camera.antiAliasing = Camera.AntiAliasingMode.FXAA;
 
             RenderPipeline pipeline = UseWorld(world);

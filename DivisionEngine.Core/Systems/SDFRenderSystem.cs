@@ -278,13 +278,13 @@ namespace DivisionEngine.Systems
 
                     // Textures
                     curSDF.albedoTexMetaID = GetTexMetaID(mat.albedoMap);
-                    curSDF.normalTexMetaID = mat.normalMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.normalMap.ID) : -1;
+                    curSDF.normalTexMetaID = GetTexMetaID(mat.normalMap);
                     curSDF.normalStrength = mat.normalStrength;
-                    curSDF.displaceTexMetaID = mat.heightMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.heightMap.ID) : -1;
+                    curSDF.displaceTexMetaID = GetTexMetaID(mat.heightMap);
                     curSDF.displaceStrength = mat.displaceStrength;
-                    curSDF.roughTexMetaID = mat.roughnessMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.roughnessMap.ID) : -1;
-                    curSDF.metalTexMetaID = mat.metallicMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.metallicMap.ID) : -1;
-                    curSDF.emissionTexMetaID = mat.emissiveMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(mat.emissiveMap.ID) : -1;
+                    curSDF.roughTexMetaID = GetTexMetaID(mat.roughnessMap);
+                    curSDF.metalTexMetaID = GetTexMetaID(mat.metallicMap);
+                    curSDF.emissionTexMetaID = GetTexMetaID(mat.emissiveMap);
                     curSDF.texTilingOffset = new float4(mat.uvScale.x, mat.uvScale.y, mat.uvOffset.x, mat.uvOffset.y);
                     curSDF.triplanarBlend = mat.triplanarBlend;
 
@@ -296,6 +296,7 @@ namespace DivisionEngine.Systems
                     curSDF.ior = mat.ior;
                     curSDF.aoValues = new float3(mat.ambientOcclusion, mat.ambientRange, mat.ambientFalloff);
                     curSDF.reflectance = mat.reflectance;
+                    curSDF.reflectionCutoff = math.clamp(mat.reflectionCutoff, 0f, 1f);
                     curSDF.stepBias = mat.stepBias;
 
                     // Precalculate material values
@@ -433,8 +434,13 @@ namespace DivisionEngine.Systems
             float maxScale = math.max(scaling.x, math.max(scaling.y, scaling.z));
             return new float4(position.x, position.y, position.z, radius * maxScale * 1.05f + 0.01f);
         }
+        /// <summary>
+        /// Resolves a material texture reference to its metadata index. The texture
+        /// system is the source of truth: an asset that failed to decode simply has no
+        /// metadata entry, so no separate IsLoaded check is needed.
+        /// </summary>
         private static int GetTexMetaID(AssetRef<TextureAsset> assetRef) =>
-            assetRef.IsLoaded ? TextureSystem.GetTextureMetadataIndex(assetRef.ID) : -1;
+            string.IsNullOrEmpty(assetRef.ID) ? -1 : TextureSystem.GetTextureMetadataIndex(assetRef.ID);
 
         public static void UploadWorldData(DivisionComputeContext context)
         {

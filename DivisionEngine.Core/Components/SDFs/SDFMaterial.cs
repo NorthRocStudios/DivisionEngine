@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -104,6 +104,14 @@ namespace DivisionEngine.Components.SDFs
         [Tooltip("Raymarched reflection intensity, useful for combining with refractions")]
         [Min(0f)] public float reflectance = 2f;
         /// <summary>
+        /// Roughness above which a pixel skips reflection ray tracing. Smoother pixels on
+        /// the same material still trace reflections, so a roughness texture only produces
+        /// real reflections (and denoising) in its smooth areas.
+        /// </summary>
+        [Tooltip("Roughness above which reflections are approximated instead of ray traced. " +
+                 "Evaluated per pixel, so a roughness texture only traces its smoother areas.")]
+        [Range(0f, 1f)] public float reflectionCutoff = 0.65f;
+        /// <summary>
         /// A multiplier given to any SDF that can modify the step size to it.
         /// </summary>
         [Tooltip("A multiplier given to any SDF that can modify the step size to it")]
@@ -132,6 +140,7 @@ namespace DivisionEngine.Components.SDFs
             ambientRange = ambientRange,
             ambientFalloff = ambientFalloff,
             reflectance = reflectance,
+            reflectionCutoff = reflectionCutoff,
             stepBias = stepBias,
         };
     }

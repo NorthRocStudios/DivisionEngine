@@ -72,30 +72,41 @@ namespace DivisionEngine.Components
         public int maxShadowRaySteps = 256;
 
         /// <summary>
-        /// Enable built-in reflections denoiser.
+        /// Enable the unified reflection/refraction denoiser.
         /// </summary>
         [Header("Denoising")]
-        public bool enableDivisionDenoise = true;
+        [Tooltip("Enable the unified reflection/refraction denoiser")]
+        public bool enableDenoise = true;
         /// <summary>
-        /// Enable A-Trous wavelet denoising.
+        /// Overall strength of the denoiser (0 keeps the noisy image).
         /// </summary>
-        [Tooltip("Enable A-Trous wavelet denoising")]
-        public bool enableATrousDenoise = true;
-        /// <summary>
-        /// 0 - 1 denoising threshold for built in method.
-        /// </summary>
+        [Tooltip("Overall denoising strength (0 keeps the noisy image)")]
         [Range(0f, 1f)]
-        public float divisionDenoiseThreshold = 0.24f;
+        public float denoiseStrength = 1f;
         /// <summary>
-        /// Size of radius in render image to take blur samples from.
+        /// A-trous wavelet passes used to clean rough reflection samples.
         /// </summary>
-        [Range(1, 4)][Tooltip("Size of radius in render image to take blur samples from")]
-        public int divisionDenoiseDomain = 2;
+        [Tooltip("A-trous wavelet passes used to clean rough reflections (higher = smoother)")]
+        [Range(1, 6)]
+        public int denoisePasses = 4;
         /// <summary>
-        /// Step count for a-trous denoiser.
+        /// Wide passes used to frost rough refraction. More passes blur rough glass further.
         /// </summary>
-        [Range(1, 5)]
-        public int aTrousStepCount = 2;
+        [Tooltip("Wide passes used to frost rough refraction (more = frostier glass)")]
+        [Range(1, 4)]
+        public int refractionDenoisePasses = 3;
+        /// <summary>
+        /// Accumulate denoised reflection/refraction radiance over frames. This is what
+        /// keeps reflections stable instead of flickering with the per-frame samples.
+        /// </summary>
+        [Tooltip("Accumulate denoised reflections/refractions over frames (temporal stability)")]
+        public bool enableTemporalDenoise = true;
+        /// <summary>
+        /// Current-frame weight for temporal accumulation. Lower is more stable but lags motion.
+        /// </summary>
+        [Tooltip("Temporal current-frame weight: lower = more stable, higher = less lag")]
+        [Range(0.02f, 0.5f)]
+        public float denoiseTemporalWeight = 0.08f;
 
         /// <summary>
         /// Anti-aliasing method: none, FXAA, or SDF-specific cone-traced supersampling.
@@ -145,11 +156,12 @@ namespace DivisionEngine.Components
             maxRaySteps = maxRaySteps,
             maxShadowRaySteps = maxShadowRaySteps,
 
-            enableDivisionDenoise = enableDivisionDenoise,
-            enableATrousDenoise = enableATrousDenoise,
-            divisionDenoiseThreshold = divisionDenoiseThreshold,
-            divisionDenoiseDomain = divisionDenoiseDomain,
-            aTrousStepCount = aTrousStepCount,
+            enableDenoise = enableDenoise,
+            denoiseStrength = denoiseStrength,
+            denoisePasses = denoisePasses,
+            refractionDenoisePasses = refractionDenoisePasses,
+            enableTemporalDenoise = enableTemporalDenoise,
+            denoiseTemporalWeight = denoiseTemporalWeight,
 
             antiAliasing = antiAliasing,
             fxaaThreshold = fxaaThreshold,

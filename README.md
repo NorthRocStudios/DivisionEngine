@@ -315,6 +315,199 @@ budget. Multi-kernel shaders require DivisionCompute to emit explicit
 `register(tN/uN)` slots (the translator change lives in the sibling
 `DivisionTranslate/DivisionCompute` checkout this project builds against).
 
+## Unified Reflection/Refraction Denoising
+
+A full GGX microfacet BRDF is only affordable because the image is denoised: the
+ray marcher traces one stochastic reflection ray per primary sample (two samples
+per pixel by default), and everything that is *not* stochastic - direct light,
+shadows, ambient occlusion, albedo textures and refraction - stays exact.
+
+The previous pipeline ran two denoisers back to back over the whole tonemapped
+colour: a bilateral "Division" filter and a two-pass A-Trous wavelet filter. Both
+used one roughness value for the entire object, both blurred albedo and direct
+lighting along with the reflection noise, and neither processed objects that only
+had refraction (so rough glass without a reflection component was never frosted).
+They are replaced by **one** denoiser that filters only the radiance terms that are
+actually noisy, followed by a temporal accumulation pass that removes the
+frame-to-frame flicker the old spatial blur used to hide.
+
+### How it works
+
+The exact SDF pass now writes three linear-radiance targets instead of one
+tonemapped colour:
+
+- **base** - direct light, ambient and the first-hit surface shading;
+- **reflection** - the stochastic first-surface reflection radiance;
+- **refraction** - the refracted light.
+
+It also writes a per-pixel material G-buffer: the roughness sampled from the
+material's *roughness texture*, metallic, effect flags and the reflection weight.
+The resolve pass adds the filtered reflection/refraction back to the base and
+applies ACES. Tonemapping moved out of the SDF shader into that resolve, so the
+filter always operates on linear HDR radiance; with the denoiser switched off the
+resolve reproduces the tonemapped SDF frame (apart from the glass Fresnel fix
+described below).
+
+`UnifiedDenoiseShader` merges the two old filters' ideas:
+
+- an edge-aware **A-Trous wavelet cascade** (5x5 B3-spline kernel, progressively
+  wider step sizes) supplies the large-scale averaging;
+- a **bilateral** spatial/depth/normal weighting supplies the edge preservation,
+  plus a hard object-ID stop so neighbouring objects never mix;
+- a **roughness similarity** term keeps a roughness texture's smooth and rough
+  regions from being averaged together;
+- per-pixel roughness selects how many wavelet scales apply. A mirror reflects
+  only through the tightest scale (its image stays sharp), a semi-rough surface
+  blends in the wider scales, and rough glass reaches the widest;
+- a colour-agnostic neighbourhood-mean anchor clamps fireflies *before* the
+  luminance edge stop, so a lone bright sample cannot preserve itself by rejecting
+  all of its normal neighbours;
+- refraction passes use the same depth/normal/roughness stops but no luminance
+  stop. That blurs the refracted background into **frosted glass** in screen space,
+  without tracing extra refraction rays. Refraction-only materials are filtered
+  too, which the old chain never did.
+
+The filter's extra passes reuse a bounded 1/2/4-pixel step instead of doubling past
+it, which removes noise without smearing the reflected environment across half the
+object. The firefly anchor is computed once in the first pass and carried in the
+reflection target's alpha, so later passes do not rescan the neighbourhood.
+
+### Temporal accumulation
+
+A purely spatial filter leaves a small residual that changes every frame because
+the stochastic samples are decorrelated per frame; that residual reads as flicker.
+The old denoiser hid it by blurring harder. `TemporalDenoiseShader` instead
+accumulates the denoised reflection/refraction channels over frames:
+
+- the world position is reconstructed from the depth buffer and reprojected through
+  the previous frame's camera (the engine has no motion vectors, but for static
+  geometry this reprojection is exact);
+- a history sample is rejected unless depth, normal, object ID and roughness all
+  match the current pixel, which handles disocclusions, camera cuts and texture
+  roughness boundaries;
+- the history colour is clamped to the current frame's local min/max, so stale or
+  disoccluded content cannot leave a trail;
+- the current-frame weight is 0.08 for a static camera (strong accumulation), and
+  rises towards 0.5 with reprojected motion so moving edges do not lag.
+
+A single dispatch per frame, two ping-pong history textures per channel and one
+previous depth-normal copy implement it. The history is reset on resize, world
+rebind, camera switch, render-path switch and between headless test configurations.
+
+### Reflection cutoff (`SDFMaterial`)
+
+`SDFMaterial.reflectionCutoff` (0-1, default **0.65**) is evaluated **per pixel**
+from the roughness texture. Pixels above it skip reflection ray tracing entirely
+and use a cheap environment approximation (a sky lookup in the mirror direction,
+widened toward the normal for very rough lobes), so no raymarch steps are spent on
+lobes that a single ray cannot sample usefully. Because the test is per pixel, a
+roughness texture only traces - and therefore only denoises - its smoother areas;
+the rough texels use the smooth approximation and are left untouched by the filter.
+
+The camera component exposes the matching unified controls: **Enable Denoise**,
+**Denoise Strength**, **Denoise Passes** (reflection A-Trous scales),
+**Refraction Denoise Passes** (frost blur scales), **Enable Temporal Denoise** and
+**Temporal Weight** (lower = more stable, higher = less motion lag).
+
+Two long-standing bugs were fixed as part of the split:
+
+- the glass Fresnel split used `cosTheta` from the *last* reflection bounce rather
+  than the primary hit, so a glass surface's reflectivity varied with the
+  stochastic ray direction and its "stable" base channel was noisy;
+- environment approximations evaluated on secondary reflection bounces were added
+  to the base channel, which gave the same symptom on rough surfaces seen in
+  reflections.
+
+Both are now evaluated from the primary hit / routed to the reflection channel, so
+the base is genuinely noise-free.
+
+### Measured results
+
+`--cli denoisetest` builds a deterministic scene with metal spheres from mirror to
+rough, glass spheres from polished to frosted (including one refraction-only
+sphere), a metal slab carrying a checkerboard roughness texture (smooth blocks
+below the cutoff, rough blocks above it) and diffuse floor/backdrop surfaces. It
+renders the same sample sequence with the denoiser off and on, a 32-spp reference,
+debug views of the material flags, per-pixel roughness and cutoff mask, and an
+8-frame live sequence for temporal stability. All numbers below are 640x360, 2 spp
+versus the reference:
+
+| Check | Before (noisy) | After (denoised) | Change |
+| --- | ---: | ---: | ---: |
+| Metal reflection RMSE, all traced pixels | 0.02503 | 0.01385 | **-45%** |
+| Metal reflection RMSE, roughness 0.12-0.6 | 0.04848 | 0.02455 | **-49%** |
+| Mirror RMSE, roughness < 0.12 | 0.01133 | 0.01132 | ~0% |
+| Metal RMSE, roughness 0.10-0.25 | 0.03562 | 0.02731 | -23% |
+| Metal RMSE, roughness 0.25-0.45 | 0.04274 | 0.02736 | -36% |
+| Metal RMSE, roughness 0.45-0.70 | 0.05413 | 0.02004 | **-63%** |
+| Frosted-glass high-frequency energy | 0.04685 | 0.02535 | **-46%** |
+| Refraction-only glass high-frequency energy | 0.05442 | 0.03169 | **-42%** |
+| Smooth glass high-frequency energy | 0.02511 | 0.02466 | -2% (stays sharp) |
+| Temporal std, secondary pixels (8 live frames) | 0.00749 | 0.00145 | **-81%** |
+| Temporal frame-to-frame change | 0.00815 | 0.00151 | **-81%** |
+| Ray steps per reflective pixel, cutoff 1.0 -> 0.4 | 0.3126 | 0.2608 | **-17%** |
+| Diffuse/sky pixels changed by the filter | - | **0** of 188,316 | bit-identical |
+| Rough (above-cutoff) texels changed | - | **0** of 5,883 | not denoised (2-px block edges excluded) |
+| NaN/Inf pixels | - | 0 | - |
+
+The denoiser costs about **2 ms/frame at 1280x720** including temporal accumulation:
+`--cli bench --width 1280 --height 720` reports about 47.7 ms with it enabled versus
+47.0 ms with `--no-denoise` (the exact SDF pass dominates, and run-to-run GPU clock
+variance is of the same order as the denoiser cost).
+
+### Command line
+
+```bash
+# Full denoise quality gate (writes noisy, denoised, temporal, reference and channel
+# PNGs, masks, temporal-std maps and a difference image); exits 1 on any failed check
+DivisionEngine.Editor.exe --cli denoisetest --width 640 --height 360 --out artifacts/denoisetest
+
+# More converged reference (slower), skip the gates, or capture a moving-camera series
+DivisionEngine.Editor.exe --cli denoisetest --reference-spp 64 --out artifacts/denoisetest64
+DivisionEngine.Editor.exe --cli denoisetest --no-gates --out artifacts/denoisetest-images
+DivisionEngine.Editor.exe --cli denoisetest --motion --out artifacts/denoisetest-motion
+
+# Compare temporal accumulation with the spatial filter alone
+DivisionEngine.Editor.exe --cli denoisetest --no-temporal --out artifacts/denoisetest-spatial
+
+# Render the debug views directly
+DivisionEngine.Editor.exe --cli shot --debug-mode 11 --out roughness.png   # per-pixel roughness
+DivisionEngine.Editor.exe --cli shot --debug-mode 12 --out flags.png       # R reflection, G refraction, B traced
+DivisionEngine.Editor.exe --cli shot --debug-mode 13 --out cutoff.png      # white = approximated, green = traced
+DivisionEngine.Editor.exe --cli shot --denoise-channel 1 --out reflection.png
+DivisionEngine.Editor.exe --cli shot --no-temporal --out spatial-only.png
+
+# Denoise off (the old noisy path) and the raw SDF pass
+DivisionEngine.Editor.exe --cli shot --no-denoise --out noisy.png
+DivisionEngine.Editor.exe --cli shot --no-post --out raw-sdf.png
+```
+
+### Limitations
+
+- Temporal accumulation reprojects through the camera, not through object motion
+  (the engine has no motion vectors). Static geometry is handled exactly, and the
+  depth/normal/object/roughness validation plus the local colour clamp stop most
+  disocclusion trails, but a fast-moving object or a reflection of one can leave a
+  short ghost. Lower the temporal weight, or disable temporal denoising on the
+  camera for those shots.
+- Checkerboard rendering disables temporal accumulation because the unrendered half
+  of the frame has no current depth/material data.
+- Twelve full-resolution `float4` denoise targets are allocated: the spatial targets
+  (material G-buffer, reflection/refraction originals, two ping-pong pairs) and the
+  temporal targets (two history pairs and the previous depth-normal copy). That is
+  about 177 MB at 1280x720 and roughly 1.6 GB at 4K.
+- The reflection cutoff approximation samples the sky only; it does not account for
+  nearby geometry, so a very rough metal surface above the cutoff can look brighter
+  than a fully converged ray-traced reference. Lower the cutoff for a closer match
+  and raise it for more reflection detail.
+- The converged reference traces sharp refraction, while frosted glass deliberately
+  blurs the refraction channel in screen space. The quality gate therefore judges
+  glass by its frost (high-frequency energy) rather than by pixel error against that
+  reference.
+- The voxel clipmap path feeds its whole shaded colour through the reflection
+  channel (it has no separate reflection/refraction split yet), so it is denoised
+  like the old full-colour path rather than with the material-aware split.
+
 ## Area Lights
 
 Directional and point lights are joined by **area lights**: a spherical emitter or a

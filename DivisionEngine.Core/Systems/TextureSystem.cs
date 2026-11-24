@@ -362,6 +362,53 @@ namespace DivisionEngine.Systems
             return (int)((packed >> shift) & 0xFF);
         }
 
+        /// <summary>
+        /// Test/CLI hook: installs a synthetic texture into the GPU texture buffer without
+        /// a project or asset database, so headless tests can exercise textured materials.
+        /// The caller assigns <paramref name="assetId"/> to a material's texture reference;
+        /// <see cref="GetTextureMetadataIndex"/> resolves it like a loaded asset.
+        /// </summary>
+        /// <param name="assetId">Asset id to register for the synthetic texture.</param>
+        /// <param name="pixels">Packed RGBA pixels, row-major, top-left origin.</param>
+        /// <param name="width">Texture width in texels.</param>
+        /// <param name="height">Texture height in texels.</param>
+        /// <returns>The texture metadata index, or -1 for invalid input.</returns>
+        public static int InstallTestTexture(string assetId, uint[] pixels, int width, int height)
+        {
+            if (string.IsNullOrEmpty(assetId) || pixels == null || width < 1 || height < 1 ||
+                pixels.Length != width * height)
+                return -1;
+
+            _allTextureData = pixels;
+            _allTextureMetadata =
+            [
+                new TextureMetadata
+                {
+                    bufferOffset = 0,
+                    resolution = new int2(width, height),
+                    mipCount = 1,
+                    cubemapLayout = 0,
+                }
+            ];
+
+            lock (textureLock)
+            {
+                textureOrder = [assetId];
+                textureIdToIndex.Clear();
+                textureIdToIndex[assetId] = 0;
+            }
+
+            LastLoadedTextureCount = 1;
+            LastLoadedTextureBufferSize = pixels.Length;
+            Debug.Info($"Texture System: installed synthetic test texture '{assetId}' ({width}x{height})");
+            return 0;
+        }
+
+        /// <summary>
+        /// Test/CLI hook: removes synthetic textures and returns the system to its empty state.
+        /// </summary>
+        public static void ClearTestTextures() => ClearAll();
+
         public static int GetTextureMetadataIndex(string assetId) =>
             textureIdToIndex.TryGetValue(assetId, out int index) ? index : -1;
 

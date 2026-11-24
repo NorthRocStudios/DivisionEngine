@@ -221,6 +221,37 @@ namespace DivisionEngine.Rendering
         public static bool ForceCenteredSampling { get; set; }
 
         /// <summary>
+        /// Test-only override for the number of primary samples per pixel when CTSS is
+        /// off. The engine normally samples twice; metrics measure denoised frames
+        /// against a converged reference rendered with a much higher count.
+        /// </summary>
+        public static int? SampleCountOverride { get; set; }
+
+        /// <summary>
+        /// Test-only override for the frame counter the shaders use to decorrelate their
+        /// stochastic samples. Quality tests render several configurations that must see
+        /// exactly the same sample sequence so denoised and noisy frames are comparable.
+        /// </summary>
+        public static int? FrameCountOverride { get; set; }
+
+        /// <summary>
+        /// Test/debug hook: 0 shows the resolved frame, 1 the filtered reflection channel,
+        /// 2 the filtered refraction channel and 3 the base shading.
+        /// </summary>
+        public static int DenoiseChannelDebug { get; set; }
+
+        /// <summary>
+        /// Drops the temporal denoiser history. Call after a camera teleport, a render
+        /// size change or between headless test configurations so pixels from an
+        /// unrelated frame are never accumulated into the current one.
+        /// </summary>
+        public void ResetDenoiseHistory()
+        {
+            denoiseHistoryReady = false;
+            hasPreviousCameraFrame = false;
+        }
+
+        /// <summary>
         /// Is checkerboard rendering enabled (renders half the pixels each frame).
         /// </summary>
         public static bool CheckerboardRenderingEnabled => !DeterministicCapture && (EngineSettings.Instance?.CheckerboardRendering ?? false);
@@ -287,10 +318,47 @@ namespace DivisionEngine.Rendering
         // Denoising
         private Buffer<float>? kernelBuffer; // Reconstruction kernel
         private RWTexture2D<float4>? postProcessTex;
-        // Second A-Trous target: the ping/pong pair must never alias, otherwise the
-        // 3x3 wavelet reads texels its own dispatch is still writing (a UAV race that
-        // made renders differ run to run).
-        private RWTexture2D<float4>? aTrousPongTex;
+        // Original reflection/refraction radiance written by the SDF pass, plus one
+        // ping-pong pair per channel so a filter dispatch writes exactly one texture.
+        private RWTexture2D<float4>? reflectionTex;
+        private RWTexture2D<float4>? refractionTex;
+        private RWTexture2D<float4>? reflectionA;
+        private RWTexture2D<float4>? reflectionB;
+        private RWTexture2D<float4>? refractionA;
+        private RWTexture2D<float4>? refractionB;
+        // Per-pixel roughness/metallic/flags/reflection-weight.
+        private RWTexture2D<float4>? materialTex;
+
+        // Temporal accumulation for the denoised secondary channels. The ping-pong pairs
+        // are the accumulation targets; the spatial filter outputs feed them each frame.
+        private RWTexture2D<float4>? historyReflectionA;
+        private RWTexture2D<float4>? historyReflectionB;
+        private RWTexture2D<float4>? historyRefractionA;
+        private RWTexture2D<float4>? historyRefractionB;
+        private RWTexture2D<float4>? prevDepthNormalsTex;
+        private bool denoiseHistoryReady;
+        private bool denoiseHistoryFlip;
+        private CameraFrame currentCameraFrame;
+        private CameraFrame previousCameraFrame;
+        private bool hasPreviousCameraFrame;
+        private bool temporalDenoiseReported;
+        private bool lastFrameWasVoxel;
+        private Camera? lastRenderCamera;
+
+        /// <summary>
+        /// Camera state needed to reproject the previous frame's accumulated radiance.
+        /// </summary>
+        private struct CameraFrame
+        {
+            public float3 position;
+            public float3 forward;
+            public float3 right;
+            public float3 up;
+            public float screenDist;
+            public float aspect;
+            public float nearPlane;
+            public float farPlane;
+        }
 
         // DivisionCompute post-processing. It shares the pipeline device, so the
         // effect chain runs GPU-to-GPU with no upload or readback.
@@ -322,6 +390,7 @@ namespace DivisionEngine.Rendering
             if (WorldManager.CurrentWorld != null)
             {
                 boundWorld = WorldManager.CurrentWorld;
+                ResetDenoiseHistory();
                 return true;
             }
             return false;
@@ -337,6 +406,7 @@ namespace DivisionEngine.Rendering
             lock (SyncLock)
             {
                 boundWorld = null;
+                ResetDenoiseHistory();
             }
         }
 
@@ -1466,12 +1536,33 @@ namespace DivisionEngine.Rendering
                         postProcessTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
                     }
 
-                    // Second A-Trous target (kept distinct from postProcessTex)
-                    if (aTrousPongTex == null || aTrousPongTex.Width != texWidth || aTrousPongTex.Height != texHeight)
-                    {
-                        aTrousPongTex?.Dispose();
-                        aTrousPongTex = Context!.CreateRWTexture2D<float4>(texWidth, texHeight);
-                    }
+                    // Unified denoiser targets: per-pixel material G-buffer, the original
+                    // reflection/refraction radiance, and one ping-pong pair per channel.
+                    bool denoiseHistoryResized =
+                        historyReflectionA == null || historyReflectionA.Width != texWidth ||
+                        historyReflectionA.Height != texHeight ||
+                        historyReflectionB == null || historyReflectionB.Width != texWidth ||
+                        historyReflectionB.Height != texHeight ||
+                        historyRefractionA == null || historyRefractionA.Width != texWidth ||
+                        historyRefractionA.Height != texHeight ||
+                        historyRefractionB == null || historyRefractionB.Width != texWidth ||
+                        historyRefractionB.Height != texHeight ||
+                        prevDepthNormalsTex == null || prevDepthNormalsTex.Width != texWidth ||
+                        prevDepthNormalsTex.Height != texHeight;
+                    if (denoiseHistoryResized) ResetDenoiseHistory();
+
+                    EnsureDenoiseTexture(ref materialTex, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref reflectionTex, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref refractionTex, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref reflectionA, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref reflectionB, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref refractionA, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref refractionB, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref historyReflectionA, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref historyReflectionB, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref historyRefractionA, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref historyRefractionB, texWidth, texHeight);
+                    EnsureDenoiseTexture(ref prevDepthNormalsTex, texWidth, texHeight);
 
                     // Build depth and normal texture
                     if (depthNormalsTex == null || depthNormalsTex.Width != texWidth || depthNormalsTex.Height != texHeight || DepthNormalPixels == null)
@@ -1616,7 +1707,7 @@ namespace DivisionEngine.Rendering
                         voxelShader.SetFloat("width", texWidth);
                         voxelShader.SetFloat("height", texHeight);
                         voxelShader.SetFloat("aspect", texWidth / (float)texHeight);
-                        voxelShader.SetInt("frameCount", TimeSystem.FrameCount);
+                        voxelShader.SetInt("frameCount", FrameCountOverride ?? TimeSystem.FrameCount);
                         voxelShader.SetInt("debugMode", (int)CurrentDebugMode);
                         voxelShader.SetInt("enableCheckerboard", checkerboardEnabled);
                         voxelClipmap!.Bind(voxelShader);
@@ -1624,6 +1715,9 @@ namespace DivisionEngine.Rendering
                         voxelShader.SetRWTexture2D("outputTexture", renderTex!);
                         voxelShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
                         voxelShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
+                        voxelShader.SetRWTexture2D("materialBuffer", materialTex!);
+                        voxelShader.SetRWTexture2D("reflectionTexture", reflectionTex!);
+                        voxelShader.SetRWTexture2D("refractionTexture", refractionTex!);
                         voxelShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
                         voxelShader.SetStructuredBuffer("lights", lightsBuffer);
                         voxelShader.SetBuffer("textureData", textureBuffer!);
@@ -1657,11 +1751,13 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetFloat("width", texWidth);
                         sdfShader.SetFloat("height", texHeight);
                         sdfShader.SetFloat("aspect", texWidth / (float)texHeight);
-                        sdfShader.SetInt("frameCount", TimeSystem.FrameCount);
+                        sdfShader.SetInt("frameCount", FrameCountOverride ?? TimeSystem.FrameCount);
                         sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
                         sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
                         sdfShader.SetInt("enableCtss", ctssEnabled ? 1 : 0);
                         sdfShader.SetInt("sampleCenter", ForceCenteredSampling ? 1 : 0);
+                        sdfShader.SetInt("samplesPerPixel",
+                            math.clamp(SampleCountOverride ?? 2, 1, 64));
                         sdfShader.SetFloat("ctssConeCoverage", math.max(sdfCamera?.ctssConeCoverage ?? 1f, 0.05f));
                         int ctssDebug = sdfCamera?.debugCTSS switch
                         {
@@ -1676,6 +1772,9 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetTexture2D("edgeMaskRead", ctssEdgeReadTex!);
                         sdfShader.SetRWTexture2D("depthNormals", depthNormalsTex!);
                         sdfShader.SetRWBuffer("entityIdBuffer", objectIdBuffer!);
+                        sdfShader.SetRWTexture2D("materialBuffer", materialTex!);
+                        sdfShader.SetRWTexture2D("reflectionTexture", reflectionTex!);
+                        sdfShader.SetRWTexture2D("refractionTexture", refractionTex!);
                         sdfShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
                         sdfShader.SetStructuredBuffer("lights", lightsBuffer);
                         sdfShader.SetBuffer("textureData", textureBuffer!);
@@ -1714,77 +1813,229 @@ namespace DivisionEngine.Rendering
                     }
                 }
 
-                // Denoising runs once for the rendered image. It used to run inside a
-                // per-camera loop, which meant every extra camera (the editor adds its
-                // own camera entity) re-ran the chain over the same ping/pong textures.
-                // The second pass then bound one texture as both input and output, which
-                // D3D11 resolves by unbinding the shader-resource view: the pass read
-                // zeros and the whole scene came out black.
-                if (renderCamera is { } postCamera && CurrentDebugMode == DebugMode.None)
+                // Resolve (and optionally denoise) the frame. The SDF pass wrote three
+                // linear radiance terms into separate targets; the filter ping-pongs the
+                // two secondary terms and the resolve adds them back to the base and
+                // applies the tonemapper. The resolve always runs, so a frame with the
+                // denoiser disabled is tonemapped exactly once, as it always was.
+                bool ctssDebugView = renderCamera is { antiAliasing: Camera.AntiAliasingMode.CTSS }
+                    && renderCamera.debugCTSS is Camera.AntiAliasingDebugMode.CtssSamples
+                        or Camera.AntiAliasingDebugMode.CtssCoverage;
+
+                if (CurrentDebugMode == DebugMode.None && !ctssDebugView &&
+                    renderCamera is { } postCamera &&
+                    renderTex != null && postProcessTex != null &&
+                    reflectionTex != null && refractionTex != null &&
+                    reflectionA != null && reflectionB != null &&
+                    refractionA != null && refractionB != null &&
+                    materialTex != null && depthNormalsTex != null &&
+                    objectIdBuffer != null && kernelBuffer != null)
                 {
-                    // Division Denoising
-                    if (postCamera.enableDivisionDenoise &&
-                        currentTexture != null && postProcessTex != null && aTrousPongTex != null &&
-                        objectIdBuffer != null && depthNormalsTex != null)
+                    lock (SyncLock)
                     {
-                        // Never read and write the same texture in one dispatch.
-                        RWTexture2D<float4> denoiseTarget = ReferenceEquals(currentTexture, postProcessTex)
-                            ? aTrousPongTex
-                            : postProcessTex;
+                        // Start at the unfiltered radiance the SDF pass wrote. When the
+                        // denoiser is off these stay bound all the way to the resolve,
+                        // which then reproduces the tonemapped SDF frame bit for bit.
+                        RWTexture2D<float4> filteredReflection = reflectionTex;
+                        RWTexture2D<float4> filteredRefraction = refractionTex;
 
-                        lock (SyncLock)
+                        if (postCamera.enableDenoise && postCamera.denoiseStrength > 0f)
                         {
-                            DivisionShader denoiseShader = GetShader(typeof(DivisionDenoiseShader));
-                            denoiseShader.SetFloat("width", texWidth);
-                            denoiseShader.SetFloat("height", texHeight);
-                            denoiseShader.SetFloat("divisionDenoise", postCamera.divisionDenoiseThreshold);
-                            denoiseShader.SetInt("divisionDomain", postCamera.divisionDenoiseDomain);
-                            denoiseShader.SetRWTexture2D("inputTexture", currentTexture);
-                            denoiseShader.SetRWTexture2D("outputTexture", denoiseTarget);
-                            denoiseShader.SetRWTexture2D("depthNormals", depthNormalsTex);
-                            denoiseShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
-                            denoiseShader.SetRWBuffer("objectIdBuffer", objectIdBuffer);
-                            denoiseShader.Dispatch2D(denoiseShader.FindKernel("Execute"), texWidth, texHeight);
-                        }
-                        currentTexture = denoiseTarget;
-                    }
+                            DivisionShader denoise = GetShader(typeof(UnifiedDenoiseShader));
+                            denoise.SetFloat("width", texWidth);
+                            denoise.SetFloat("height", texHeight);
+                            denoise.SetFloat("strength", math.clamp(postCamera.denoiseStrength, 0f, 1f));
+                            denoise.SetTexture2D("depthNormals", depthNormalsTex);
+                            denoise.SetTexture2D("materialBuffer", materialTex);
+                            denoise.SetBuffer("objectIdBuffer", objectIdBuffer);
+                            denoise.SetBuffer("kernelBuffer", kernelBuffer);
+                            int kernel = denoise.FindKernel("Execute");
 
-                    // A-Trous denoising using wavelets
-                    if (postCamera.enableATrousDenoise &&
-                        currentTexture != null && postProcessTex != null && aTrousPongTex != null && kernelBuffer != null &&
-                        objectIdBuffer != null && depthNormalsTex != null)
-                    {
-                        RWTexture2D<float4> ping = currentTexture;
-                        // Ping/pong must be two different textures: reading texels the same
-                        // dispatch writes is a UAV race. When the built-in denoiser already
-                        // wrote postProcessTex, use the spare target instead.
-                        RWTexture2D<float4> pong = ReferenceEquals(ping, postProcessTex)
-                            ? aTrousPongTex
-                            : postProcessTex;
-                        int stepSize = 1;
+                            // Each channel owns its own ping-pong pair, so every dispatch
+                            // writes exactly one texture. (Binding both outputs to the same
+                            // resource made the unselected channel's write race the filtered
+                            // one, which zeroed reflections whenever the copy landed last.)
+                            int reflectionPasses = math.clamp(postCamera.denoisePasses, 1, 6);
+                            // Extra passes reuse the 1/2/4-pixel steps instead of doubling past
+                            // them: repeated averaging inside a bounded support removes noise
+                            // without smearing the reflected environment across half the object.
+                            int[] reflectionSteps = [1, 1, 2, 4, 4, 8];
+                            int reflectionStepIndex = 0;
+                            RWTexture2D<float4> reflectionSource = reflectionTex;
+                            RWTexture2D<float4> reflectionTarget = reflectionA;
+                            RWTexture2D<float4> reflectionSpare = reflectionB;
 
-                        for (int i = 0; i < postCamera.aTrousStepCount; i++)
-                        {
-                            lock (SyncLock)
+                            // A-trous wavelet passes for reflections: steps 1, 2, 4, 4, ...
+                            // The per-pixel roughness gate inside the shader means a smooth
+                            // surface only takes the first scale or two (sharp mirror),
+                            // while a semi-rough surface blends in the wider scales.
+                            for (int i = 0; i < reflectionPasses; i++)
                             {
-                                DivisionShader aTrousShader = GetShader(typeof(ATrousDenoiseShader));
-                                aTrousShader.SetFloat("width", texWidth);
-                                aTrousShader.SetFloat("height", texHeight);
-                                aTrousShader.SetInt("stepSize", stepSize);
-                                aTrousShader.SetRWTexture2D("inputTexture", ping);
-                                aTrousShader.SetRWTexture2D("outputTexture", pong);
-                                aTrousShader.SetRWTexture2D("depthNormals", depthNormalsTex);
-                                aTrousShader.SetStructuredBuffer("sdfObjects", sdfObjBuffer);
-                                aTrousShader.SetRWBuffer("objectIdBuffer", objectIdBuffer);
-                                aTrousShader.SetBuffer("kernelBuffer", kernelBuffer);
-                                aTrousShader.Dispatch2D(aTrousShader.FindKernel("Execute"), texWidth, texHeight);
+                                denoise.SetInt("stepSize",
+                                    reflectionSteps[math.min(reflectionStepIndex, reflectionSteps.Length - 1)]);
+                                denoise.SetInt("passIndex", i);
+                                denoise.SetInt("filterRefraction", 0);
+                                denoise.SetTexture2D("inputReflection", reflectionSource);
+                                denoise.SetTexture2D("inputRefraction", refractionTex);
+                                denoise.SetRWTexture2D("outputReflection", reflectionTarget);
+                                denoise.SetRWTexture2D("outputRefraction", refractionA);
+                                denoise.Dispatch2D(kernel, texWidth, texHeight);
+
+                                reflectionSource = reflectionTarget;
+                                (reflectionTarget, reflectionSpare) = (reflectionSpare, reflectionTarget);
+                                reflectionStepIndex++;
+                            }
+                            filteredReflection = reflectionSource;
+
+                            // Frost passes for rough refraction. The steps are deliberately
+                            // wider than the reflection cascade: frosted glass is a large
+                            // screen-space blur, and no refraction ray is traced again.
+                            int refractionPasses = math.clamp(postCamera.refractionDenoisePasses, 1, 4);
+                            int[] frostSteps = [2, 2, 5, 10];
+                            RWTexture2D<float4> refractionSource = refractionTex;
+                            RWTexture2D<float4> refractionTarget = refractionA;
+                            RWTexture2D<float4> refractionSpare = refractionB;
+                            // The kernel does not write the unselected output, but the binding
+                            // still has to be a resource that is not also read in this dispatch.
+                            RWTexture2D<float4> reflectionScratch =
+                                ReferenceEquals(filteredReflection, reflectionA) ? reflectionB : reflectionA;
+                            for (int i = 0; i < refractionPasses; i++)
+                            {
+                                denoise.SetInt("stepSize", frostSteps[math.min(i, frostSteps.Length - 1)]);
+                                denoise.SetInt("passIndex", i);
+                                denoise.SetInt("filterRefraction", 1);
+                                denoise.SetTexture2D("inputReflection", filteredReflection);
+                                denoise.SetTexture2D("inputRefraction", refractionSource);
+                                denoise.SetRWTexture2D("outputReflection", reflectionScratch);
+                                denoise.SetRWTexture2D("outputRefraction", refractionTarget);
+                                denoise.Dispatch2D(kernel, texWidth, texHeight);
+
+                                refractionSource = refractionTarget;
+                                (refractionTarget, refractionSpare) = (refractionSpare, refractionTarget);
+                            }
+                            filteredRefraction = refractionSource;
+                        }
+
+                        // Temporal accumulation. The spatial filter has a small per-frame
+                        // residual; reprojecting and blending the previous frame removes it
+                        // without the old denoiser's spatial blur, so reflections stay both
+                        // detailed and stable.
+                        CameraFrame frame = new CameraFrame
+                        {
+                            position = worldDTO.cameraOrigin,
+                            forward = worldDTO.camForward,
+                            right = worldDTO.camRight,
+                            up = worldDTO.camUp,
+                            screenDist = worldDTO.camScreenDist,
+                            aspect = texWidth / (float)texHeight,
+                            nearPlane = worldDTO.nearPlane,
+                            farPlane = worldDTO.farPlane,
+                        };
+
+                        // Switching render paths or cameras invalidates the accumulated
+                        // radiance even when the depth buffer happens to line up.
+                        bool voxelPath = VoxelRenderingEnabled;
+                        if (voxelPath != lastFrameWasVoxel || !ReferenceEquals(renderCamera, lastRenderCamera))
+                            ResetDenoiseHistory();
+                        lastFrameWasVoxel = voxelPath;
+                        lastRenderCamera = renderCamera;
+
+                        bool cameraJump = hasPreviousCameraFrame &&
+                            (math.length(frame.position - previousCameraFrame.position) > 1f ||
+                             math.dot(frame.forward, previousCameraFrame.forward) < 0.98f ||
+                             math.abs(frame.screenDist - previousCameraFrame.screenDist) > 0.01f ||
+                             math.abs(frame.aspect - previousCameraFrame.aspect) > 1e-4f);
+                        bool temporalHistoryValid = denoiseHistoryReady && hasPreviousCameraFrame && !cameraJump;
+                        bool temporalRan = false;
+
+                        if (postCamera.enableDenoise && postCamera.denoiseStrength > 0f &&
+                            postCamera.enableTemporalDenoise && !CheckerboardRenderingEnabled &&
+                            historyReflectionA != null && historyReflectionB != null &&
+                            historyRefractionA != null && historyRefractionB != null &&
+                            prevDepthNormalsTex != null && depthNormalsTex != null)
+                        {
+                            DivisionShader temporal = GetShader(typeof(TemporalDenoiseShader));
+                            temporal.SetFloat("width", texWidth);
+                            temporal.SetFloat("height", texHeight);
+                            temporal.SetInt("historyValid", temporalHistoryValid ? 1 : 0);
+                            temporal.SetFloat("temporalAlpha",
+                                math.clamp(postCamera.denoiseTemporalWeight, 0.02f, 0.5f));
+                            temporal.SetFloat("maxTemporalAlpha", 0.5f);
+                            temporal.SetFloat("depthTolerance", 0.03f);
+                            temporal.SetFloat("normalTolerance", 0.9f);
+                            temporal.SetVector("cameraPosition", frame.position);
+                            temporal.SetVector("cameraForward", frame.forward);
+                            temporal.SetVector("cameraRight", frame.right);
+                            temporal.SetVector("cameraUp", frame.up);
+                            temporal.SetFloat("camScreenDist", frame.screenDist);
+                            temporal.SetFloat("aspect", frame.aspect);
+                            temporal.SetFloat("nearPlane", frame.nearPlane);
+                            temporal.SetFloat("farPlane", frame.farPlane);
+                            temporal.SetVector("prevCameraPosition", previousCameraFrame.position);
+                            temporal.SetVector("prevCameraForward", previousCameraFrame.forward);
+                            temporal.SetVector("prevCameraRight", previousCameraFrame.right);
+                            temporal.SetVector("prevCameraUp", previousCameraFrame.up);
+                            temporal.SetFloat("prevCamScreenDist", previousCameraFrame.screenDist);
+                            temporal.SetFloat("prevAspect", previousCameraFrame.aspect);
+                            temporal.SetFloat("prevNearPlane", previousCameraFrame.nearPlane);
+                            temporal.SetFloat("prevFarPlane", previousCameraFrame.farPlane);
+                            temporal.SetTexture2D("currentReflection", filteredReflection);
+                            temporal.SetTexture2D("currentRefraction", filteredRefraction);
+
+                            RWTexture2D<float4> historyReadReflection = denoiseHistoryFlip
+                                ? historyReflectionB : historyReflectionA;
+                            RWTexture2D<float4> historyWriteReflection = denoiseHistoryFlip
+                                ? historyReflectionA : historyReflectionB;
+                            RWTexture2D<float4> historyReadRefraction = denoiseHistoryFlip
+                                ? historyRefractionB : historyRefractionA;
+                            RWTexture2D<float4> historyWriteRefraction = denoiseHistoryFlip
+                                ? historyRefractionA : historyRefractionB;
+
+                            temporal.SetTexture2D("historyReflection", historyReadReflection);
+                            temporal.SetTexture2D("historyRefraction", historyReadRefraction);
+                            temporal.SetTexture2D("depthNormals", depthNormalsTex);
+                            temporal.SetTexture2D("prevDepthNormals", prevDepthNormalsTex);
+                            temporal.SetBuffer("objectIdBuffer", objectIdBuffer);
+                            temporal.SetTexture2D("materialBuffer", materialTex);
+                            temporal.SetRWTexture2D("outputReflection", historyWriteReflection);
+                            temporal.SetRWTexture2D("outputRefraction", historyWriteRefraction);
+                            temporal.Dispatch2D(temporal.FindKernel("Execute"), texWidth, texHeight);
+
+                            if (!temporalDenoiseReported)
+                            {
+                                temporalDenoiseReported = true;
+                                Debug.Info($"Renderer: temporal denoise active (alpha={postCamera.denoiseTemporalWeight:F2}, " +
+                                           $"history={(temporalHistoryValid ? "valid" : "first frame")})");
                             }
 
-                            // Swap buffers for next pass
-                            (ping, pong) = (pong, ping);
-                            stepSize *= 2;
+                            filteredReflection = historyWriteReflection;
+                            filteredRefraction = historyWriteRefraction;
+                            denoiseHistoryFlip = !denoiseHistoryFlip;
+                            denoiseHistoryReady = true;
+                            temporalRan = true;
+
+                            // The temporal shader read the old depth; now record this frame's.
+                            depthNormalsTex.CopyTo(Context!.Context, prevDepthNormalsTex);
                         }
-                        currentTexture = ping; // Final result
+
+                        if (!temporalRan) denoiseHistoryReady = false;
+
+                        previousCameraFrame = frame;
+                        hasPreviousCameraFrame = true;
+
+                        DivisionShader resolve = GetShader(typeof(DenoiseResolveShader));
+                        resolve.SetFloat("width", texWidth);
+                        resolve.SetFloat("height", texHeight);
+                        resolve.SetInt("enableAces",
+                            (renderPostProcess?.enableAcesTonemapper ?? (worldDTO.enableAces == 1)) ? 1 : 0);
+                        resolve.SetInt("channel", DenoiseChannelDebug);
+                        resolve.SetTexture2D("inputColor", renderTex);
+                        resolve.SetTexture2D("reflection", filteredReflection);
+                        resolve.SetTexture2D("refraction", filteredRefraction);
+                        resolve.SetRWTexture2D("outputTexture", postProcessTex);
+                        resolve.Dispatch2D(resolve.FindKernel("Execute"), texWidth, texHeight);
+
+                        currentTexture = postProcessTex;
                     }
                 }
 
@@ -1943,6 +2194,17 @@ namespace DivisionEngine.Rendering
         /// The texture holding the processed frame, or <paramref name="currentTexture"/>
         /// unchanged when the stage fails (the error is logged once).
         /// </returns>
+        /// <summary>
+        /// Creates a denoiser render target when it does not exist for the current frame
+        /// size. The targets are recreated on resize together with the other frame textures.
+        /// </summary>
+        private void EnsureDenoiseTexture(ref RWTexture2D<float4>? texture, int width, int height)
+        {
+            if (texture != null && texture.Width == width && texture.Height == height) return;
+            texture?.Dispose();
+            texture = Context!.CreateRWTexture2D<float4>(width, height);
+        }
+
         private RWTexture2D<float4>? RunDivisionPostProcess(
             PostProcessing postProcess,
             Camera camera,
@@ -2193,7 +2455,18 @@ namespace DivisionEngine.Rendering
         {
             renderTex?.Dispose();
             postProcessTex?.Dispose();
-            aTrousPongTex?.Dispose();
+            reflectionTex?.Dispose();
+            refractionTex?.Dispose();
+            reflectionA?.Dispose();
+            reflectionB?.Dispose();
+            refractionA?.Dispose();
+            refractionB?.Dispose();
+            historyReflectionA?.Dispose();
+            historyReflectionB?.Dispose();
+            historyRefractionA?.Dispose();
+            historyRefractionB?.Dispose();
+            prevDepthNormalsTex?.Dispose();
+            materialTex?.Dispose();
             depthNormalsTex?.Dispose();
             lowResDepthTex?.Dispose();
             lowResRenderTex?.Dispose();
@@ -2238,7 +2511,22 @@ namespace DivisionEngine.Rendering
             ctssEdgeTex = null;
             ctssEdgeReadTex = null;
             postProcessTex = null;
-            aTrousPongTex = null;
+            reflectionTex = null;
+            refractionTex = null;
+            reflectionA = null;
+            reflectionB = null;
+            refractionA = null;
+            refractionB = null;
+            historyReflectionA = null;
+            historyReflectionB = null;
+            historyRefractionA = null;
+            historyRefractionB = null;
+            prevDepthNormalsTex = null;
+            materialTex = null;
+            denoiseHistoryReady = false;
+            hasPreviousCameraFrame = false;
+            lastRenderCamera = null;
+            lastFrameWasVoxel = false;
             depthNormalsTex = null;
             lowResDepthTex = null;
             lowResRenderTex = null;

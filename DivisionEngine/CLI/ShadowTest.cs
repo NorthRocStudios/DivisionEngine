@@ -662,8 +662,7 @@ namespace DivisionEngine.Editor
                 fieldOfView = fov,
                 isActive = true,
                 antiAliasing = Camera.AntiAliasingMode.None,
-                enableDivisionDenoise = false,
-                enableATrousDenoise = false,
+                enableDenoise = false,
             });
             world.AddComponent(camera, new PostProcessing { enableAcesTonemapper = false });
         }

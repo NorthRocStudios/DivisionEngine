@@ -39,6 +39,9 @@ namespace DivisionEngine
         [ShaderResource] public RWTexture2D<float4> outputTexture;
         [ShaderResource] public RWTexture2D<float4> depthNormals;
         [ShaderResource] public RWBuffer<uint2> entityIdBuffer;
+        [ShaderResource] public RWTexture2D<float4> materialBuffer;
+        [ShaderResource] public RWTexture2D<float4> reflectionTexture;
+        [ShaderResource] public RWTexture2D<float4> refractionTexture;
         [ShaderResource] public StructuredBuffer<SDFObjectDTO> sdfObjects;
         [ShaderResource] public StructuredBuffer<SDFLightDTO> lights;
         [ShaderResource] public Buffer<uint> textureData;
@@ -1042,13 +1045,17 @@ namespace DivisionEngine
         }
 
         private float3 TraceRay(int2 pixel, float3 rayOrigin, float3 rayDir,
-            out float3 outputNormal, out float totalDist, out int steps)
+            out float3 outputNormal, out float totalDist, out int steps,
+            out float primaryRoughness, out float primaryMetallic, out int primaryFlags)
         {
             float3 finalColor = new float3(0f);
             float3 contribution = new float3(1f);
             outputNormal = new float3(0f);
             totalDist = 0f;
             steps = 0;
+            primaryRoughness = 0f;
+            primaryMetallic = 0f;
+            primaryFlags = 0;
             float farPlane = worldData[0].farPlane;
             int maxRaySteps = worldData[0].maxRaySteps;
             bool firstHit = true;
@@ -1056,6 +1063,7 @@ namespace DivisionEngine
             float3 refractedLight = new float3(0f);
             SDFObjectDTO mainMat = default;
             float cosTheta = 0f;
+            float primaryCosTheta = 0f;
             bool isRefractive = false;
 
             for (int bounce = 0; bounce < MAX_REFLECTION_BOUNCES; bounce++)
@@ -1093,6 +1101,10 @@ namespace DivisionEngine
                     finalColor += directLight + ambientBase;
                     mainMat = sdf;
                     cosTheta = math.max(math.dot(normal, viewDir), 0f);
+                    primaryCosTheta = cosTheta;
+                    primaryRoughness = roughness;
+                    primaryMetallic = metallic;
+                    primaryFlags = (sdf.hasReflection == 1 ? 1 : 0) | (sdf.hasRefraction == 1 ? 2 : 0);
 
                     if (sdf.hasRefraction == 1)
                     {
@@ -1115,6 +1127,16 @@ namespace DivisionEngine
                 contribution *= F;
                 if (contribution.x + contribution.y + contribution.z < 0.02f) break;
 
+                // Above the material's reflection cutoff the lobe is too wide for one ray;
+                // replace it with a smooth environment lookup and add no raymarch steps.
+                if (roughness > sdf.reflectionCutoff)
+                {
+                    float3 envDir = math.normalize(math.reflect(rayDir, normal));
+                    finalColor += contribution * GetSkyColor(envDir);
+                    break;
+                }
+                if (bounce == 0) primaryFlags |= 8;
+
                 rayOrigin = hitPoint + normal * EPSILON * 2f;
                 rayDir = math.normalize(math.reflect(rayDir, normal));
             }
@@ -1122,7 +1144,7 @@ namespace DivisionEngine
             if (isRefractive)
             {
                 float3 f0 = new float3(1f) * mainMat.f0_dielectric;
-                float3 fresnel = PBR.FresnelSchlick(cosTheta, f0, mainMat.reflectance, 1f);
+                float3 fresnel = PBR.FresnelSchlick(primaryCosTheta, f0, mainMat.reflectance, 1f);
                 return finalColor * fresnel + refractedLight * (1f - fresnel);
             }
             return finalColor;
@@ -1154,13 +1176,16 @@ namespace DivisionEngine
                 worldData[0].camScreenDist, worldData[0].camForward, worldData[0].camRight, worldData[0].camUp);
 
             float3 color = TraceRay(pixel, rayOrigin, rayDir,
-                out float3 outputNormal, out float distance, out int steps);
+                out float3 outputNormal, out float distance, out int steps,
+                out float primaryRoughness, out float primaryMetallic, out int primaryFlags);
 
-            float3 finalColor = color;
-            if (worldData[0].enableAces == 1)
-                finalColor = math.saturate(finalColor * (2.51f * finalColor + 0.03f) / (finalColor * (2.43f * finalColor + 0.59f) + 0.14f));
-
-            outputTexture[pixel] = new float4(finalColor, 1f);
+            // The voxel path does not split reflection and refraction radiance, so the
+            // whole shaded colour travels in the reflection channel (flag bit 2 = exact
+            // path split is deliberately left clear). The shared resolve pass tonemaps it.
+            outputTexture[pixel] = new float4(0f, 0f, 0f, 1f);
+            reflectionTexture[pixel] = new float4(color, 1f);
+            refractionTexture[pixel] = new float4(0f, 0f, 0f, 1f);
+            materialBuffer[pixel] = new float4(primaryRoughness, primaryMetallic, (float)primaryFlags, 0f);
             float maxPossibleDistance = worldData[0].farPlane - worldData[0].nearPlane;
             depthNormals[pixel] = new float4(distance / maxPossibleDistance, outputNormal);
 

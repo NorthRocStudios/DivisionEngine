@@ -65,6 +65,7 @@ namespace DivisionEngine.Editor
                     case "compare": return RunCompare(args);
                     case "compute": return DivisionComputeCLI.TryRun(args);
                     case "ctsstest": return CtssTest.Run(args);
+                    case "denoisetest": return DenoiseTest.Run(args);
                     case "info": return RunInfo();
                     case "nodetest": return NodeGraphTest.Run(args);
                     case "selftest": return EngineSelfTest.Run();
@@ -502,6 +503,12 @@ namespace DivisionEngine.Editor
                             Options: --width N --height N --fixed-frame N --out <dir>
                             Exits 1 when CTSS touches <0.2% of pixels or does not
                             reduce their error against the reference by 25%
+                  denoisetest  Render a reflective/refractive scene with and without the unified
+                            denoiser and check it against a converged reference; writes noisy,
+                            denoised, reference, mask and channel PNGs; exits 1 on failure
+                            Options: --width N --height N --fixed-frame N --spp N
+                                     --reference-spp N --glass-cutoff F --no-temporal
+                                     --motion --out <dir> --no-gates
                   info      Print engine/runtime information
                   nodetest  Run headless node graph model checks (registry, typed connections,
                             evaluation, cycle rejection, serialization); exits 1 on failure
@@ -520,7 +527,9 @@ namespace DivisionEngine.Editor
                   shot      Render one frame to a PNG
                             Options: --sky <solid|gradient|hdri|procedural> --pos x,y,z --look x,y,z --out file --width N --height N
                                      --fixed-frame N --seed N  (deterministic capture)
-                                     --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels, 10 = LOD levels)
+                                     --debug-mode N  (0 = shaded, 1 = depth ... 9 = mip levels, 10 = LOD levels,
+                                                      11 = per-pixel roughness, 12 = material flags,
+                                                      13 = reflection cutoff mask)
                                      --voxel --voxel-resolution N  (de-voxelized SDF path)
                                      --no-voxel                   (force the exact SDF path)
                                      --ctss                       (cone-traced adaptive AA)
@@ -529,6 +538,9 @@ namespace DivisionEngine.Editor
                                      --no-ctss                    (force CTSS off)
                                      --sample-center              (pixel-centre primary rays for comparisons)
                                      --no-checkerboard --no-post --no-denoise --no-fxaa
+                                     --spp N                      (primary samples per pixel, default 2)
+                                     --denoise-channel N          (1 = reflection, 2 = refraction, 3 = base)
+                                     --no-temporal                (disable temporal accumulation)
                                      --no-terrain  (remove terrain from the default scene)
                                      --reload-shaders  (drop compiled shaders mid-capture)
                   help      Show this message
@@ -608,6 +620,25 @@ namespace DivisionEngine.Editor
         {
             ApplyCtssOptions(args);
 
+            // Reference renders raise the primary sample count so the stochastic
+            // reflection estimate converges; denoise quality metrics compare against them.
+            int spp = GetInt(args, "--spp", 0);
+            if (spp > 0) RenderPipeline.SampleCountOverride = spp;
+
+            // Test/debug hook: 1 = filtered reflection channel, 2 = filtered refraction,
+            // 3 = base shading.
+            int denoiseChannel = GetInt(args, "--denoise-channel", 0);
+            if (denoiseChannel > 0) RenderPipeline.DenoiseChannelDebug = denoiseChannel;
+
+            if (HasFlag(args, "--no-temporal") && WorldManager.CurrentWorld is not null)
+            {
+                foreach ((uint _, Camera camera) in WorldManager.CurrentWorld.QueryData<Camera>())
+                {
+                    camera.enableTemporalDenoise = false;
+                    break;
+                }
+            }
+
             // --no-post disables every post-processing stage (denoisers, FXAA and the
             // colour effects) so a capture shows exactly what the SDF pass wrote.
             if (HasFlag(args, "--no-post") && WorldManager.CurrentWorld is not null)
@@ -618,8 +649,7 @@ namespace DivisionEngine.Editor
                     // shows the raw SDF pass. CTSS runs inside that pass and stays on.
                     if (camera.antiAliasing == Camera.AntiAliasingMode.FXAA)
                         camera.antiAliasing = Camera.AntiAliasingMode.None;
-                    camera.enableDivisionDenoise = false;
-                    camera.enableATrousDenoise = false;
+                    camera.enableDenoise = false;
                     break;
                 }
                 foreach ((uint _, PostProcessing postProcess) in WorldManager.CurrentWorld.QueryData<PostProcessing>())
@@ -644,8 +674,7 @@ namespace DivisionEngine.Editor
                 {
                     if (HasFlag(args, "--no-denoise"))
                     {
-                        camera.enableDivisionDenoise = false;
-                        camera.enableATrousDenoise = false;
+                        camera.enableDenoise = false;
                     }
                     if (HasFlag(args, "--no-fxaa") && camera.antiAliasing == Camera.AntiAliasingMode.FXAA)
                         camera.antiAliasing = Camera.AntiAliasingMode.None;

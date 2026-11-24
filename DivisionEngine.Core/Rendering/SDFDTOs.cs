@@ -126,6 +126,15 @@ namespace DivisionEngine.Rendering
         public int reflectionMaxBounces; // 4b
         public int refractionMaxSteps; // 4b
         public int refractMaxRecursion; // 4b
+
+        // Denoising / reflection budget
+        /// <summary>
+        /// Per-pixel roughness above which reflection rays are replaced by a cheap
+        /// environment approximation. Because it is evaluated from the roughness
+        /// texture at every pixel, a textured material only traces reflections in
+        /// the smoother parts of its roughness map.
+        /// </summary>
+        public float reflectionCutoff; // 4b
     }
 
     /// <summary>

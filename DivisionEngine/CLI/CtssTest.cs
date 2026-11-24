@@ -60,8 +60,7 @@ namespace DivisionEngine.Editor
             // refractions use frame-dependent sample indices, and the AA comparison
             // only cares about geometric edges.
             camera.antiAliasing = Camera.AntiAliasingMode.None;
-            camera.enableDivisionDenoise = false;
-            camera.enableATrousDenoise = false;
+            camera.enableDenoise = false;
             camera.maxRaySteps = 256;
             foreach ((uint _, PostProcessing postProcess) in world.QueryData<PostProcessing>())
             {

@@ -50,6 +50,13 @@ namespace DivisionEngine
         /// <summary>CTSS debug visualization (0 = off, 1 = samples, 2 = coverage).</summary>
         public int ctssDebug;
 
+        /// <summary>
+        /// Primary samples per pixel when CTSS is off. The default is the engine's
+        /// normal 2x sampling; reference renders raise it to converge the stochastic
+        /// reflection estimate that the denoiser is measured against.
+        /// </summary>
+        public int samplesPerPixel;
+
         /// <summary>World/scene uniforms.</summary>
         [ShaderResource] public StructuredBuffer<SDFWorldDTO> worldData;
 
@@ -67,6 +74,25 @@ namespace DivisionEngine
 
         /// <summary>Per-pixel object ID (x = index into <see cref="sdfObjects"/>, y = entity id).</summary>
         [ShaderResource] public RWBuffer<uint2> entityIdBuffer;
+
+        /// <summary>
+        /// Per-pixel primary-surface data for the denoiser:
+        /// x = roughness, y = metallic, z = flags (1 reflection, 2 refraction,
+        /// 4 exact-path split channels), w = reflection weight (Fresnel magnitude).
+        /// </summary>
+        [ShaderResource] public RWTexture2D<float4> materialBuffer;
+
+        /// <summary>
+        /// First-surface reflection radiance, separated from the base shading so the
+        /// denoiser filters only the stochastic part and leaves albedo/texture detail alone.
+        /// </summary>
+        [ShaderResource] public RWTexture2D<float4> reflectionTexture;
+
+        /// <summary>
+        /// First-surface refracted radiance. Rough glass blurs this channel in screen
+        /// space, which is what gives frosted glass without extra refraction rays.
+        /// </summary>
+        [ShaderResource] public RWTexture2D<float4> refractionTexture;
 
         /// <summary>All SDF objects in the scene.</summary>
         [ShaderResource] public StructuredBuffer<SDFObjectDTO> sdfObjects;
@@ -96,7 +122,6 @@ namespace DivisionEngine
         const float MIN_TRAVERSE_DIST = 100000000.0f;
 
         // Reflection constants
-        const int SAMPLES_PER_PIXEL = 2;
         const float MIN_REFLECTION_CHANCE = 0.01f;
         const float MIN_THROUGHPUT = 0.01f;
         const float REFLECTION_BIAS = 2f; // Multiplier for normal offset
@@ -1808,20 +1833,42 @@ namespace DivisionEngine
         }
 
         /// <summary>
-        /// Actually performs the main raymarching calculations.
+        /// Cheap stand-in for a reflection ray on surfaces above the material's
+        /// reflection cutoff: one sky lookup in the mirror direction, widened towards
+        /// the normal for very rough lobes. No raymarch steps are added.
         /// </summary>
-        /// <param name="rayOrigin">Ray origin to start at</param>
-        /// <param name="rayDir">Ray direction to travel</param>
-        /// <param name="outputNormal">Outputs surface normal</param>
-        /// <param name="totalDist">Total distance traversed</param> 
-        /// <returns>Output raymarch color, with effects</returns>
-        private float3 TraceRay(int2 pixel, float3 rayOrigin, float3 rayDir, int sampleIndexInPixel,
-            out float3 outputNormal, out float totalDist, out int steps)
+        private float3 ApproximateRoughReflection(float3 rayDir, float3 normal, float3 finalNormal,
+            float roughness, float aoValue)
         {
-            float3 finalColor = new float3(0f);
+            float3 envDir = math.normalize(math.reflect(rayDir, finalNormal));
+            float3 env = GetSkyColor(envDir);
+
+            // A rough lobe gathers a much wider cone than the mirror direction, so blend
+            // towards the normal-facing sky instead of mirroring only the bright horizon.
+            float3 broad = GetSkyColor(normal);
+            env = math.lerp(env, broad, math.saturate((roughness - 0.35f) * 1.5f));
+            return env * math.lerp(1f, aoValue, 0.5f);
+        }
+
+        /// <summary>
+        /// Traces a primary ray and returns the base shading, the stochastic reflection
+        /// contribution and the refraction contribution as separate linear radiance
+        /// values. The denoiser filters only the two secondary channels and adds them
+        /// back to the base, which keeps albedo, textures and direct lighting sharp.
+        /// </summary>
+        private float3 TraceRay(int2 pixel, float3 rayOrigin, float3 rayDir, int sampleIndexInPixel,
+            out float3 outputNormal, out float totalDist, out int steps,
+            out float3 baseColor, out float3 reflectionColor, out float3 refractionColor,
+            out float primaryRoughness, out float primaryMetallic, out int primaryFlags,
+            out float reflectionWeight)
+        {
+            float3 firstHitLighting = new float3(0f);
+            float3 secondaryLighting = new float3(0f);
+            float3 approximatedReflection = new float3(0f);
             float3 contribution = new float3(1f);
             float3 ambientBase = new float3(0f);
             float cosTheta = 0f;
+            float primaryCosTheta = 0f;
 
             float3 refractedLight = new float3(0f);
             float hitTerrainAO = 1f;
@@ -1838,6 +1885,14 @@ namespace DivisionEngine
             bool isRefractive = false;
             float aoValue = 1f;
 
+            baseColor = new float3(0f);
+            reflectionColor = new float3(0f);
+            refractionColor = new float3(0f);
+            primaryRoughness = 0f;
+            primaryMetallic = 0f;
+            primaryFlags = 0;
+            reflectionWeight = 0f;
+
             // Adaptive reflection step sizes
             int maxRaySteps = worldData[0].maxRaySteps;
             for (int bounce = 0; bounce < 32; bounce++) // Max 32 bounces for reflections
@@ -1851,12 +1906,18 @@ namespace DivisionEngine
 
                 if (closestObjIndex == -1 || depth > farPlane)
                 {
-                    finalColor += contribution * sky;
-                    if (firstHit) totalDist = depth;
+                    if (firstHit)
+                    {
+                        // Primary ray escaped: the whole pixel is sky.
+                        firstHitLighting += contribution * sky;
+                        totalDist = depth;
+                    }
+                    else secondaryLighting += contribution * sky;
                     break;
                 }
 
                 SDFObjectDTO sdf = sdfObjects[closestObjIndex];
+                bool isPrimaryHit = firstHit;
                 float3 normal;
                 float3 albedo;
                 float metallic;
@@ -1889,12 +1950,22 @@ namespace DivisionEngine
                 float aoStrength = sdf.aoValues.x;
                 cosTheta = math.max(math.dot(normal, viewDir), 0f);
 
-                if (firstHit)
+                if (isPrimaryHit)
                 {
                     outputNormal = normal;
                     totalDist = depth;
                     entityIdBuffer[pixel.x + pixel.y * (int)width] = new uint2((uint)closestObjIndex, sdf.entityID);
                     mainMat = sdf;
+                    primaryCosTheta = cosTheta;
+
+                    // Per-pixel material data for the denoiser. Roughness comes from the
+                    // roughness texture, so filtering tracks the smooth areas of a textured
+                    // material instead of a single value for the whole object.
+                    primaryRoughness = roughness;
+                    primaryMetallic = metallic;
+                    primaryFlags = (sdf.hasReflection == 1 ? 1 : 0)
+                        | (sdf.hasRefraction == 1 ? 2 : 0)
+                        | 4; // exact path: reflection/refraction channels are valid
 
                     // AO
                     ambientBase = math.lerp(albedo, worldData[0].skyColor.rgb, worldData[0].ambientStrength) * worldData[0].ambientStrength;
@@ -1923,7 +1994,11 @@ namespace DivisionEngine
                 float3 ambientLight = ambientBase * aoValue;
 
                 if (bounce == 0) surfaceColor = directLight;
-                finalColor += contribution * (ambientLight + directLight);
+
+                // First hit: stable shading that the denoiser leaves untouched. Later
+                // bounces: stochastic reflection radiance that the denoiser filters.
+                if (isPrimaryHit) firstHitLighting += contribution * (ambientLight + directLight);
+                else secondaryLighting += contribution * (ambientLight + directLight);
 
                 if (sdf.hasReflection == 0) break;
                 if (bounce == sdf.reflectionMaxBounces - 1) break;
@@ -1938,9 +2013,29 @@ namespace DivisionEngine
                 if (bounce == 0 && isRefractive) reflectionChance = fresnelFactor;
                 if (reflectionChance < MIN_REFLECTION_CHANCE) break;
 
+                if (bounce == 0) reflectionWeight = math.max(F.x, math.max(F.y, F.z)) * (1f - roughness * 0.5f);
+
                 contribution *= F * (1f - roughness * 0.5f);
                 contribution = math.min(contribution, 10f);
                 if (contribution.x + contribution.y + contribution.z < MIN_THROUGHPUT) break;
+
+                // Reflection budget: above this material's cutoff the lobe is too wide for
+                // one ray to sample usefully, so use a smooth environment approximation and
+                // spend no raymarch steps. Roughness is per pixel, so a roughness texture
+                // only traces reflections in its smoother areas.
+                if (roughness > sdf.reflectionCutoff)
+                {
+                    float3 approximate = contribution * ApproximateRoughReflection(
+                        rayDir, normal, finalNormal, roughness, aoValue);
+                    // Only the first bounce is part of the stable base shading. Later
+                    // bounces inherit the stochastic reflection ray direction, so they
+                    // must stay in the reflection channel or they would add sample noise
+                    // to a channel that is supposed to be noise-free.
+                    if (isPrimaryHit) approximatedReflection += approximate;
+                    else secondaryLighting += approximate;
+                    break;
+                }
+                if (bounce == 0) primaryFlags |= 8; // reflection was actually ray traced
 
                 int reflectionSampleIndex = pixel.x * 73 + pixel.y * 9277 + frameCount * 1973 + sampleIndexInPixel * 3271 + bounce * 997;
                 float2 u = PBR.Halton2D(reflectionSampleIndex);
@@ -1954,17 +2049,28 @@ namespace DivisionEngine
                 rayDir = reflectDir;
             }
 
-            float3 outputColor;
             if (isRefractive)
             {
-                // Proper Fresnel using Schlick
+                // Proper Fresnel using Schlick. This must use the primary hit's angle:
+                // cosTheta is overwritten on every reflection bounce, and using the last
+                // bounce's angle made the glass split (and therefore its base channel)
+                // depend on the stochastic reflection direction.
                 float3 f0 = new float3(1f) * mainMat.f0_dielectric;
-                float3 fresnel = PBR.FresnelSchlick(cosTheta, f0, mainMat.reflectance, 1f).x;
-                outputColor = finalColor * fresnel + refractedLight * (1f - fresnel);
+                float3 fresnel = PBR.FresnelSchlick(primaryCosTheta, f0, mainMat.reflectance, 1f).x;
+                baseColor = (firstHitLighting + approximatedReflection) * fresnel;
+                reflectionColor = secondaryLighting * fresnel;
+                refractionColor = refractedLight * (1f - fresnel);
             }
-            else outputColor = finalColor + surfaceColor;
+            else
+            {
+                // `surfaceColor` is the direct light at the first hit; the engine has always
+                // added it a second time at the end for non-refractive surfaces.
+                baseColor = firstHitLighting + surfaceColor + approximatedReflection;
+                reflectionColor = secondaryLighting;
+                refractionColor = new float3(0f);
+            }
 
-            return outputColor;
+            return baseColor + reflectionColor + refractionColor;
         }
 
         // --------------------
@@ -2183,7 +2289,13 @@ namespace DivisionEngine
             float2 uv = new float2(pixel.x, pixel.y) / new float2(width, height) * 2f - 1f; // UV math
             float3 rayOrigin = worldData[0].cameraOrigin;
 
-            float3 accumulatedColor = new float3(0f);
+            float3 accumulatedBase = new float3(0f);
+            float3 accumulatedReflection = new float3(0f);
+            float3 accumulatedRefraction = new float3(0f);
+            float accumulatedRoughness = 0f;
+            float accumulatedMetallic = 0f;
+            float accumulatedReflectionWeight = 0f;
+            int accumulatedFlags = 0;
             float3 accumulatedNormal = new float3(0f);
             float3 rayDir = new float3(0f);
             float accumulatedDistance = 0f;
@@ -2208,7 +2320,7 @@ namespace DivisionEngine
             // compile.
             bool ctssEdge = enableCtss == 1 && edgeMaskRead[pixel].r > 0.5f;
             bool subpixelGrid = enableCtss == 1 && ctssEdge;
-            int sampleCount = enableCtss == 1 ? (ctssEdge ? 4 : 1) : SAMPLES_PER_PIXEL;
+            int sampleCount = enableCtss == 1 ? (ctssEdge ? 4 : 1) : math.max(samplesPerPixel, 1);
             ctssSamples = enableCtss == 1 ? sampleCount : 0;
             ctssCoverage = ctssEdge ? 1f : 0f;
 
@@ -2226,32 +2338,48 @@ namespace DivisionEngine
                     worldData[0].camScreenDist, worldData[0].camForward, worldData[0].camRight, worldData[0].camUp);
 
                 // Automatically skip reflection bounces for non-reflective materials
-                float3 color = TraceRay(pixel, rayOrigin, sampleDir, sample,
-                    out float3 outputNormal, out float dist, out int tracedSteps);
+                TraceRay(pixel, rayOrigin, sampleDir, sample,
+                    out float3 outputNormal, out float dist, out int tracedSteps,
+                    out float3 baseColor, out float3 reflectionColor, out float3 refractionColor,
+                    out float roughness, out float metallic, out int flags, out float reflectionWeight);
                 steps += tracedSteps;
-                accumulatedColor += color;
+                accumulatedBase += baseColor;
+                accumulatedReflection += reflectionColor;
+                accumulatedRefraction += refractionColor;
+                accumulatedRoughness += roughness;
+                accumulatedMetallic += metallic;
+                accumulatedReflectionWeight += reflectionWeight;
+                accumulatedFlags |= flags;
                 accumulatedNormal += outputNormal;
                 accumulatedDistance += dist;
             }
 
             float maxPossibleDistance = worldData[0].farPlane - worldData[0].nearPlane;
             float invSamples = 1f / (float)sampleCount;
-            float3 finalColor = accumulatedColor * invSamples;
+            float3 baseRadiance = accumulatedBase * invSamples;
             float3 finalNormal = accumulatedNormal * invSamples;
             float finalDist = accumulatedDistance * invSamples;
 
-            // Debug visualization is shown linearly so the colours are readable.
-            if (enableCtss == 1 && ctssDebug == 1)
-                finalColor = new float3(math.saturate((float)ctssSamples / 8f), math.saturate(ctssCoverage), 0f);
-            else if (enableCtss == 1 && ctssDebug == 2)
-                finalColor = new float3(ctssCoverage, ctssCoverage, ctssCoverage);
-            // ACES tonemapping
-            else if (worldData[0].enableAces == 1)
-                finalColor = math.saturate(finalColor * (2.51f * finalColor + 0.03f) / (finalColor * (2.43f * finalColor + 0.59f) + 0.14f));
-
-            // Final
-            outputTexture[pixel] = new float4(finalColor, 1f);
+            // The colour target holds only the stable base shading; the resolve pass adds
+            // the denoised reflection/refraction channels back and applies the tonemapper.
+            outputTexture[pixel] = new float4(baseRadiance, 1f);
             depthNormals[pixel] = new float4(finalDist / maxPossibleDistance, finalNormal);
+
+            // Denoiser inputs. Roughness comes from the roughness texture at this pixel.
+            materialBuffer[pixel] = new float4(
+                accumulatedRoughness * invSamples,
+                accumulatedMetallic * invSamples,
+                (float)accumulatedFlags,
+                accumulatedReflectionWeight * invSamples);
+            reflectionTexture[pixel] = new float4(accumulatedReflection * invSamples, 1f);
+            refractionTexture[pixel] = new float4(accumulatedRefraction * invSamples, 1f);
+
+            // CTSS debug views are shown linearly, so they replace the base shading and the
+            // resolve pass is skipped for them.
+            if (enableCtss == 1 && ctssDebug == 1)
+                outputTexture[pixel] = new float4(math.saturate((float)ctssSamples / 8f), math.saturate(ctssCoverage), 0f, 1f);
+            else if (enableCtss == 1 && ctssDebug == 2)
+                outputTexture[pixel] = new float4(ctssCoverage, ctssCoverage, ctssCoverage, 1f);
 
             // Debugging:
             if (debugMode > 0)
@@ -2316,6 +2444,38 @@ namespace DivisionEngine
                             float scale = math.rcp(math.max(sdf.texTilingOffset.x, EPSILON));
                             float mipLevel = EstimateMipLevel(depth, scale, textureMetadata[sdf.albedoTexMetaID].resolution);
                             objColor = MipLevelColor(mipLevel);
+                        }
+                    }
+                    outputTexture[pixel] = new float4(objColor, 1);
+                }
+                else if (debugMode == 11) // Per-pixel roughness (from the material's roughness texture)
+                {
+                    float roughness = materialBuffer[pixel].x;
+                    outputTexture[pixel] = new float4(roughness, roughness, roughness, 1);
+                }
+                else if (debugMode == 12) // Material flags: R = reflection, G = refraction, B = reflection was traced
+                {
+                    int flags = (int)materialBuffer[pixel].z;
+                    outputTexture[pixel] = new float4(
+                        (flags & 1) != 0 ? 1f : 0f,
+                        (flags & 2) != 0 ? 1f : 0f,
+                        (flags & 8) != 0 ? 1f : 0f,
+                        1f);
+                }
+                else if (debugMode == 13) // Reflection cutoff mask: white = approximated, green = ray traced
+                {
+                    float3 objColor = new float3(0f);
+                    uint2 idData = entityIdBuffer[pixel.x + pixel.y * (int)width];
+                    if (idData.x != uint.MaxValue && (int)idData.x < sdfObjects.Length)
+                    {
+                        SDFObjectDTO sdf = sdfObjects[(int)idData.x];
+                        float roughness = materialBuffer[pixel].x;
+                        int flags = (int)materialBuffer[pixel].z;
+                        if ((flags & 1) != 0)
+                        {
+                            objColor = roughness > sdf.reflectionCutoff
+                                ? new float3(1f)                    // approximated: no reflection rays
+                                : new float3(0f, 0.35f, 0f);        // traced
                         }
                     }
                     outputTexture[pixel] = new float4(objColor, 1);
