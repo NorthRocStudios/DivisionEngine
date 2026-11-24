@@ -1833,24 +1833,6 @@ namespace DivisionEngine
         }
 
         /// <summary>
-        /// Cheap stand-in for a reflection ray on surfaces above the material's
-        /// reflection cutoff: one sky lookup in the mirror direction, widened towards
-        /// the normal for very rough lobes. No raymarch steps are added.
-        /// </summary>
-        private float3 ApproximateRoughReflection(float3 rayDir, float3 normal, float3 finalNormal,
-            float roughness, float aoValue)
-        {
-            float3 envDir = math.normalize(math.reflect(rayDir, finalNormal));
-            float3 env = GetSkyColor(envDir);
-
-            // A rough lobe gathers a much wider cone than the mirror direction, so blend
-            // towards the normal-facing sky instead of mirroring only the bright horizon.
-            float3 broad = GetSkyColor(normal);
-            env = math.lerp(env, broad, math.saturate((roughness - 0.35f) * 1.5f));
-            return env * math.lerp(1f, aoValue, 0.5f);
-        }
-
-        /// <summary>
         /// Traces a primary ray and returns the base shading, the stochastic reflection
         /// contribution and the refraction contribution as separate linear radiance
         /// values. The denoiser filters only the two secondary channels and adds them
@@ -1864,7 +1846,6 @@ namespace DivisionEngine
         {
             float3 firstHitLighting = new float3(0f);
             float3 secondaryLighting = new float3(0f);
-            float3 approximatedReflection = new float3(0f);
             float3 contribution = new float3(1f);
             float3 ambientBase = new float3(0f);
             float cosTheta = 0f;
@@ -2020,21 +2001,11 @@ namespace DivisionEngine
                 if (contribution.x + contribution.y + contribution.z < MIN_THROUGHPUT) break;
 
                 // Reflection budget: above this material's cutoff the lobe is too wide for
-                // one ray to sample usefully, so use a smooth environment approximation and
-                // spend no raymarch steps. Roughness is per pixel, so a roughness texture
-                // only traces reflections in its smoother areas.
-                if (roughness > sdf.reflectionCutoff)
-                {
-                    float3 approximate = contribution * ApproximateRoughReflection(
-                        rayDir, normal, finalNormal, roughness, aoValue);
-                    // Only the first bounce is part of the stable base shading. Later
-                    // bounces inherit the stochastic reflection ray direction, so they
-                    // must stay in the reflection channel or they would add sample noise
-                    // to a channel that is supposed to be noise-free.
-                    if (isPrimaryHit) approximatedReflection += approximate;
-                    else secondaryLighting += approximate;
-                    break;
-                }
+                // one ray to sample usefully, so spend no raymarch steps and add nothing.
+                // The base ambient/direct shading already carries the energy; sampling the
+                // sky here previously made rough surfaces look like a bright skybox and
+                // double-counted the ambient term.
+                if (roughness > sdf.reflectionCutoff) break;
                 if (bounce == 0) primaryFlags |= 8; // reflection was actually ray traced
 
                 int reflectionSampleIndex = pixel.x * 73 + pixel.y * 9277 + frameCount * 1973 + sampleIndexInPixel * 3271 + bounce * 997;
@@ -2057,7 +2028,7 @@ namespace DivisionEngine
                 // depend on the stochastic reflection direction.
                 float3 f0 = new float3(1f) * mainMat.f0_dielectric;
                 float3 fresnel = PBR.FresnelSchlick(primaryCosTheta, f0, mainMat.reflectance, 1f).x;
-                baseColor = (firstHitLighting + approximatedReflection) * fresnel;
+                baseColor = firstHitLighting * fresnel;
                 reflectionColor = secondaryLighting * fresnel;
                 refractionColor = refractedLight * (1f - fresnel);
             }
@@ -2065,7 +2036,7 @@ namespace DivisionEngine
             {
                 // `surfaceColor` is the direct light at the first hit; the engine has always
                 // added it a second time at the end for non-refractive surfaces.
-                baseColor = firstHitLighting + surfaceColor + approximatedReflection;
+                baseColor = firstHitLighting + surfaceColor;
                 reflectionColor = secondaryLighting;
                 refractionColor = new float3(0f);
             }

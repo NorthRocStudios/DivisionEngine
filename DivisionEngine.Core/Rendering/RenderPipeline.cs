@@ -254,7 +254,14 @@ namespace DivisionEngine.Rendering
         /// <summary>
         /// Is checkerboard rendering enabled (renders half the pixels each frame).
         /// </summary>
-        public static bool CheckerboardRenderingEnabled => !DeterministicCapture && (EngineSettings.Instance?.CheckerboardRendering ?? false);
+        public static bool CheckerboardRenderingEnabled => CheckerboardOverride
+            ?? (!DeterministicCapture && (EngineSettings.Instance?.CheckerboardRendering ?? false));
+
+        /// <summary>
+        /// Optional runtime override for checkerboard rendering. CLI tests use it to
+        /// exercise the editor's default half-resolution path without touching settings.
+        /// </summary>
+        public static bool? CheckerboardOverride { get; set; }
 
         /// <summary>
         /// Optional runtime override for the voxel rendering toggle. CLI test hooks use
@@ -338,11 +345,11 @@ namespace DivisionEngine.Rendering
         private RWTexture2D<float4>? prevDepthNormalsTex;
         private bool denoiseHistoryReady;
         private bool denoiseHistoryFlip;
-        private CameraFrame currentCameraFrame;
         private CameraFrame previousCameraFrame;
         private bool hasPreviousCameraFrame;
         private bool temporalDenoiseReported;
         private bool lastFrameWasVoxel;
+        private bool lastFrameCheckerboard;
         private Camera? lastRenderCamera;
 
         /// <summary>
@@ -1666,6 +1673,7 @@ namespace DivisionEngine.Rendering
 
                     // Checkerboard rendering toggle
                     int checkerboardEnabled = CheckerboardRenderingEnabled ? 1 : 0;
+                    int shaderFrameCount = FrameCountOverride ?? TimeSystem.FrameCount;
                     int dispatchWidth, dispatchHeight;
                     if (CheckerboardRenderingEnabled)
                     {
@@ -1707,7 +1715,7 @@ namespace DivisionEngine.Rendering
                         voxelShader.SetFloat("width", texWidth);
                         voxelShader.SetFloat("height", texHeight);
                         voxelShader.SetFloat("aspect", texWidth / (float)texHeight);
-                        voxelShader.SetInt("frameCount", FrameCountOverride ?? TimeSystem.FrameCount);
+                        voxelShader.SetInt("frameCount", shaderFrameCount);
                         voxelShader.SetInt("debugMode", (int)CurrentDebugMode);
                         voxelShader.SetInt("enableCheckerboard", checkerboardEnabled);
                         voxelClipmap!.Bind(voxelShader);
@@ -1751,7 +1759,7 @@ namespace DivisionEngine.Rendering
                         sdfShader.SetFloat("width", texWidth);
                         sdfShader.SetFloat("height", texHeight);
                         sdfShader.SetFloat("aspect", texWidth / (float)texHeight);
-                        sdfShader.SetInt("frameCount", FrameCountOverride ?? TimeSystem.FrameCount);
+                        sdfShader.SetInt("frameCount", shaderFrameCount);
                         sdfShader.SetInt("debugMode", (int)CurrentDebugMode);
                         sdfShader.SetInt("enableCheckerboard", checkerboardEnabled);
                         sdfShader.SetInt("enableCtss", ctssEnabled ? 1 : 0);
@@ -1940,6 +1948,11 @@ namespace DivisionEngine.Rendering
                         lastFrameWasVoxel = voxelPath;
                         lastRenderCamera = renderCamera;
 
+                        bool checkerboardNow = CheckerboardRenderingEnabled;
+                        if (checkerboardNow != lastFrameCheckerboard)
+                            ResetDenoiseHistory();
+                        lastFrameCheckerboard = checkerboardNow;
+
                         bool cameraJump = hasPreviousCameraFrame &&
                             (math.length(frame.position - previousCameraFrame.position) > 1f ||
                              math.dot(frame.forward, previousCameraFrame.forward) < 0.98f ||
@@ -1949,7 +1962,7 @@ namespace DivisionEngine.Rendering
                         bool temporalRan = false;
 
                         if (postCamera.enableDenoise && postCamera.denoiseStrength > 0f &&
-                            postCamera.enableTemporalDenoise && !CheckerboardRenderingEnabled &&
+                            postCamera.enableTemporalDenoise &&
                             historyReflectionA != null && historyReflectionB != null &&
                             historyRefractionA != null && historyRefractionB != null &&
                             prevDepthNormalsTex != null && depthNormalsTex != null)
@@ -1957,6 +1970,8 @@ namespace DivisionEngine.Rendering
                             DivisionShader temporal = GetShader(typeof(TemporalDenoiseShader));
                             temporal.SetFloat("width", texWidth);
                             temporal.SetFloat("height", texHeight);
+                            temporal.SetInt("checkerboard", CheckerboardRenderingEnabled ? 1 : 0);
+                            temporal.SetInt("framePass", (FrameCountOverride ?? TimeSystem.FrameCount) & 1);
                             temporal.SetInt("historyValid", temporalHistoryValid ? 1 : 0);
                             temporal.SetFloat("temporalAlpha",
                                 math.clamp(postCamera.denoiseTemporalWeight, 0.02f, 0.5f));
@@ -2005,6 +2020,7 @@ namespace DivisionEngine.Rendering
                             {
                                 temporalDenoiseReported = true;
                                 Debug.Info($"Renderer: temporal denoise active (alpha={postCamera.denoiseTemporalWeight:F2}, " +
+                                           $"checkerboard={CheckerboardRenderingEnabled}, " +
                                            $"history={(temporalHistoryValid ? "valid" : "first frame")})");
                             }
 
@@ -2527,6 +2543,7 @@ namespace DivisionEngine.Rendering
             hasPreviousCameraFrame = false;
             lastRenderCamera = null;
             lastFrameWasVoxel = false;
+            lastFrameCheckerboard = false;
             depthNormalsTex = null;
             lowResDepthTex = null;
             lowResRenderTex = null;

@@ -507,8 +507,9 @@ namespace DivisionEngine.Editor
                             denoiser and check it against a converged reference; writes noisy,
                             denoised, reference, mask and channel PNGs; exits 1 on failure
                             Options: --width N --height N --fixed-frame N --spp N
-                                     --reference-spp N --glass-cutoff F --no-temporal
-                                     --motion --out <dir> --no-gates
+                                     --reference-spp N --glass-cutoff F --rough-cutoff F
+                                     --rough-sphere --no-temporal --motion --out <dir>
+                                     --no-gates
                   info      Print engine/runtime information
                   nodetest  Run headless node graph model checks (registry, typed connections,
                             evaluation, cycle rejection, serialization); exits 1 on failure

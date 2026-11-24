@@ -73,6 +73,8 @@ namespace DivisionEngine.Editor
             int noisySpp = GetInt(args, "--spp", 2);
             int referenceSpp = GetInt(args, "--reference-spp", 32);
             float glassCutoff = GetFloat(args, "--glass-cutoff", 0.65f);
+            float roughCutoff = GetFloat(args, "--rough-cutoff", 0.65f);
+            bool includeRoughSphere = HasFlag(args, "--rough-sphere");
             bool temporal = !HasFlag(args, "--no-temporal");
             string outputDirectory = GetString(args, "--out", "artifacts/denoisetest")!;
             bool visualOnly = HasFlag(args, "--no-gates");
@@ -98,7 +100,7 @@ namespace DivisionEngine.Editor
             camera.enableTemporalDenoise = temporal;
             PostProcessing postProcess = world.QueryData<PostProcessing>().First().Item2;
             ConfigurePostProcessing(postProcess);
-            (uint slabId, float3 slabCenter, float3 slabSize) = BuildScene(world, glassCutoff);
+            (uint slabId, float3 slabCenter, float3 slabSize) = BuildScene(world, glassCutoff, roughCutoff, includeRoughSphere);
 
             RenderPipeline pipeline = new();
             if (!pipeline.BindCurrentWorld())
@@ -210,6 +212,9 @@ namespace DivisionEngine.Editor
             double denoisedTemporalStd = temporalStats.DenoisedStd;
             double noisyTemporalMotion = temporalStats.NoisyStep;
             double denoisedTemporalMotion = temporalStats.DenoisedStep;
+            double checkerboardTemporalStd = temporalStats.CheckerboardTemporalStd;
+            double checkerboardSpatialStd = temporalStats.CheckerboardSpatialStd;
+            double spatialTemporalStd = temporalStats.SpatialStd;
 
             // Optional moving-camera capture to eyeball temporal lag/ghosting.
             if (HasFlag(args, "--motion"))
@@ -220,8 +225,9 @@ namespace DivisionEngine.Editor
                 Transform cameraTransform = world.GetComponent<Transform>(cameraEntityId)!;
                 float3 start = cameraTransform.position;
                 RenderPipeline.FrameCountOverride = null;
+                RenderPipeline.CheckerboardOverride = true; // match the editor's default path
                 camera.enableDenoise = true;
-                camera.enableTemporalDenoise = true;
+                camera.enableTemporalDenoise = temporal;
                 pipeline.ResetDenoiseHistory();
                 for (int i = 0; i < 12; i++)
                 {
@@ -232,6 +238,7 @@ namespace DivisionEngine.Editor
                 cameraTransform.position = start;
                 camera.enableTemporalDenoise = temporal;
                 RenderPipeline.FrameCountOverride = FrozenFrame;
+                RenderPipeline.CheckerboardOverride = null;
                 pipeline.ResetDenoiseHistory();
                 Console.WriteLine($"denoisetest: wrote camera-motion frames to {motionDir}");
             }
@@ -248,8 +255,10 @@ namespace DivisionEngine.Editor
                 Report("refraction-only glass high-frequency energy", refractionOnlyNoisyHf, refractionOnlyDenoisedHf, percent: true),
                 Report("smooth glass high-frequency energy", smoothGlassNoisyHf, smoothGlassDenoisedHf, percent: true),
                 Report("ray steps per reflective pixel (open -> cutoff 0.4)", stepsOpen, stepsCut, percent: true),
-                Report("temporal std (secondary pixels, 8 live frames)", noisyTemporalStd, denoisedTemporalStd, percent: true),
+                Report("temporal std, secondary pixels (8 live frames)", noisyTemporalStd, denoisedTemporalStd, percent: true),
+                Report("temporal std, spatial denoise only", spatialTemporalStd, denoisedTemporalStd, percent: true),
                 Report("temporal frame-to-frame change", noisyTemporalMotion, denoisedTemporalMotion, percent: true),
+                Report("temporal std with checkerboard (spatial -> temporal)", checkerboardSpatialStd, checkerboardTemporalStd, percent: true),
             ];
             foreach (string line in lines) Console.WriteLine("  " + line);
             foreach (string line in bandLines) Console.WriteLine("  " + line);
@@ -301,6 +310,12 @@ namespace DivisionEngine.Editor
                     $"{noisyTemporalStd:F5} -> {denoisedTemporalStd:F5}");
                 Gate("temporal residual is small", denoisedTemporalStd <= 0.01,
                     $"{denoisedTemporalStd:F5}");
+                Gate("temporal improves on the spatial filter", denoisedTemporalStd <= spatialTemporalStd * 0.6,
+                    $"{spatialTemporalStd:F5} -> {denoisedTemporalStd:F5}");
+                Gate("temporal works with checkerboard rendering",
+                    checkerboardTemporalStd <= checkerboardSpatialStd * 0.5 &&
+                    checkerboardTemporalStd <= 0.01,
+                    $"{checkerboardSpatialStd:F5} -> {checkerboardTemporalStd:F5}");
             }
             Gate("no NaN/Inf", nanPixels == 0, $"{nanPixels} px");
             _ = slabCenter;
@@ -408,7 +423,8 @@ namespace DivisionEngine.Editor
         /// row of metal spheres from mirror to semi-rough, a row of glass spheres from
         /// polished to frosted (one refraction-only), and a textured metal slab.
         /// </summary>
-        private static (uint SlabId, float3 Center, float3 Size) BuildScene(World world, float glassCutoff)
+        private static (uint SlabId, float3 Center, float3 Size) BuildScene(World world, float glassCutoff,
+            float roughCutoff, bool includeRoughSphere)
         {
             // Diffuse floor and backdrop. Neither carries a Reflections/Refractions
             // component, so the denoiser must leave every one of their pixels intact.
@@ -439,6 +455,24 @@ namespace DivisionEngine.Editor
                         metallic = 1f,
                         roughness = metalRoughness[i],
                         reflectionCutoff = 0.65f,
+                    },
+                    reflections: true,
+                    refractions: false);
+            }
+
+            // A very rough metal sphere on the far left exercises the above-cutoff
+            // environment approximation (roughness 0.9 versus the default 0.65 cutoff).
+            // Opt-in because adding any SDF changes the scene's second-closest AO term,
+            // which would perturb the other gates' numbers.
+            if (includeRoughSphere)
+            {
+                AddSphere(world, "Metal 0.90", new float3(-8.6f, 1.2f, -0.5f), 1.0f,
+                    new SDFMaterial
+                    {
+                        albedoColor = new float4(0.82f, 0.84f, 0.88f, 1f),
+                        metallic = 1f,
+                        roughness = 0.9f,
+                        reflectionCutoff = roughCutoff,
                     },
                     reflections: true,
                     refractions: false);
@@ -621,8 +655,12 @@ namespace DivisionEngine.Editor
         {
             public double NoisyStd;
             public double DenoisedStd;
+            public double SpatialStd;
             public double NoisyStep;
             public double DenoisedStep;
+            public double SpatialStep;
+            public double CheckerboardTemporalStd;
+            public double CheckerboardSpatialStd;
             public float4[] NoisyStdMap = [];
             public float4[] DenoisedStdMap = [];
             public float4[] DenoisedLast = [];
@@ -639,7 +677,9 @@ namespace DivisionEngine.Editor
             int? savedFrameOverride = RenderPipeline.FrameCountOverride;
             bool savedDenoise = camera.enableDenoise;
             bool savedTemporal = camera.enableTemporalDenoise;
+            bool? savedCheckerboard = RenderPipeline.CheckerboardOverride;
             RenderPipeline.FrameCountOverride = null; // live samples vary per frame
+            RenderPipeline.CheckerboardOverride = false;
 
             const int warmup = 10;
             const int capture = 8;
@@ -659,20 +699,56 @@ namespace DivisionEngine.Editor
             for (int i = 0; i < capture; i++)
                 noisyFrames[i] = RenderSnapshot(pipeline, width, height, 1);
 
+            // Spatial filter only, same live samples, for an honest A/B of the temporal
+            // contribution (otherwise it is easy to credit the spatial filter for it).
+            camera.enableDenoise = true;
+            camera.enableTemporalDenoise = false;
+            pipeline.ResetDenoiseHistory();
+            float4[][] spatialFrames = new float4[capture][];
+            for (int i = 0; i < capture; i++)
+                spatialFrames[i] = RenderSnapshot(pipeline, width, height, 1);
+            camera.enableTemporalDenoise = true;
+
+            // The editor renders with checkerboard on by default, which refreshes only
+            // half of the pixels per frame. Verify accumulation still works there.
+            RenderPipeline.CheckerboardOverride = true;
+            camera.enableDenoise = true;
+            camera.enableTemporalDenoise = true;
+            pipeline.ResetDenoiseHistory();
+            for (int i = 0; i < warmup; i++)
+                pipeline.RenderFixedFrames(width, height, 1, 1.0 / 60.0);
+            float4[][] checkerboardTemporalFrames = new float4[capture][];
+            for (int i = 0; i < capture; i++)
+                checkerboardTemporalFrames[i] = RenderSnapshot(pipeline, width, height, 1);
+
+            camera.enableTemporalDenoise = false;
+            pipeline.ResetDenoiseHistory();
+            float4[][] checkerboardSpatialFrames = new float4[capture][];
+            for (int i = 0; i < capture; i++)
+                checkerboardSpatialFrames[i] = RenderSnapshot(pipeline, width, height, 1);
+
             camera.enableDenoise = savedDenoise;
             camera.enableTemporalDenoise = savedTemporal;
             RenderPipeline.FrameCountOverride = savedFrameOverride;
+            RenderPipeline.CheckerboardOverride = savedCheckerboard;
             pipeline.ResetDenoiseHistory();
 
             bool[] secondary = Or(masks.Reflection, masks.Refraction);
             (double denoisedStd, float4[] denoisedMap) = TemporalStd(denoisedFrames, secondary, width, height);
             (double noisyStd, float4[] noisyMap) = TemporalStd(noisyFrames, secondary, width, height);
+            (double spatialStd, _) = TemporalStd(spatialFrames, secondary, width, height);
+            (double checkerboardTemporalStd, _) = TemporalStd(checkerboardTemporalFrames, secondary, width, height);
+            (double checkerboardSpatialStd, _) = TemporalStd(checkerboardSpatialFrames, secondary, width, height);
             return new TemporalSeries
             {
                 NoisyStd = noisyStd,
                 DenoisedStd = denoisedStd,
+                SpatialStd = spatialStd,
                 NoisyStep = FrameDelta(noisyFrames, secondary, width, height),
                 DenoisedStep = FrameDelta(denoisedFrames, secondary, width, height),
+                SpatialStep = FrameDelta(spatialFrames, secondary, width, height),
+                CheckerboardTemporalStd = checkerboardTemporalStd,
+                CheckerboardSpatialStd = checkerboardSpatialStd,
                 NoisyStdMap = noisyMap,
                 DenoisedStdMap = denoisedMap,
                 DenoisedLast = denoisedFrames[capture - 1],

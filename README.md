@@ -388,38 +388,46 @@ accumulates the denoised reflection/refraction channels over frames:
 - the history colour is clamped to the current frame's local min/max, so stale or
   disoccluded content cannot leave a trail;
 - the current-frame weight is 0.08 for a static camera (strong accumulation), and
-  rises towards 0.5 with reprojected motion so moving edges do not lag.
+  rises towards 0.5 with reprojected motion so moving edges do not lag;
+- under checkerboard rendering, the half of the frame that was not refreshed keeps
+  its accumulated result unchanged and refreshes on the next frame, so the editor's
+  default half-resolution path gets the same stability.
 
 A single dispatch per frame, two ping-pong history textures per channel and one
 previous depth-normal copy implement it. The history is reset on resize, world
 rebind, camera switch, render-path switch and between headless test configurations.
 
+Two details matter for stationary accumulation to actually converge: the depth
+buffer stores **ray distance**, so validation must compare ray lengths (not forward
+depth, which differs by 1/cos at the edge of the frame), and the reprojected sample
+must be the pixel containing the projected point (rounding `pixel + 0.5` up samples
+the neighbouring pixel and produces a subtle blur/ghost instead of accumulation).
+
 ### Reflection cutoff (`SDFMaterial`)
 
 `SDFMaterial.reflectionCutoff` (0-1, default **0.65**) is evaluated **per pixel**
-from the roughness texture. Pixels above it skip reflection ray tracing entirely
-and use a cheap environment approximation (a sky lookup in the mirror direction,
-widened toward the normal for very rough lobes), so no raymarch steps are spent on
-lobes that a single ray cannot sample usefully. Because the test is per pixel, a
-roughness texture only traces - and therefore only denoises - its smoother areas;
-the rough texels use the smooth approximation and are left untouched by the filter.
+from the roughness texture. Pixels above it skip reflection ray tracing entirely and
+add **no reflection contribution**: their shading is the base ambient/direct term.
+The earlier version sampled the sky here, which made rough surfaces look like they
+were reflecting a bright skybox and double-counted the ambient term; removing it
+keeps a rough metal's brightness governed by the lighting that is already in the
+base. Because the test is per pixel, a roughness texture only traces - and therefore
+only denoises - its smoother areas; the rough texels are left untouched by the filter.
 
 The camera component exposes the matching unified controls: **Enable Denoise**,
 **Denoise Strength**, **Denoise Passes** (reflection A-Trous scales),
 **Refraction Denoise Passes** (frost blur scales), **Enable Temporal Denoise** and
 **Temporal Weight** (lower = more stable, higher = less motion lag).
 
-Two long-standing bugs were fixed as part of the split:
+One long-standing bug was fixed as part of the split:
 
 - the glass Fresnel split used `cosTheta` from the *last* reflection bounce rather
   than the primary hit, so a glass surface's reflectivity varied with the
-  stochastic ray direction and its "stable" base channel was noisy;
-- environment approximations evaluated on secondary reflection bounces were added
-  to the base channel, which gave the same symptom on rough surfaces seen in
-  reflections.
+  stochastic ray direction and its "stable" base channel was noisy.
 
-Both are now evaluated from the primary hit / routed to the reflection channel, so
-the base is genuinely noise-free.
+That is now evaluated from the primary hit, so the base is genuinely noise-free.
+Above-cutoff pixels no longer add a sky approximation to the base either, so rough
+surfaces are lit by ambient/direct only instead of a bright skybox-like term.
 
 ### Measured results
 
@@ -434,25 +442,27 @@ versus the reference:
 
 | Check | Before (noisy) | After (denoised) | Change |
 | --- | ---: | ---: | ---: |
-| Metal reflection RMSE, all traced pixels | 0.02503 | 0.01385 | **-45%** |
-| Metal reflection RMSE, roughness 0.12-0.6 | 0.04848 | 0.02455 | **-49%** |
+| Metal reflection RMSE, all traced pixels | 0.02503 | 0.01600 | **-36%** |
+| Metal reflection RMSE, roughness 0.12-0.6 | 0.04848 | 0.03002 | **-38%** |
 | Mirror RMSE, roughness < 0.12 | 0.01133 | 0.01132 | ~0% |
 | Metal RMSE, roughness 0.10-0.25 | 0.03562 | 0.02731 | -23% |
-| Metal RMSE, roughness 0.25-0.45 | 0.04274 | 0.02736 | -36% |
-| Metal RMSE, roughness 0.45-0.70 | 0.05413 | 0.02004 | **-63%** |
+| Metal RMSE, roughness 0.25-0.45 | 0.04274 | 0.03496 | -18% |
+| Metal RMSE, roughness 0.45-0.70 | 0.05413 | 0.02229 | **-59%** |
 | Frosted-glass high-frequency energy | 0.04685 | 0.02535 | **-46%** |
 | Refraction-only glass high-frequency energy | 0.05442 | 0.03169 | **-42%** |
 | Smooth glass high-frequency energy | 0.02511 | 0.02466 | -2% (stays sharp) |
-| Temporal std, secondary pixels (8 live frames) | 0.00749 | 0.00145 | **-81%** |
-| Temporal frame-to-frame change | 0.00815 | 0.00151 | **-81%** |
+| Temporal std, secondary pixels (8 live frames) | 0.00749 | 0.00028 | **-96%** |
+| Temporal std, spatial filter only (same sequence) | 0.00170 | 0.00028 | **-84%** |
+| Temporal std, checkerboard path | 0.00151 | 0.00021 | **-86%** |
+| Temporal frame-to-frame change | 0.00815 | 0.00021 | **-97%** |
 | Ray steps per reflective pixel, cutoff 1.0 -> 0.4 | 0.3126 | 0.2608 | **-17%** |
 | Diffuse/sky pixels changed by the filter | - | **0** of 188,316 | bit-identical |
 | Rough (above-cutoff) texels changed | - | **0** of 5,883 | not denoised (2-px block edges excluded) |
 | NaN/Inf pixels | - | 0 | - |
 
-The denoiser costs about **2 ms/frame at 1280x720** including temporal accumulation:
-`--cli bench --width 1280 --height 720` reports about 47.7 ms with it enabled versus
-47.0 ms with `--no-denoise` (the exact SDF pass dominates, and run-to-run GPU clock
+The denoiser costs about **2.5 ms/frame at 1280x720** including temporal accumulation:
+`--cli bench --width 1280 --height 720` reports about 49.3 ms with it enabled versus
+46.7 ms with `--no-denoise` (the exact SDF pass dominates, and run-to-run GPU clock
 variance is of the same order as the denoiser cost).
 
 ### Command line
@@ -469,6 +479,10 @@ DivisionEngine.Editor.exe --cli denoisetest --motion --out artifacts/denoisetest
 
 # Compare temporal accumulation with the spatial filter alone
 DivisionEngine.Editor.exe --cli denoisetest --no-temporal --out artifacts/denoisetest-spatial
+
+# Very rough metal sphere above the cutoff (base shading) versus traced (cutoff 1.0)
+DivisionEngine.Editor.exe --cli denoisetest --rough-sphere --no-gates --out artifacts/denoisetest-rough
+DivisionEngine.Editor.exe --cli denoisetest --rough-sphere --rough-cutoff 1 --no-gates --out artifacts/denoisetest-rough-traced
 
 # Render the debug views directly
 DivisionEngine.Editor.exe --cli shot --debug-mode 11 --out roughness.png   # per-pixel roughness
@@ -490,20 +504,28 @@ DivisionEngine.Editor.exe --cli shot --no-post --out raw-sdf.png
   disocclusion trails, but a fast-moving object or a reflection of one can leave a
   short ghost. Lower the temporal weight, or disable temporal denoising on the
   camera for those shots.
-- Checkerboard rendering disables temporal accumulation because the unrendered half
-  of the frame has no current depth/material data.
+- Checkerboard rendering is supported: a pixel that was not refreshed this frame
+  carries its accumulated reflection/refraction history forward unchanged, and
+  refreshes again on the next frame. The denoise test measures this path explicitly
+  because it is the editor's default.
 - Twelve full-resolution `float4` denoise targets are allocated: the spatial targets
   (material G-buffer, reflection/refraction originals, two ping-pong pairs) and the
   temporal targets (two history pairs and the previous depth-normal copy). That is
   about 177 MB at 1280x720 and roughly 1.6 GB at 4K.
-- The reflection cutoff approximation samples the sky only; it does not account for
-  nearby geometry, so a very rough metal surface above the cutoff can look brighter
-  than a fully converged ray-traced reference. Lower the cutoff for a closer match
-  and raise it for more reflection detail.
+- Above the reflection cutoff no reflection contribution is added at all; a very
+  rough metal therefore relies on the ambient/direct base and can look flatter (and
+  slightly darker) than a fully converged reference. Lower the cutoff to trace more
+  rough pixels, or raise it to save raymarch steps.
+- With checkerboard rendering, half of the pixels are one frame old by design, so
+  fast camera motion shows the same half-rate edge lag as the checkerboard base
+  image; this is independent of temporal accumulation.
 - The converged reference traces sharp refraction, while frosted glass deliberately
   blurs the refraction channel in screen space. The quality gate therefore judges
   glass by its frost (high-frequency energy) rather than by pixel error against that
   reference.
+- The voxel clipmap path still uses the old sky lookup above the reflection cutoff
+  (it is a separate preview shader with a long optimized compile); the exact path
+  skips the reflection entirely.
 - The voxel clipmap path feeds its whole shaded colour through the reflection
   channel (it has no separate reflection/refraction split yet), so it is denoised
   like the old full-colour path rather than with the material-aware split.

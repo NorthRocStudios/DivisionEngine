@@ -104,11 +104,13 @@ namespace DivisionEngine.Components.SDFs
         [Tooltip("Raymarched reflection intensity, useful for combining with refractions")]
         [Min(0f)] public float reflectance = 2f;
         /// <summary>
-        /// Roughness above which a pixel skips reflection ray tracing. Smoother pixels on
-        /// the same material still trace reflections, so a roughness texture only produces
-        /// real reflections (and denoising) in its smooth areas.
+        /// Roughness above which a pixel skips reflection ray tracing entirely. The base
+        /// ambient/direct shading still lights it, but no sky lookup is added (that made
+        /// rough surfaces look like a bright skybox and double-counted ambient). Smoother
+        /// pixels on the same material still trace reflections, so a roughness texture only
+        /// produces real reflections (and denoising) in its smooth areas.
         /// </summary>
-        [Tooltip("Roughness above which reflections are approximated instead of ray traced. " +
+        [Tooltip("Roughness above which reflections are skipped (base ambient/direct only). " +
                  "Evaluated per pixel, so a roughness texture only traces its smoother areas.")]
         [Range(0f, 1f)] public float reflectionCutoff = 0.65f;
         /// <summary>

@@ -55,6 +55,12 @@ namespace DivisionEngine.Rendering.Denoising
         /// <summary>Minimum normal dot for accepting a history sample.</summary>
         public float normalTolerance;
 
+        /// <summary>1 when the SDF pass rendered only half of the pixels this frame.</summary>
+        public int checkerboard;
+
+        /// <summary>Checkerboard phase used by the SDF pass this frame.</summary>
+        public int framePass;
+
         /// <summary>Current camera position.</summary>
         public float3 cameraPosition;
 
@@ -146,6 +152,30 @@ namespace DivisionEngine.Rendering.Denoising
             int2 pixel = new int2((int)id.x, (int)id.y);
             if (pixel.x >= (int)width || pixel.y >= (int)height) return;
 
+            // Checkerboard rendering refreshes only half of the pixels each frame. A pixel
+            // that was not rendered has no fresh depth/material data, so its accumulated
+            // result is carried forward unchanged; the spatial filter output for it is
+            // stale and must not be blended in. This is what lets temporal accumulation
+            // run with the editor's default checkerboard rendering.
+            if (checkerboard == 1)
+            {
+                int expectedParity = framePass ^ (pixel.y & 1);
+                if ((pixel.x & 1) != expectedParity)
+                {
+                    if (historyValid == 1)
+                    {
+                        outputReflection[pixel] = historyReflection[pixel];
+                        outputRefraction[pixel] = historyRefraction[pixel];
+                    }
+                    else
+                    {
+                        outputReflection[pixel] = currentReflection[pixel];
+                        outputRefraction[pixel] = currentRefraction[pixel];
+                    }
+                    return;
+                }
+            }
+
             int objectIndex = (int)objectIdBuffer[pixel.x + pixel.y * (int)width].x;
             float3 currentRefl = currentReflection[pixel].rgb;
             float3 currentRefr = currentRefraction[pixel].rgb;
@@ -166,7 +196,8 @@ namespace DivisionEngine.Rendering.Denoising
 
             // Reconstruct the world-space position of this pixel and project it into the
             // previous camera. For a static scene this is an exact reprojection.
-            float2 uv = new float2((float)pixel.x, (float)pixel.y) / new float2(width, height) * 2f - 1f;
+            float2 uv = (new float2((float)pixel.x + 0.5f, (float)pixel.y + 0.5f)
+                / new float2(width, height)) * 2f - 1f;
             float3 rayDir = math.normalize(cameraForward
                 + cameraRight * (uv.x * aspect * camScreenDist)
                 + cameraUp * (uv.y * camScreenDist));
@@ -187,15 +218,22 @@ namespace DivisionEngine.Rendering.Denoising
                     math.dot(relative, prevCameraUp) / (prevZ * prevCamScreenDist));
                 prevPixelF = (prevUv * 0.5f + 0.5f) * new float2(width, height);
                 int2 prevPixel = new int2(
-                    (int)math.floor(prevPixelF.x + 0.5f),
-                    (int)math.floor(prevPixelF.y + 0.5f));
+                    (int)math.floor(prevPixelF.x),
+                    (int)math.floor(prevPixelF.y));
 
                 if (prevPixel.x >= 0 && prevPixel.x < (int)width &&
                     prevPixel.y >= 0 && prevPixel.y < (int)height)
                 {
                     float4 prevDn = prevDepthNormals[prevPixel];
+                    // depthNormals.x is the ray length from the camera, normalised by the
+                    // depth range. Compare it against the ray length of the reprojected
+                    // point, not against its forward depth: at the edge of the screen the
+                    // two differ by 1/cos(angle) and the mismatch rejected almost every
+                    // pixel outside the centre of the frame.
                     float prevLinear = prevDn.x * (prevFarPlane - prevNearPlane);
-                    float depthError = math.abs(prevLinear - prevZ) / math.max(prevZ, 0.001f);
+                    float currentDistance = math.length(relative);
+                    float depthError = math.abs(prevLinear - currentDistance) /
+                        math.max(currentDistance, 0.001f);
                     float normalDot = math.dot(normal, prevDn.yzw);
                     float4 previous = historyReflection[prevPixel];
                     int previousId = (int)(previous.a + 0.5f) - 1;
