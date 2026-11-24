@@ -509,7 +509,7 @@ namespace DivisionEngine.Editor
                             Options: --width N --height N --fixed-frame N --spp N
                                      --reference-spp N --glass-cutoff F --rough-cutoff F
                                      --rough-sphere --no-temporal --motion --out <dir>
-                                     --no-gates
+                                     --no-gates --nan-test --donut-test
                   info      Print engine/runtime information
                   nodetest  Run headless node graph model checks (registry, typed connections,
                             evaluation, cycle rejection, serialization); exits 1 on failure

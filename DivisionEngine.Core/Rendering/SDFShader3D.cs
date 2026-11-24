@@ -125,6 +125,41 @@ namespace DivisionEngine
         const float MIN_REFLECTION_CHANCE = 0.01f;
         const float MIN_THROUGHPUT = 0.01f;
         const float REFLECTION_BIAS = 2f; // Multiplier for normal offset
+
+        /// <summary>
+        /// True when a value is neither NaN nor Inf. `value != value` is used because it
+        /// survives optimisation better than a NaN-specific intrinsic.
+        /// </summary>
+        private static bool IsFinite(float value)
+        {
+            return value == value && math.abs(value) < 1e30f;
+        }
+
+        private static bool IsFinite(float3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        /// <summary>Replaces non-finite radiance with zero so it cannot poison the denoiser.</summary>
+        private static float3 Sanitize(float3 value)
+        {
+            if (!IsFinite(value)) return new float3(0f);
+            return value;
+        }
+
+        /// <summary>
+        /// Sanitises and softly caps a radiance value. A single extremely bright HDRI or
+        /// close point-light sample is otherwise stored as a black/white block by the
+        /// firefly clamp and can spill into neighbouring pixels for several frames.
+        /// </summary>
+        private static float3 ClampRadiance(float3 value, float maximumLuminance)
+        {
+            value = Sanitize(value);
+            float luminance = 0.2126f * value.x + 0.7152f * value.y + 0.0722f * value.z;
+            if (luminance > maximumLuminance && luminance > 0f)
+                value *= maximumLuminance / luminance;
+            return value;
+        }
         /// <summary>
         /// Maximum shadow-ray length passed for directional lights. Point lights pass the
         /// distance to the light instead, so their shadow rays stop at the light and do not
@@ -226,6 +261,8 @@ namespace DivisionEngine
         private float4 SampleTextureBilinearMip(int textureId, float2 uv, int mipLevel, float4 fallbackColor)
         {
             if (textureId < 0 || textureId >= textureMetadata.Length) return fallbackColor;
+            if (!IsFinite(uv.x) || !IsFinite(uv.y)) return fallbackColor;
+            uv = new float2(math.clamp(uv.x, -1e6f, 1e6f), math.clamp(uv.y, -1e6f, 1e6f));
             TextureMetadata meta = textureMetadata[textureId];
             GetMipInfo(meta, mipLevel, out int offset, out int2 res);
 
@@ -962,15 +999,20 @@ namespace DivisionEngine
                 else if (light.type == 1) // Point
                 {
                     float3 lightVec = light.position - hitPoint;
-                    float distance = math.length(lightVec);
-                    float3 lightDir = lightVec / distance;
-                    float attenuation = math.rcp(distance * distance);
+                    // A point light sitting on (or inside) a surface would otherwise divide
+                    // by zero and produce NaN/Inf radiance and black blocks after denoising.
+                    float distanceSq = math.max(math.dot(lightVec, lightVec), 0.0025f);
+                    float distance = math.sqrt(distanceSq);
+                    float3 lightDir = lightVec * math.rsqrt(distanceSq);
+                    if (!IsFinite(lightDir)) lightDir = geoNormal;
+                    float attenuation = math.min(math.rcp(distanceSq), 1000f);
                     float radiusFactor = math.saturate(1f - (distance / light.radius));
                     attenuation *= radiusFactor;
 
                     float NoL = math.max(math.dot(finalNormal, lightDir), 0f);
                     if (NoL <= 0f || attenuation <= 0f) continue;
                     float3 lightColor = light.color.rgb * light.intensity * attenuation;
+                    lightColor = ClampRadiance(lightColor, 512f);
 
                     // Calculate shadow for point light. The ray must stop at the light:
                     // without this, any object behind the light is marched into and
@@ -1509,17 +1551,34 @@ namespace DivisionEngine
             if (texId < 0 || texId >= textureMetadata.Length)
                 return world.skyColor.rgb * world.skyIntensity; // fallback
 
+            float3 fallback = world.skyColor.rgb * world.skyIntensity;
+            if (!IsFinite(viewDir))
+                return fallback;
+
             int layout = textureMetadata[texId].cubemapLayout;
-            float3 color = SampleCubemap(texId, viewDir, layout);
-            return color * world.skyIntensity;
+            float3 sampled = SampleCubemap(texId, viewDir, layout);
+            if (!IsFinite(sampled))
+                return fallback;
+            return sampled * world.skyIntensity;
         }
 
         private float3 SampleCubemap(int texId, float3 direction, int layout)
         {
+            // Normalise defensively. A degenerate HDR lookup direction (or one produced by
+            // a bad normal) used to turn into a NaN UV, an out-of-bounds texel fetch and a
+            // black square that the denoiser then smeared over its 5x5 kernel.
+            float directionLength = math.length(direction);
+            if (!IsFinite(directionLength) || directionLength < 1e-6f)
+                return new float3(0f);
+            direction = direction / directionLength;
+
             if (layout == 1) // For Equirectangular (panorama)
             {
+                // acos(1.0000001) is NaN; clamp the pole so a straight-up reflection does
+                // not produce a NaN texel.
+                float poleY = math.clamp(direction.y, -0.99999f, 0.99999f);
                 float theta = math.atan2(direction.z, direction.x); // -PI to PI
-                float phi = math.acos(direction.y); // 0 to PI
+                float phi = math.acos(poleY); // 0 to PI
                 float u = (theta + PI) / (2f * PI);
                 float v = phi / PI;
                 return SampleTextureBilinear(texId, new float2(u, v), new float4(0f)).rgb;
@@ -2273,6 +2332,7 @@ namespace DivisionEngine
             int steps = 0;
             int ctssSamples = 0;
             float ctssCoverage = 0f;
+            int validSamples = 0;
 
             // The primary renderer samples on pixel corners. Cone-traced pixels sample
             // through the pixel centre so the 2x2 subpixel grid is aligned with the
@@ -2314,22 +2374,34 @@ namespace DivisionEngine
                     out float3 baseColor, out float3 reflectionColor, out float3 refractionColor,
                     out float roughness, out float metallic, out int flags, out float reflectionWeight);
                 steps += tracedSteps;
-                accumulatedBase += baseColor;
-                accumulatedReflection += reflectionColor;
-                accumulatedRefraction += refractionColor;
+
+                // Never let one bad sample (zero-distance light, degenerate HDRI lookup,
+                // non-finite normal) poison the pixel average and then the 5x5 denoiser
+                // kernel. Invalid samples are dropped and the average is renormalised.
+                if (!IsFinite(baseColor) || !IsFinite(reflectionColor) || !IsFinite(refractionColor) ||
+                    !IsFinite(outputNormal) || !IsFinite(dist) || !IsFinite(roughness) ||
+                    !IsFinite(metallic) || !IsFinite(reflectionWeight))
+                    continue;
+
+                accumulatedBase += Sanitize(baseColor);
+                accumulatedReflection += ClampRadiance(reflectionColor, 64f);
+                accumulatedRefraction += ClampRadiance(refractionColor, 64f);
                 accumulatedRoughness += roughness;
                 accumulatedMetallic += metallic;
                 accumulatedReflectionWeight += reflectionWeight;
                 accumulatedFlags |= flags;
                 accumulatedNormal += outputNormal;
                 accumulatedDistance += dist;
+                validSamples++;
             }
 
             float maxPossibleDistance = worldData[0].farPlane - worldData[0].nearPlane;
-            float invSamples = 1f / (float)sampleCount;
-            float3 baseRadiance = accumulatedBase * invSamples;
-            float3 finalNormal = accumulatedNormal * invSamples;
-            float finalDist = accumulatedDistance * invSamples;
+            float invSamples = validSamples > 0 ? 1f / (float)validSamples : 0f;
+            float3 baseRadiance = ClampRadiance(accumulatedBase * invSamples, 2048f);
+            float3 finalNormal = Sanitize(accumulatedNormal * invSamples);
+            if (math.dot(finalNormal, finalNormal) < 1e-8f)
+                finalNormal = -rayDir;
+            float finalDist = IsFinite(accumulatedDistance * invSamples) ? accumulatedDistance * invSamples : 0f;
 
             // The colour target holds only the stable base shading; the resolve pass adds
             // the denoised reflection/refraction channels back and applies the tonemapper.
@@ -2342,8 +2414,8 @@ namespace DivisionEngine
                 accumulatedMetallic * invSamples,
                 (float)accumulatedFlags,
                 accumulatedReflectionWeight * invSamples);
-            reflectionTexture[pixel] = new float4(accumulatedReflection * invSamples, 1f);
-            refractionTexture[pixel] = new float4(accumulatedRefraction * invSamples, 1f);
+            reflectionTexture[pixel] = new float4(ClampRadiance(accumulatedReflection * invSamples, 64f), 1f);
+            refractionTexture[pixel] = new float4(ClampRadiance(accumulatedRefraction * invSamples, 64f), 1f);
 
             // CTSS debug views are shown linearly, so they replace the base shading and the
             // resolve pass is skipped for them.

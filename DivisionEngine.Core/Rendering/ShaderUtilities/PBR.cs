@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
 // This file is part of Division Engine and is subject to the terms
@@ -143,7 +143,11 @@ namespace DivisionEngine.Rendering.ShaderUtilities
         {
             float NoV = math.saturate(math.dot(finalNormal, viewDir));
             float NoL = math.saturate(math.dot(finalNormal, lightDir));
-            float3 halfwayDir = math.normalize(viewDir + lightDir);
+            float3 halfwayVector = viewDir + lightDir;
+            float halfwayLengthSq = math.dot(halfwayVector, halfwayVector);
+            float3 halfwayDir = halfwayLengthSq > 1e-8f
+                ? halfwayVector * math.rsqrt(halfwayLengthSq)
+                : finalNormal;
             float VoH = math.saturate(math.dot(viewDir, halfwayDir));
             float NoH = math.saturate(math.dot(finalNormal, halfwayDir));
 

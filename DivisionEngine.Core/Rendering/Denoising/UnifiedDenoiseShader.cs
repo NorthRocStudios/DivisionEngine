@@ -80,6 +80,22 @@ namespace DivisionEngine.Rendering.Denoising
         /// <summary>Filtered reflection target for this pass.</summary>
         [ShaderResource] public RWTexture2D<float4> outputReflection;
 
+        private static bool IsFinite(float value)
+        {
+            return value == value && math.abs(value) < 1e30f;
+        }
+
+        private static bool IsFinite(float3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static float3 Sanitize(float3 value)
+        {
+            if (!IsFinite(value)) return new float3(0f);
+            return value;
+        }
+
         /// <summary>Filtered refraction target for this pass.</summary>
         [ShaderResource] public RWTexture2D<float4> outputRefraction;
 
@@ -100,25 +116,37 @@ namespace DivisionEngine.Rendering.Denoising
             if (pixel.x >= (int)width || pixel.y >= (int)height) return;
 
             float4 centerMaterial = materialBuffer[pixel];
-            int flags = (int)centerMaterial.z;
+            int flags = IsFinite(centerMaterial.z) ? (int)centerMaterial.z : 0;
             int centerObject = (int)objectIdBuffer[pixel.x + pixel.y * (int)width].x;
-            float3 centerReflection = inputReflection[pixel].rgb;
-            float3 centerRefraction = inputRefraction[pixel].rgb;
+            bool centerReflectionValid = IsFinite(inputReflection[pixel].rgb);
+            bool centerRefractionValid = IsFinite(inputRefraction[pixel].rgb);
+            float3 centerReflection = Sanitize(inputReflection[pixel].rgb);
+            float3 centerRefraction = Sanitize(inputRefraction[pixel].rgb);
 
             // Pixels that carry no secondary radiance are passed through untouched: the
             // sky and purely diffuse materials therefore keep every bit of detail.
             bool hasSecondary = filterRefraction == 1 ? (flags & 2) != 0 : (flags & 1) != 0;
             if (centerObject < 0 || !hasSecondary)
             {
-                if (filterRefraction == 1) outputRefraction[pixel] = inputRefraction[pixel];
-                else outputReflection[pixel] = inputReflection[pixel];
+                float alpha = IsFinite(inputReflection[pixel].a) ? inputReflection[pixel].a : 0f;
+                if (filterRefraction == 1)
+                    outputRefraction[pixel] = new float4(centerRefraction, IsFinite(inputRefraction[pixel].a) ? inputRefraction[pixel].a : 1f);
+                else
+                    outputReflection[pixel] = new float4(centerReflection, alpha);
                 return;
             }
 
             float4 centerDN = depthNormals[pixel];
             float centerDepth = centerDN.x;
             float3 centerNormal = centerDN.yzw;
-            float centerRoughness = centerMaterial.x;
+            float centerRoughness = IsFinite(centerMaterial.x) ? math.saturate(centerMaterial.x) : 0.5f;
+            if (!IsFinite(centerDepth) || !IsFinite(centerNormal) || centerDepth <= 0f)
+            {
+                // Without reliable geometry there is nothing safe to filter against.
+                if (filterRefraction == 1) outputRefraction[pixel] = new float4(centerRefraction, 1f);
+                else outputReflection[pixel] = new float4(centerReflection, 0f);
+                return;
+            }
 
             // How much of this pass applies at this roughness. Low roughness keeps the
             // sharp mirror image (only the tight first scales apply); as the lobe widens,
@@ -135,8 +163,8 @@ namespace DivisionEngine.Rendering.Denoising
             float activeStrength = (filterRefraction == 1 ? refractionStrength : reflectionStrength) * strength;
             if (activeStrength <= 0.0001f)
             {
-                if (filterRefraction == 1) outputRefraction[pixel] = inputRefraction[pixel];
-                else outputReflection[pixel] = inputReflection[pixel];
+                if (filterRefraction == 1) outputRefraction[pixel] = new float4(centerRefraction, 1f);
+                else outputReflection[pixel] = new float4(centerReflection, 0f);
                 return;
             }
 
@@ -176,20 +204,29 @@ namespace DivisionEngine.Rendering.Denoising
                             continue;
 
                         float4 sampleDN = depthNormals[samplePixel];
+                        if (!IsFinite(sampleDN.x) || !IsFinite(sampleDN.yzw)) continue;
+                        float sampleRoughness = materialBuffer[samplePixel].x;
+                        if (!IsFinite(sampleRoughness)) continue;
+                        float3 sampleColor = inputReflection[samplePixel].rgb;
+                        if (!IsFinite(sampleColor)) continue;
                         float depthDiff = math.abs(sampleDN.x - centerDepth) / math.max(centerDepth, 1e-5f);
                         float depthSigma = 0.03f + 0.15f * centerRoughness;
                         float depthWeight = math.exp(-(depthDiff * depthDiff) / (2f * depthSigma * depthSigma));
                         float normalDot = math.saturate(math.dot(centerNormal, sampleDN.yzw));
                         float normalWeight = math.pow(normalDot, normalExponent);
-                        float sampleRoughness = materialBuffer[samplePixel].x;
                         float roughnessDiff = sampleRoughness - centerRoughness;
                         float roughnessWeight = math.exp(-(roughnessDiff * roughnessDiff) / (2f * 0.11f * 0.11f));
                         float structuralWeight = depthWeight * normalWeight * roughnessWeight;
-                        localLuma += Luminance(inputReflection[samplePixel].rgb) * structuralWeight;
+                        localLuma += Luminance(sampleColor) * structuralWeight;
                         localWeight += structuralWeight;
                     }
                 }
                 localLuma = localLuma / math.max(localWeight, 1e-5f);
+                // At a grazing silhouette every neighbour can be rejected. A zero mean
+                // would make clampLimit 0.02 and turn a bright rim pixel black, then the
+                // stored alpha would spread that black value through later passes.
+                if (localWeight < 1e-4f || !IsFinite(localLuma))
+                    localLuma = centerLuma;
 
                 // A second, much wider structural mean is the firefly reference. The
                 // 5x5 mean is too local: a reflected sun disc can cover the whole window,
@@ -210,26 +247,36 @@ namespace DivisionEngine.Rendering.Denoising
                             continue;
 
                         float4 sampleDN = depthNormals[samplePixel];
+                        if (!IsFinite(sampleDN.x) || !IsFinite(sampleDN.yzw)) continue;
+                        float sampleRoughness = materialBuffer[samplePixel].x;
+                        if (!IsFinite(sampleRoughness)) continue;
+                        float3 sampleColor = inputReflection[samplePixel].rgb;
+                        if (!IsFinite(sampleColor)) continue;
                         float depthDiff = math.abs(sampleDN.x - centerDepth) / math.max(centerDepth, 1e-5f);
                         float depthSigma = 0.03f + 0.15f * centerRoughness;
                         float depthWeight = math.exp(-(depthDiff * depthDiff) / (2f * depthSigma * depthSigma));
                         float normalDot = math.saturate(math.dot(centerNormal, sampleDN.yzw));
                         float normalWeight = math.pow(normalDot, normalExponent);
-                        float sampleRoughness = materialBuffer[samplePixel].x;
                         float roughnessDiff = sampleRoughness - centerRoughness;
                         float roughnessWeight = math.exp(-(roughnessDiff * roughnessDiff) / (2f * 0.11f * 0.11f));
                         float structuralWeight = depthWeight * normalWeight * roughnessWeight;
-                        clampReference += Luminance(inputReflection[samplePixel].rgb) * structuralWeight;
+                        clampReference += Luminance(sampleColor) * structuralWeight;
                         wideWeight += structuralWeight;
                     }
                 }
                 clampReference = clampReference / math.max(wideWeight, 1e-5f);
+                if (wideWeight < 1e-4f || !IsFinite(clampReference))
+                    clampReference = localLuma;
             }
             else
             {
-                localLuma = inputReflection[pixel].a;
+                localLuma = IsFinite(inputReflection[pixel].a) ? inputReflection[pixel].a : 0f;
                 clampReference = localLuma;
             }
+            if (filterRefraction == 0 && !centerReflectionValid)
+                centerLuma = localLuma;
+            if (!IsFinite(localLuma)) localLuma = 0f;
+            if (!IsFinite(clampReference)) clampReference = 0f;
 
             // Mirror reflections are coherent: anchoring on the centre keeps genuine
             // high-contrast features (sun, bright sky) intact. From a few percent of
@@ -257,7 +304,12 @@ namespace DivisionEngine.Rendering.Denoising
                     if ((int)objectIdBuffer[samplePixel.x + samplePixel.y * (int)width].x != centerObject)
                         continue;
 
+                    bool isCenter = xx == 0 && yy == 0;
+                    if (isCenter && (filterRefraction == 1 ? !centerRefractionValid : !centerReflectionValid))
+                        continue;
+
                     float4 sampleDN = depthNormals[samplePixel];
+                    if (!IsFinite(sampleDN.x) || !IsFinite(sampleDN.yzw)) continue;
                     float depthDiff = math.abs(sampleDN.x - centerDepth) / math.max(centerDepth, 1e-5f);
                     float depthSigma = 0.03f + 0.15f * centerRoughness;
                     float depthWeight = math.exp(-(depthDiff * depthDiff) / (2f * depthSigma * depthSigma));
@@ -271,6 +323,7 @@ namespace DivisionEngine.Rendering.Denoising
                     // smooth and rough regions, and those regions have different noise
                     // statistics, so they must not be averaged together.
                     float sampleRoughness = materialBuffer[samplePixel].x;
+                    if (!IsFinite(sampleRoughness)) continue;
                     float roughnessDiff = sampleRoughness - centerRoughness;
                     float roughnessWeight = math.exp(-(roughnessDiff * roughnessDiff) / (2f * 0.11f * 0.11f));
 
@@ -282,12 +335,15 @@ namespace DivisionEngine.Rendering.Denoising
                     {
                         // Frost is a blur of the refracted background: colour differences
                         // are expected and must not stop the filter.
-                        sum += inputRefraction[samplePixel].rgb * weight;
+                        float3 sampleRefraction = inputRefraction[samplePixel].rgb;
+                        if (!IsFinite(sampleRefraction)) continue;
+                        sum += sampleRefraction * weight;
                         sumWeight += weight;
                     }
                     else
                     {
                         float3 sampleReflection = inputReflection[samplePixel].rgb;
+                        if (!IsFinite(sampleReflection)) continue;
 
                         // Firefly clamp against the structural neighbourhood mean, so a
                         // lone bright sample is pulled into the local range instead of
@@ -309,19 +365,24 @@ namespace DivisionEngine.Rendering.Denoising
                 }
             }
 
-            float3 filtered = sum / math.max(sumWeight, 1e-5f);
+            float3 filtered = Sanitize(sum / math.max(sumWeight, 1e-5f));
             if (filterRefraction == 1)
-                outputRefraction[pixel] = new float4(math.lerp(centerRefraction, filtered, activeStrength), 1f);
+            {
+                float3 blendCenter = centerRefractionValid ? centerRefraction : filtered;
+                outputRefraction[pixel] = new float4(
+                    Sanitize(math.lerp(blendCenter, filtered, activeStrength)), 1f);
+            }
             else
             {
                 // Clamp the centre used for the blend as well: at low roughness the pass
                 // only blends part of the filtered value, which would otherwise let a
                 // surviving firefly keep its original brightness.
-                float3 clampedCenter = centerReflection;
-                if (centerLuma > clampLimit)
+                float3 clampedCenter = centerReflectionValid ? centerReflection : filtered;
+                if (centerLuma > clampLimit && centerReflectionValid)
                     clampedCenter *= clampLimit / math.max(centerLuma, 1e-5f);
                 outputReflection[pixel] = new float4(
-                    math.lerp(clampedCenter, filtered, activeStrength), localLuma);
+                    Sanitize(math.lerp(clampedCenter, filtered, activeStrength)),
+                    IsFinite(localLuma) ? localLuma : 0f);
             }
         }
     }

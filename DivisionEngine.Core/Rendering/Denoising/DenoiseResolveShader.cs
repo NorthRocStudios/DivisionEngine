@@ -47,34 +47,55 @@ namespace DivisionEngine.Rendering.Denoising
         [ShaderResource] public RWTexture2D<float4> outputTexture;
 
         /// <summary>Resolves one texel per thread.</summary>
+        private static bool IsFinite(float value)
+        {
+            return value == value && math.abs(value) < 1e30f;
+        }
+
+        private static bool IsFinite(float3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static float3 Sanitize(float3 value)
+        {
+            if (!IsFinite(value)) return new float3(0f);
+            return value;
+        }
+
+        /// <summary>Combines the base and denoised secondary channels and applies ACES.</summary>
         [Kernel(8, 8, 1)]
         public void Execute(uint3 id)
         {
             int2 pixel = new int2((int)id.x, (int)id.y);
             if (pixel.x >= (int)width || pixel.y >= (int)height) return;
 
+            float3 baseColor = Sanitize(inputColor[pixel].rgb);
+            float3 reflectionColor = Sanitize(reflection[pixel].rgb);
+            float3 refractionColor = Sanitize(refraction[pixel].rgb);
+
             if (channel == 1)
             {
-                outputTexture[pixel] = new float4(math.saturate(reflection[pixel].rgb), 1f);
+                outputTexture[pixel] = new float4(math.saturate(reflectionColor), 1f);
                 return;
             }
             if (channel == 2)
             {
-                outputTexture[pixel] = new float4(math.saturate(refraction[pixel].rgb), 1f);
+                outputTexture[pixel] = new float4(math.saturate(refractionColor), 1f);
                 return;
             }
             if (channel == 3)
             {
-                outputTexture[pixel] = new float4(math.saturate(inputColor[pixel].rgb), 1f);
+                outputTexture[pixel] = new float4(math.saturate(baseColor), 1f);
                 return;
             }
 
-            float3 color = inputColor[pixel].rgb + reflection[pixel].rgb + refraction[pixel].rgb;
+            float3 color = Sanitize(baseColor + reflectionColor + refractionColor);
 
             if (enableAces == 1)
                 color = math.saturate(color * (2.51f * color + 0.03f) / (color * (2.43f * color + 0.59f) + 0.14f));
 
-            outputTexture[pixel] = new float4(color, 1f);
+            outputTexture[pixel] = new float4(Sanitize(color), 1f);
         }
     }
 }

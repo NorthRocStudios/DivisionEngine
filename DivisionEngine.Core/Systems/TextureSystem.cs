@@ -373,7 +373,8 @@ namespace DivisionEngine.Systems
         /// <param name="width">Texture width in texels.</param>
         /// <param name="height">Texture height in texels.</param>
         /// <returns>The texture metadata index, or -1 for invalid input.</returns>
-        public static int InstallTestTexture(string assetId, uint[] pixels, int width, int height)
+        public static int InstallTestTexture(string assetId, uint[] pixels, int width, int height,
+            int cubemapLayout = 0)
         {
             if (string.IsNullOrEmpty(assetId) || pixels == null || width < 1 || height < 1 ||
                 pixels.Length != width * height)
@@ -387,7 +388,7 @@ namespace DivisionEngine.Systems
                     bufferOffset = 0,
                     resolution = new int2(width, height),
                     mipCount = 1,
-                    cubemapLayout = 0,
+                    cubemapLayout = cubemapLayout,
                 }
             ];
 

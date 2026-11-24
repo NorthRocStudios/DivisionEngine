@@ -145,6 +145,22 @@ namespace DivisionEngine.Rendering.Denoising
             return color.x * 0.2126f + color.y * 0.7152f + color.z * 0.0722f;
         }
 
+        private static bool IsFinite(float value)
+        {
+            return value == value && math.abs(value) < 1e30f;
+        }
+
+        private static bool IsFinite(float3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static float3 Sanitize(float3 value)
+        {
+            if (!IsFinite(value)) return new float3(0f);
+            return value;
+        }
+
         /// <summary>Accumulates one texel per thread.</summary>
         [Kernel(8, 8, 1)]
         public void Execute(uint3 id)
@@ -164,22 +180,27 @@ namespace DivisionEngine.Rendering.Denoising
                 {
                     if (historyValid == 1)
                     {
-                        outputReflection[pixel] = historyReflection[pixel];
-                        outputRefraction[pixel] = historyRefraction[pixel];
+                        float4 cbHistoryRefl = historyReflection[pixel];
+                        float4 cbHistoryRefr = historyRefraction[pixel];
+                        outputReflection[pixel] = new float4(Sanitize(cbHistoryRefl.rgb),
+                            IsFinite(cbHistoryRefl.a) ? cbHistoryRefl.a : 0f);
+                        outputRefraction[pixel] = new float4(Sanitize(cbHistoryRefr.rgb),
+                            IsFinite(cbHistoryRefr.a) ? cbHistoryRefr.a : 0f);
                     }
                     else
                     {
-                        outputReflection[pixel] = currentReflection[pixel];
-                        outputRefraction[pixel] = currentRefraction[pixel];
+                        outputReflection[pixel] = new float4(Sanitize(currentReflection[pixel].rgb), 0f);
+                        outputRefraction[pixel] = new float4(Sanitize(currentRefraction[pixel].rgb), 0.5f);
                     }
                     return;
                 }
             }
 
             int objectIndex = (int)objectIdBuffer[pixel.x + pixel.y * (int)width].x;
-            float3 currentRefl = currentReflection[pixel].rgb;
-            float3 currentRefr = currentRefraction[pixel].rgb;
+            float3 currentRefl = Sanitize(currentReflection[pixel].rgb);
+            float3 currentRefr = Sanitize(currentRefraction[pixel].rgb);
             float currentRoughness = materialBuffer[pixel].x;
+            if (!IsFinite(currentRoughness)) currentRoughness = 0.5f;
             float storedId = (float)(objectIndex + 1);
 
             // Sky and first-frame pixels have no usable history.
@@ -191,6 +212,12 @@ namespace DivisionEngine.Rendering.Denoising
             }
 
             float4 centerDn = depthNormals[pixel];
+            if (!IsFinite(centerDn.x) || !IsFinite(centerDn.yzw))
+            {
+                outputReflection[pixel] = new float4(currentRefl, storedId);
+                outputRefraction[pixel] = new float4(currentRefr, currentRoughness);
+                return;
+            }
             float linearDepth = centerDn.x * (farPlane - nearPlane);
             float3 normal = centerDn.yzw;
 
@@ -236,11 +263,14 @@ namespace DivisionEngine.Rendering.Denoising
                         math.max(currentDistance, 0.001f);
                     float normalDot = math.dot(normal, prevDn.yzw);
                     float4 previous = historyReflection[prevPixel];
-                    int previousId = (int)(previous.a + 0.5f) - 1;
-                    float previousRoughness = historyRefraction[prevPixel].a;
-                    bool roughnessMatches = math.abs(previousRoughness - currentRoughness) < 0.06f;
+                    float4 previousRefraction = historyRefraction[prevPixel];
+                    int previousId = IsFinite(previous.a) ? (int)(previous.a + 0.5f) - 1 : -2;
+                    float previousRoughness = previousRefraction.a;
+                    bool roughnessMatches = IsFinite(previousRoughness) &&
+                        math.abs(previousRoughness - currentRoughness) < 0.06f;
+                    bool historyFinite = IsFinite(previous.rgb) && IsFinite(previousRefraction.rgb);
 
-                    if (depthError < depthTolerance && normalDot > normalTolerance &&
+                    if (historyFinite && depthError < depthTolerance && normalDot > normalTolerance &&
                         previousId == objectIndex && roughnessMatches)
                     {
                         // Clamp the history to the current frame's local range. This is the
@@ -262,6 +292,7 @@ namespace DivisionEngine.Rendering.Denoising
                                     continue;
                                 float3 sampleRefl = currentReflection[samplePixel].rgb;
                                 float3 sampleRefr = currentRefraction[samplePixel].rgb;
+                                if (!IsFinite(sampleRefl) || !IsFinite(sampleRefr)) continue;
                                 minRefl = math.min(minRefl, sampleRefl);
                                 maxRefl = math.max(maxRefl, sampleRefl);
                                 minRefr = math.min(minRefr, sampleRefr);
@@ -269,8 +300,8 @@ namespace DivisionEngine.Rendering.Denoising
                             }
                         }
 
-                        historyRefl = math.min(math.max(previous.rgb, minRefl), maxRefl);
-                        historyRefr = math.min(math.max(historyRefraction[prevPixel].rgb, minRefr), maxRefr);
+                        historyRefl = math.min(math.max(Sanitize(previous.rgb), minRefl), maxRefl);
+                        historyRefr = math.min(math.max(Sanitize(previousRefraction.rgb), minRefr), maxRefr);
 
                         // Temporal firefly rejection: a rare single-sample sun hit must not
                         // spike through the history. A persistent feature ramps in within a
@@ -290,8 +321,8 @@ namespace DivisionEngine.Rendering.Denoising
                 }
             }
 
-            float3 resultRefl = accepted ? math.lerp(historyRefl, currentRefl, alpha) : currentRefl;
-            float3 resultRefr = accepted ? math.lerp(historyRefr, currentRefr, alpha) : currentRefr;
+            float3 resultRefl = Sanitize(accepted ? math.lerp(historyRefl, currentRefl, alpha) : currentRefl);
+            float3 resultRefr = Sanitize(accepted ? math.lerp(historyRefr, currentRefr, alpha) : currentRefr);
 
             outputReflection[pixel] = new float4(resultRefl, storedId);
             outputRefraction[pixel] = new float4(resultRefr, currentRoughness);

@@ -59,10 +59,143 @@ namespace DivisionEngine.Editor
         /// <summary>Synthetic asset id for the roughness checkerboard texture.</summary>
         private const string RoughnessTextureId = "denoisetest:roughness-checklist";
 
+        /// <summary>Synthetic equirectangular environment for the NaN regression.</summary>
+        private const string HdriTestId = "denoisetest:equirect-hdri";
+
         /// <summary>Frozen frame counter so every configuration sees the same samples.</summary>
         private const int FrozenFrame = 8;
 
         private static readonly float3 LumaWeights = new(0.2126f, 0.7152f, 0.0722f);
+
+        /// <summary>
+        /// Regression scene for non-finite radiance. A point light sits exactly on the
+        /// sphere's front surface and the camera's centre ray hits that same point, so the
+        /// light-to-hit distance is zero: the exact case that used to produce Inf/NaN and
+        /// black denoiser blocks. The pass condition is a finite image with a lit centre,
+        /// not a black hole where the singular sample was.
+        /// </summary>
+        private static bool RunNaNTest(int width, int height, string outputDirectory, bool donut = false)
+        {
+            RenderPipeline.DeterministicCapture = true;
+            RenderPipeline.FrameCountOverride = null; // let temporal accumulate real frames
+            RenderPipeline.SampleCountOverride = 2;
+            MathUtilities.Random.Seed(12345);
+
+            WorldManager.CreateDefaultWorld(makeCurrent: true);
+            World world = WorldManager.CurrentWorld!;
+            StripDefaultScene(world);
+            Camera camera = ConfigureCamera(world);
+            PostProcessing postProcess = world.QueryData<PostProcessing>().First().Item2;
+            ConfigurePostProcessing(postProcess);
+
+            (uint cameraId, Camera _) = world.QueryData<Camera>().First();
+            Transform cameraTransform = world.GetComponent<Transform>(cameraId)!;
+            cameraTransform.position = new float3(0f, 0f, 6f);
+            cameraTransform.rotation = new float3(0f, 0f, 0f).EulerToQuaternion();
+            camera.fieldOfView = 50f;
+            camera.enableDenoise = true;
+            camera.enableTemporalDenoise = true;
+
+            // A synthetic equirectangular HDRI so the test exercises the pole/UV path the
+            // editor uses with an imported sky. The image has a bright sun and a dark
+            // ground; the poles are the directions that used to produce NaN UVs.
+            InstallEquirectHDRI();
+            Environment environment = world.QueryData<Environment>().First().Item2;
+            environment.skyType = Environment.SkyType.HDRI;
+            environment.hdriMap = new AssetRef<TextureAsset>(HdriTestId);
+
+            uint sphereId = world.CreateEntity(donut ? "Donut test torus" : "NaN test sphere");
+            world.AddComponent(sphereId, new Transform
+            {
+                position = new float3(0f, 0f, 0f),
+                // The torus is modelled with its hole along Y; rotate it so the camera
+                // looks straight through the hole like the reported project.
+                rotation = donut ? new float3(90f, 0f, 0f).EulerToQuaternion() : new float3(0f, 0f, 0f).EulerToQuaternion(),
+            });
+            if (donut)
+                world.AddComponent(sphereId, new SDFTorus { wholeRadius = 2f, ringRadius = 0.75f });
+            else
+                world.AddComponent(sphereId, new SDFSphere { radius = 1f });
+            world.AddComponent(sphereId, new SDFMaterial
+            {
+                albedoColor = donut ? new float4(0.04f, 0.35f, 0.85f, 1f) : new float4(0.82f, 0.84f, 0.88f, 1f),
+                metallic = 1f,
+                roughness = 0.25f,
+                reflectionCutoff = 0.65f,
+            });
+            world.AddComponent(sphereId, new Shadows());
+            world.AddComponent(sphereId, new Reflections());
+
+            // Sphere: the point light sits exactly on the front pole, which is also the
+            // centre ray's hit point (zero light distance). Donut: the light sits in the
+            // hole, reproducing the rim-lit material from the reported project.
+            uint lightId = world.CreateEntity(donut ? "Donut hole point light" : "Surface point light");
+            world.AddComponent(lightId, new Transform
+            {
+                position = donut ? new float3(0f, 0f, 0f) : new float3(0f, 0f, 1f),
+            });
+            world.AddComponent(lightId, new PointLight
+            {
+                color = new float4(1f, 0.95f, 0.85f, 1f),
+                intensity = 20f,
+                radius = 10f,
+            });
+
+            RenderPipeline pipeline = new();
+            if (!pipeline.BindCurrentWorld())
+                throw new InvalidOperationException("Failed to bind the NaN test world.");
+
+            float4[] image = [];
+            for (int frame = 0; frame < 16; frame++)
+                image = RenderSnapshot(pipeline, width, height, 1)
+                    ?? throw new InvalidOperationException("NaN test produced no pixels.");
+
+            int nanPixels = CountNaN(image);
+            int blackIslands = 0;
+            for (int y = 2; y < height - 2; y++)
+            {
+                for (int x = 2; x < width - 2; x++)
+                {
+                    if (Luminance(image[y * width + x]) >= 0.01) continue;
+                    bool brightNeighbour = false;
+                    for (int dy = -2; dy <= 2 && !brightNeighbour; dy++)
+                        for (int dx = -2; dx <= 2; dx++)
+                            if (Luminance(image[(y + dy) * width + x + dx]) > 0.15)
+                            {
+                                brightNeighbour = true;
+                                break;
+                            }
+                    if (brightNeighbour) blackIslands++;
+                }
+            }
+            double centerLuma = 0;
+            double centerMin = 1;
+            int cx = width / 2;
+            int cy = height / 2;
+            for (int y = cy - 4; y <= cy + 4; y++)
+            {
+                for (int x = cx - 4; x <= cx + 4; x++)
+                {
+                    double luma = Luminance(image[y * width + x]);
+                    centerLuma = System.Math.Max(centerLuma, luma);
+                    centerMin = System.Math.Min(centerMin, luma);
+                }
+            }
+
+            Directory.CreateDirectory(outputDirectory);
+            string imagePath = Path.Combine(outputDirectory, donut ? "donut-test.png" : "nan-test.png");
+            SavePng(imagePath, image, width, height);
+            Console.WriteLine(
+                $"{(donut ? "donuttest" : "nantest")}: nan={nanPixels} blackIslands={blackIslands} " +
+                $"centerMax={centerLuma:F4} centerMin={centerMin:F4} out={imagePath}");
+
+            bool pass = nanPixels == 0 && blackIslands == 0 &&
+                (donut || (centerLuma > 0.05 && centerMin > 0.01));
+            Console.WriteLine(pass
+                ? $"{(donut ? "donuttest" : "nantest")}: PASS (finite radiance, no black denoiser block)"
+                : $"{(donut ? "donuttest" : "nantest")}: FAIL (non-finite radiance or black block)");
+            return pass;
+        }
 
         /// <summary>Runs the <c>--cli denoisetest</c> command.</summary>
         public static bool Run(string[] args)
@@ -78,6 +211,10 @@ namespace DivisionEngine.Editor
             bool temporal = !HasFlag(args, "--no-temporal");
             string outputDirectory = GetString(args, "--out", "artifacts/denoisetest")!;
             bool visualOnly = HasFlag(args, "--no-gates");
+            if (HasFlag(args, "--nan-test"))
+                return RunNaNTest(width, height, outputDirectory);
+            if (HasFlag(args, "--donut-test"))
+                return RunNaNTest(width, height, outputDirectory, donut: true);
             if (width < 64 || height < 64 || frames < 1)
                 throw new ArgumentException("--width/--height must be at least 64 and --fixed-frame at least 1.");
             if (referenceSpp < 4 || referenceSpp > 64)
@@ -349,8 +486,7 @@ namespace DivisionEngine.Editor
         /// (0.04) or fully rough (0.94); the slab's cutoff (0.35) puts the rough blocks
         /// above the reflection budget, so they must not be denoised at all.
         /// </summary>
-        private static void InstallRoughnessTexture()
-        {
+        private static void InstallRoughnessTexture()        {
             const int size = 64;
             const int block = 8;
             uint[] pixels = new uint[size * size];
@@ -367,6 +503,47 @@ namespace DivisionEngine.Editor
 
             int index = TextureSystem.InstallTestTexture(RoughnessTextureId, pixels, size, size);
             if (index < 0) throw new InvalidOperationException("Could not install the synthetic roughness texture.");
+        }
+
+        /// <summary>Synthetic equirectangular HDRI: gradient sky, bright sun, dark ground.</summary>
+        private static void InstallEquirectHDRI()
+        {
+            const int width = 64;
+            const int height = 32;
+            uint[] pixels = new uint[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                float v = y / (float)(height - 1);
+                for (int x = 0; x < width; x++)
+                {
+                    float u = x / (float)(width - 1);
+                    float3 skyTop = new(0.35f, 0.55f, 0.92f);
+                    float3 skyHorizon = new(0.78f, 0.82f, 0.88f);
+                    float3 ground = new(0.10f, 0.10f, 0.09f);
+                    float3 color = v < 0.5f
+                        ? new float3(
+                            skyTop.x + (skyHorizon.x - skyTop.x) * (v * 2f),
+                            skyTop.y + (skyHorizon.y - skyTop.y) * (v * 2f),
+                            skyTop.z + (skyHorizon.z - skyTop.z) * (v * 2f))
+                        : new float3(
+                            skyHorizon.x + (ground.x - skyHorizon.x) * ((v - 0.5f) * 2f),
+                            skyHorizon.y + (ground.y - skyHorizon.y) * ((v - 0.5f) * 2f),
+                            skyHorizon.z + (ground.z - skyHorizon.z) * ((v - 0.5f) * 2f));
+
+                    float du = System.Math.Abs(u - 0.72f);
+                    du = System.Math.Min(du, 1f - du);
+                    if (du < 0.035f && System.Math.Abs(v - 0.22f) < 0.035f)
+                        color = new float3(1f, 1f, 1f);
+
+                    byte r = (byte)System.Math.Clamp(color.x * 255f, 0f, 255f);
+                    byte g = (byte)System.Math.Clamp(color.y * 255f, 0f, 255f);
+                    byte b = (byte)System.Math.Clamp(color.z * 255f, 0f, 255f);
+                    pixels[y * width + x] = (uint)((r << 24) | (g << 16) | (b << 8) | 0xFF);
+                }
+            }
+
+            int index = TextureSystem.InstallTestTexture(HdriTestId, pixels, width, height, cubemapLayout: 1);
+            if (index < 0) throw new InvalidOperationException("Could not install the synthetic equirectangular HDRI.");
         }
 
         /// <summary>Removes the stock default-scene objects, keeping camera, sun and environment.</summary>

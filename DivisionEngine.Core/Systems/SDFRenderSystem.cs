@@ -117,7 +117,9 @@ namespace DivisionEngine.Systems
                 worldData.bottomSkyColor = environment.bottomSkyColor;
                 worldData.middleSkyColor = environment.middleSkyColor;
                 worldData.topSkyColor = environment.topSkyColor;
-                worldData.hdriTexMetaID = environment.hdriMap.IsLoaded ? TextureSystem.GetTextureMetadataIndex(environment.hdriMap.ID) : -1;
+                worldData.hdriTexMetaID = string.IsNullOrEmpty(environment.hdriMap.ID)
+                    ? -1
+                    : TextureSystem.GetTextureMetadataIndex(environment.hdriMap.ID);
                 worldData.ambientStrength = environment.ambientStrength;
                 worldData.mainLightDir = new float3(1, 0, 0);
                 worldData.skyType = (int)environment.skyType;

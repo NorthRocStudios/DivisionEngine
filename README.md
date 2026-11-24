@@ -442,18 +442,18 @@ versus the reference:
 
 | Check | Before (noisy) | After (denoised) | Change |
 | --- | ---: | ---: | ---: |
-| Metal reflection RMSE, all traced pixels | 0.02503 | 0.01600 | **-36%** |
-| Metal reflection RMSE, roughness 0.12-0.6 | 0.04848 | 0.03002 | **-38%** |
+| Metal reflection RMSE, all traced pixels | 0.02502 | 0.01599 | **-36%** |
+| Metal reflection RMSE, roughness 0.12-0.6 | 0.04847 | 0.02999 | **-38%** |
 | Mirror RMSE, roughness < 0.12 | 0.01133 | 0.01132 | ~0% |
-| Metal RMSE, roughness 0.10-0.25 | 0.03562 | 0.02731 | -23% |
+| Metal RMSE, roughness 0.10-0.25 | 0.03562 | 0.02717 | -24% |
 | Metal RMSE, roughness 0.25-0.45 | 0.04274 | 0.03496 | -18% |
-| Metal RMSE, roughness 0.45-0.70 | 0.05413 | 0.02229 | **-59%** |
+| Metal RMSE, roughness 0.45-0.70 | 0.05411 | 0.02224 | **-59%** |
 | Frosted-glass high-frequency energy | 0.04685 | 0.02535 | **-46%** |
 | Refraction-only glass high-frequency energy | 0.05442 | 0.03169 | **-42%** |
 | Smooth glass high-frequency energy | 0.02511 | 0.02466 | -2% (stays sharp) |
 | Temporal std, secondary pixels (8 live frames) | 0.00749 | 0.00028 | **-96%** |
 | Temporal std, spatial filter only (same sequence) | 0.00170 | 0.00028 | **-84%** |
-| Temporal std, checkerboard path | 0.00151 | 0.00021 | **-86%** |
+| Temporal std, checkerboard path | 0.00150 | 0.00021 | **-86%** |
 | Temporal frame-to-frame change | 0.00815 | 0.00021 | **-97%** |
 | Ray steps per reflective pixel, cutoff 1.0 -> 0.4 | 0.3126 | 0.2608 | **-17%** |
 | Diffuse/sky pixels changed by the filter | - | **0** of 188,316 | bit-identical |
@@ -464,6 +464,34 @@ The denoiser costs about **2.5 ms/frame at 1280x720** including temporal accumul
 `--cli bench --width 1280 --height 720` reports about 49.3 ms with it enabled versus
 46.7 ms with `--no-denoise` (the exact SDF pass dominates, and run-to-run GPU clock
 variance is of the same order as the denoiser cost).
+
+### Non-finite radiance and fireflies
+
+A NaN or Inf in one pixel is not a one-pixel problem: the 5x5 A-Trous passes and the
+temporal history both spread it into an axis-aligned black block. The pipeline is
+now guarded at every stage, and the likely upstream sources are fixed:
+
+- **Point lights** clamp the zero-distance case (`distanceSq >= 0.0025`) and cap
+  their contribution, so a light sitting on (or inside) a surface no longer divides
+  by zero or blows the neighbouring highlight out.
+- **HDRI lookups** normalise the direction defensively and clamp the equirectangular
+  `y` before `acos`, so a reflection pointing straight up/down cannot produce a NaN
+  UV. Texture sampling rejects non-finite UVs, and a non-finite HDRI sample falls
+  back to the environment's sky colour instead of black.
+- **The SDF sample loop** drops non-finite samples and renormalises by the number of
+  valid samples, rather than letting one bad sample poison the pixel average.
+  Reflection radiance is softly capped in luminance.
+- **The spatial filter, temporal accumulator and resolve pass** sanitise every read,
+  skip invalid neighbours, and always write finite radiance. If the centre pixel is
+  invalid the filter uses the neighbour average instead of a zero, so a bad sample
+  cannot become a black block.
+
+`--cli denoisetest --nan-test` is the regression for this: it places a point light
+exactly on a sphere's front surface and puts the camera's centre ray through that
+same point (zero light distance), then asserts the frame has no NaN, the centre is
+lit, and the centre 9x9 neighbourhood has no black hole. `--donut-test` renders the
+rim-lit torus/point-light/HDRI combination from the reported project and also
+checks for black islands and non-finite pixels.
 
 ### Command line
 
@@ -483,6 +511,12 @@ DivisionEngine.Editor.exe --cli denoisetest --no-temporal --out artifacts/denois
 # Very rough metal sphere above the cutoff (base shading) versus traced (cutoff 1.0)
 DivisionEngine.Editor.exe --cli denoisetest --rough-sphere --no-gates --out artifacts/denoisetest-rough
 DivisionEngine.Editor.exe --cli denoisetest --rough-sphere --rough-cutoff 1 --no-gates --out artifacts/denoisetest-rough-traced
+
+# Zero-distance point light / non-finite radiance regression
+DivisionEngine.Editor.exe --cli denoisetest --nan-test --out artifacts/denoisetest-nan
+
+# Rim-lit torus + synthetic HDRI reproduction used for the reported black squares
+DivisionEngine.Editor.exe --cli denoisetest --donut-test --out artifacts/denoisetest-donut
 
 # Render the debug views directly
 DivisionEngine.Editor.exe --cli shot --debug-mode 11 --out roughness.png   # per-pixel roughness
@@ -524,8 +558,8 @@ DivisionEngine.Editor.exe --cli shot --no-post --out raw-sdf.png
   glass by its frost (high-frequency energy) rather than by pixel error against that
   reference.
 - The voxel clipmap path still uses the old sky lookup above the reflection cutoff
-  (it is a separate preview shader with a long optimized compile); the exact path
-  skips the reflection entirely.
+  and does not have the new non-finite-radiance guards (it is a separate preview
+  shader with a long optimized compile); the exact path is the supported one.
 - The voxel clipmap path feeds its whole shaded colour through the reflection
   channel (it has no separate reflection/refraction split yet), so it is denoised
   like the old full-colour path rather than with the material-aware split.
