@@ -11,13 +11,9 @@
 
 </div>
 
-**Division Engine is a game engine where geometry is math, not meshes — and where shaders are ordinary C#.**
+**[Download the Windows alpha](https://github.com/NorthRocStudios/DivisionEngine/releases)** - [Documentation wiki](https://github.com/NorthRocStudios/DivisionEngine/wiki) - [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) - [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)
 
-- **[Download the Windows alpha](https://github.com/NorthRocStudios/DivisionEngine/releases)** · [Documentation wiki](https://github.com/NorthRocStudios/DivisionEngine/wiki) · [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) · [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)
-
-> **Status:** alpha, Windows-only, and expected to break. Division Engine is built for experimentation and education; the API is still moving.
-
-Rendering is compute-driven: shaders are written as ordinary C# structs, translated to HLSL on demand by DivisionCompute, and dispatched through its Direct3D 11 backend, while Silk.NET's OpenGL context presents the finished frame. The vector and matrix types shared by CPU code and shaders come from [DivisionMath](https://github.com/NorthRocStudios/DivisionMath).
+> **Status:** alpha, Windows-only, and expected to break. Division Engine is built for experimentation and education; the API is still being built.
 
 Picture this:
 - SDF-based rendering
@@ -28,7 +24,7 @@ Picture this:
 
 ## Documentation
 
-Feature documentation and API guides live in the [Division Engine wiki](https://github.com/NorthRocStudios/DivisionEngine/wiki):
+Feature documentation and API guides are in the [Division Engine wiki](https://github.com/NorthRocStudios/DivisionEngine/wiki):
 
 - **Getting started:** [Editor Overview](https://github.com/NorthRocStudios/DivisionEngine/wiki/Editor-Overview), [Projects and Assets](https://github.com/NorthRocStudios/DivisionEngine/wiki/Projects-and-Assets), [ECS and Components](https://github.com/NorthRocStudios/DivisionEngine/wiki/ECS-and-Components), [Scripting](https://github.com/NorthRocStudios/DivisionEngine/wiki/Scripting), [Division CLI](https://github.com/NorthRocStudios/DivisionEngine/wiki/Division-CLI)
 - **Scene:** [SDF Modeling](https://github.com/NorthRocStudios/DivisionEngine/wiki/SDF-Modeling), [Materials and Textures](https://github.com/NorthRocStudios/DivisionEngine/wiki/Materials-and-Textures), [Lighting and Environment](https://github.com/NorthRocStudios/DivisionEngine/wiki/Lighting-and-Environment), [Cameras and Post Processing](https://github.com/NorthRocStudios/DivisionEngine/wiki/Cameras-and-Post-Processing), [Area Lights](https://github.com/NorthRocStudios/DivisionEngine/wiki/Area-Lights), [Terrain System](https://github.com/NorthRocStudios/DivisionEngine/wiki/Terrain-System)
