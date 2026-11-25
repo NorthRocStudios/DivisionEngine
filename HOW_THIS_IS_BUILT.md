@@ -83,4 +83,4 @@ Then read `artifacts/`, and compare against whatever claim you came here to chec
 
 MIT, except the terrain erosion filter portions of
 `DivisionEngine.Core/Rendering/Terrain/TerrainRendering.cs`, which remain MPL-2.0. See
-[LICENSE.txt](LICENSE.txt) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -11,7 +11,7 @@
 // See THIRD_PARTY_NOTICES.md for details.
 //
 // The remainder of Division Engine is licensed under the MIT License. See the
-// LICENSE.txt file in the project root for full license terms.
+// LICENSE file in the project root for full license terms.
 //
 using DivisionEngine.MathLib;
 

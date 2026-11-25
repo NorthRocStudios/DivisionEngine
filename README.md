@@ -83,4 +83,4 @@ Multiple Workflows:
 
 Division Engine is free and open-source software licensed under the **MIT License**. You can use it commercially, modify it, and redistribute it — including inside closed-source games and tools — with no obligation to publish your own code. Keep the copyright notice, and please don't use the NorthRoc Studios or Division Engine names to promote a fork.
 
-See [LICENSE.txt](LICENSE.txt) for the full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components. The terrain erosion filter in `TerrainRendering.cs` contains MPL-2.0 code from Rune Skovbo Johansen; everything else is MIT.
+See [LICENSE](LICENSE) for the full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components. The terrain erosion filter in `TerrainRendering.cs` contains MPL-2.0 code from Rune Skovbo Johansen; everything else is MIT.

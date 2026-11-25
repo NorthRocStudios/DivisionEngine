@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Division Engine is licensed under the MIT License (see `LICENSE.txt`). It
+Division Engine is licensed under the MIT License (see `LICENSE`). It
 includes or depends on the following third-party components, each governed by
 its own license. This file lists direct dependencies; transitive dependencies
 carry their own licenses as well.
