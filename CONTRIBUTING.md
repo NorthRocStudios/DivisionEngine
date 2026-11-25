@@ -58,7 +58,7 @@ correct.
 
 ## AI-assisted contributions
 
-Allowed, no disclosure required — the maintainer uses an assistant too. The bar is the
+Allowed, no disclosure required - the maintainer uses an assistant too. The bar is the
 same for everyone: the change must build, must be reasoned about by a human, and must come
 with whatever verification the area needs (a test scene result at minimum).
 
