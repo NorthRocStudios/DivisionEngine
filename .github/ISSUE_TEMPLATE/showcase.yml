@@ -1,0 +1,43 @@
+name: Show what you made
+description: Post something you built, rendered, or broke using Division Engine
+title: "[Showcase]: "
+labels: ["showcase"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These are the best kind of issue. Even a broken result is interesting — half the engine exists because someone tried something unreasonable with it.
+
+        If you used the engine's node editor to build geometry, post the graph as well as the render.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What did you make?
+      placeholder: A Menger sponge at nine iterations with refraction through the holes, rendered at 4K.
+    validations:
+      required: true
+
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots, video, or a link
+      description: Drag files here or paste a link. Video is better than stills for anything animated.
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How was it made?
+      description: Which features, which nodes, which settings? This is what other people will actually learn from.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: permission
+    attributes:
+      label: Permission
+      options:
+        - label: You may feature this in a devlog or social post, with credit
+          required: false

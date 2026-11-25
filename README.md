@@ -4,16 +4,18 @@
 
 # Division Engine
 
-[![Version](https://img.shields.io/github/v/release/DivisionEngine/DivisionEngine?label=Version&include_prereleases)](https://github.com/DivisionEngine/DivisionEngine/releases)
-[![License](https://img.shields.io/github/license/DivisionEngine/DivisionEngine)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/NorthRocStudios/DivisionEngine?label=Version&include_prereleases)](https://github.com/NorthRocStudios/DivisionEngine/releases)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
 [![AvaloniaUI](https://img.shields.io/badge/Avalonia-UI-blue)](https://avaloniaui.net/)
 
 </div>
 
-Division Engine is an SDF-based game engine written entirely in C#. Utilizing Avalonia UI for the interface and Silk.NET for native rendering, Division Engine features a comprehensive shader pipeline that dynamically builds HLSL shader code from .NET code, thanks to [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute).
+**Division Engine is a game engine where geometry is math, not meshes — and where shaders are ordinary C#.**
 
-*Note: This engine is still in preview and has known issues; it is specifically built for experimentation and education only.*
+- **[Download the Windows alpha](https://github.com/NorthRocStudios/DivisionEngine/releases)** · [Documentation wiki](https://github.com/NorthRocStudios/DivisionEngine/wiki) · [DivisionCompute](https://github.com/NorthRocStudios/DivisionCompute) · [DivisionMath](https://github.com/NorthRocStudios/DivisionMath)
+
+> **Status:** alpha, Windows-only, and expected to break. Division Engine is built for experimentation and education; the API is still moving.
 
 Rendering is compute-driven: shaders are written as ordinary C# structs, translated to HLSL on demand by DivisionCompute, and dispatched through its Direct3D 11 backend, while Silk.NET's OpenGL context presents the finished frame. The vector and matrix types shared by CPU code and shaders come from [DivisionMath](https://github.com/NorthRocStudios/DivisionMath).
 

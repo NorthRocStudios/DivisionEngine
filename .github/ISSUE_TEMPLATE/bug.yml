@@ -1,0 +1,81 @@
+name: Bug report
+description: Something crashes, renders incorrectly, or behaves unexpectedly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Division Engine is an alpha, so expect rough edges — the useful part of a report is what you did, what you expected, and what you got.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug, including the exact steps that reproduce it.
+      placeholder: |
+        1. Open the editor with ...
+        2. Add an SDF sphere and enable ...
+        3. The viewport shows ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or video
+      description: Drag images or clips here. For rendering bugs, a screenshot of the viewport and any console output is worth more than a paragraph.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Division Engine version
+      description: From the title bar, or the release tag you downloaded.
+      placeholder: v0.1.0-alpha.3
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU and driver version
+      description: Rendering issues are frequently driver-specific.
+      placeholder: RTX 3060, driver 566.03
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Rendering / SDF shading
+        - Terrain
+        - Voxel SDF
+        - Denoising / reflections
+        - Editor UI / windowing
+        - Node editor
+        - Audio
+        - Asset pipeline
+        - Build / installer
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console or crash output
+      description: Paste the log, or attach it. Logs are the difference between "it broke" and something fixable.
+      render: shell
+    validations:
+      required: false

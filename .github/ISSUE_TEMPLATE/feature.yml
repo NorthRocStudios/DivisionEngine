@@ -1,0 +1,62 @@
+name: Feature request
+description: Suggest a feature, a rendering technique, or a workflow improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Division Engine is a solo project with an opinionated direction, so not every request will fit. The ones that get picked up usually describe a *problem* rather than a *solution*.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the thing you are trying to do and why it is hard or impossible today.
+      placeholder: I want to animate SDF parameters over time, but there is no timeline in the editor, so I ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+      description: Sketch the feature. Rough is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have tried
+      description: Workarounds, other engines, or existing techniques that already solve part of this.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Rendering / SDF shading
+        - Terrain
+        - Voxel SDF
+        - Denoising / reflections
+        - Editor UI / windowing
+        - Node editor
+        - Animation / timeline / compositing
+        - Audio
+        - Asset pipeline
+        - Scripting
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Would you like to work on this?
+      options:
+        - label: I would be interested in implementing this with some guidance
+          required: false
