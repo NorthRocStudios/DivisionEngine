@@ -18,10 +18,17 @@
   -->
   <PropertyGroup>
     <DivisionComputeProject Condition="'$(DivisionComputeProject)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj')">$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute\DivisionCompute.csproj</DivisionComputeProject>
+    <DivisionShaderGeneratorProject Condition="'$(DivisionShaderGeneratorProject)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute.SourceGenerators\DivisionCompute.SourceGenerators.csproj')">$(MSBuildThisFileDirectory)..\..\DivisionTranslate\DivisionCompute.SourceGenerators\DivisionCompute.SourceGenerators.csproj</DivisionShaderGeneratorProject>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(DivisionComputeProject)' != ''">
     <ProjectReference Include="$(DivisionComputeProject)" />
+  </ItemGroup>
+
+  <!-- Bakes [Shader] structs into HLSL + layouts at build time. Analyzer
+       references do not flow through ProjectReference, so it is explicit here. -->
+  <ItemGroup Condition="'$(DivisionShaderGeneratorProject)' != ''">
+    <ProjectReference Include="$(DivisionShaderGeneratorProject)" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(DivisionComputeProject)' == ''">
@@ -29,12 +36,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
-    <PackageReference Include="NorthRoc.DivisionMath" Version="0.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.12.0" />
+    <PackageReference Include="NorthRoc.DivisionMath" Version="0.3.1" />
     <PackageReference Include="NVorbis" Version="0.10.5" />
     <PackageReference Include="Silk.NET" Version="2.23.0" />
     <PackageReference Include="Silk.NET.OpenAL" Version="2.23.0" />
-    <PackageReference Include="SkiaSharp" Version="4.155.0" />
+    <PackageReference Include="SkiaSharp" Version="4.157.0" />
     <PackageReference Include="System.Management" Version="11.0.0" />
   </ItemGroup>
 
