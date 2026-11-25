@@ -1,9 +1,17 @@
 //
 // Copyright (c) 2025-2026 Rex Woodfield and Division Engine contributors
 //
-// This file is part of Division Engine and is subject to the terms
-// of the Division Engine License. See the LICENSE.txt file in the
-// project root for full license terms.
+// This file is part of Division Engine.
+//
+// MPL-2.0 NOTICE: the Phacelle Noise and erosion filter portions of this file
+// are derived from Rune Skovbo Johansen's "Advanced Terrain Erosion Filter"
+// (https://www.shadertoy.com/view/wXcfWn), copyright (c) 2025 Rune Skovbo
+// Johansen, and remain licensed under the Mozilla Public License, v. 2.0
+// (https://mozilla.org/MPL/2.0/). All other code in this file is MIT.
+// See THIRD_PARTY_NOTICES.md for details.
+//
+// The remainder of Division Engine is licensed under the MIT License. See the
+// LICENSE.txt file in the project root for full license terms.
 //
 using DivisionEngine.MathLib;
 
@@ -20,10 +28,10 @@ namespace DivisionEngine.Rendering.Terrain
     /// </para>
     /// <para>
     /// Phacelle Noise and the erosion filter are copyright (c) 2025 Rune Skovbo
-    /// Johansen and are used under the Mozilla Public License 2.0, which is
-    /// compatible with this project's GPL-3.0 license. The original technique
-    /// derives from Clay John (https://www.shadertoy.com/view/MtGcWh) and Fewes
-    /// (https://www.shadertoy.com/view/7ljcRW).
+    /// Johansen and are used under the Mozilla Public License 2.0; those
+    /// portions remain MPL-2.0 while all other code in this file is MIT. The
+    /// original technique derives from Clay John (https://www.shadertoy.com/view/MtGcWh)
+    /// and Fewes (https://www.shadertoy.com/view/7ljcRW).
     /// </para>
     /// <para>
     /// Everything here is written in the subset of C# that DivisionCompute can

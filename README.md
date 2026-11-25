@@ -79,6 +79,6 @@ Multiple Workflows:
 
 ## License
 
-Division Engine is free and open-source software licensed under **GNU General Public License v3.0 (GPL 3.0)**. You can use it commercially, modify it and redistribute it; if you distribute a modified version of the engine itself (not your game assets or code), those modifications must be shared under GPL 3.0.
+Division Engine is free and open-source software licensed under the **MIT License**. You can use it commercially, modify it, and redistribute it — including inside closed-source games and tools — with no obligation to publish your own code. Keep the copyright notice, and please don't use the NorthRoc Studios or Division Engine names to promote a fork.
 
-See [LICENSE.txt](LICENSE.txt) for the full terms, and the [License wiki page](https://github.com/NorthRocStudios/DivisionEngine/wiki/License) for a plain-language summary and the planned marketplace.
+See [LICENSE.txt](LICENSE.txt) for the full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components. The terrain erosion filter in `TerrainRendering.cs` contains MPL-2.0 code from Rune Skovbo Johansen; everything else is MIT.
