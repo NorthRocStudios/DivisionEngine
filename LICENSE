@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Division Engine is licensed under the MIT License above, with one exception:
-DivisionEngine.Core/Rendering/Terrain/TerrainRendering.cs contains code derived
-from Rune Skovbo Johansen's "Advanced Terrain Erosion Filter" (Phacelle Noise
-and the erosion filter), which remains under the Mozilla Public License 2.0.
-See THIRD_PARTY_NOTICES.md for the full attribution and license text.
-
-The "Division Engine" and "NorthRoc Studios" names and logos are trademarks of
-Rex Woodfield. The MIT License grants copyright permissions only; it does not
-grant trademark rights. Forks are welcome, but please don't present a fork as
-the official Division Engine.
