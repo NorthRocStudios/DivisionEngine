@@ -5,7 +5,7 @@
 # Division Engine
 
 [![Version](https://img.shields.io/github/v/release/DivisionEngine/DivisionEngine?label=Version&include_prereleases)](https://github.com/DivisionEngine/DivisionEngine/releases)
-[![License](https://img.shields.io/github/license/DivisionEngine/DivisionEngine)](LICENSE.txt)
+[![License](https://img.shields.io/github/license/DivisionEngine/DivisionEngine)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/)
 [![AvaloniaUI](https://img.shields.io/badge/Avalonia-UI-blue)](https://avaloniaui.net/)
 
